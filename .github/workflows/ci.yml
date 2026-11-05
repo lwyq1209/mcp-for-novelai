@@ -42,6 +42,15 @@ jobs:
             novelai/package-lock.json
             novelai/client/package-lock.json
 
+      # The Windows runner's C: drive (where TEMP points) is network storage and far slower than its local D: drive;
+      # every SQLite commit and atomic write of the tests ends in a flush, so the test folders go to RUNNER_TEMP on D:.
+      - name: Temporary files on the runner's local disk (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+
       - name: Install the MCP server dependencies
         working-directory: novelai
         run: npm ci
