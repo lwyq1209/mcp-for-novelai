@@ -1,8 +1,21 @@
 import fs from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import { BACKGROUND_WINDOW_ENV, STARTED_BY_AGENT_ARG, agentStartOf, backgroundWindowRequested, hideWhenActivated, prepareBackgroundApp, revealOnSecondInstance, showMainWindow } from './window-show';
+import { BACKGROUND_WINDOW_ENV, MINIMIZE_TRANSPARENT_MS, STARTED_BY_AGENT_ARG, agentStartOf, agentWindowMode, backgroundWindowRequested, hideWhenActivated, prepareBackgroundApp, presentAgentWindow, revealOnSecondInstance, showMainWindow, showMinimizedInactive } from './window-show';
 
 const win = () => ({ show: vi.fn(), showInactive: vi.fn() });
+/** A window that records the calls of the agent-start paths (Windows semantics: minimized windows are not "visible"). */
+function agentWin({ visibleAfterShow = true, minimizedAfterShow = false, throwOnShow = false } = {}) {
+  const calls: string[] = [];
+  let opacity = 1, visible = false, minimized = false;
+  return {
+    calls,
+    showInactive: () => { calls.push('showInactive'); if (throwOnShow) throw new Error('show failed'); minimized = minimizedAfterShow; visible = visibleAfterShow && !minimizedAfterShow; },
+    minimize: () => { calls.push('minimize'); minimized = true; visible = false; },
+    isMinimized: () => minimized, isVisible: () => visible, isDestroyed: () => false,
+    setOpacity: (value: number) => { calls.push(`setOpacity(${value})`); opacity = value; },
+    getOpacity: () => opacity,
+  };
+}
 
 describe('the main window’s first show (step 4c1: background test clients)', () => {
   it('without the variable (every normal start) it is show(), exactly as before', () => {
@@ -18,11 +31,14 @@ describe('the main window’s first show (step 4c1: background test clients)', (
   });
   it('main.ts shows the window only through it, and never activates the app or the Dock itself', () => {
     const source = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
-    expect(source).toMatch(/ready-to-show[\s\S]{0,400}showMainWindow\(mainWindow, process\.env, \{ inactive: firstWindowInactive \}\); firstWindowInactive = false;/);
+    expect(source).toMatch(/ready-to-show[\s\S]{0,600}if \(agentWindowPending\) \{ restoreAgentWindowOpacity = presentAgentWindow\(mainWindow\)\.restoreOpacity; return; \}\n\s+showMainWindow\(mainWindow, process\.env, \{ inactive: false \}\);/);
     expect(source).not.toMatch(/app\.focus\(|app\.dock\.show\(|\.moveTop\(|steal/);
-    // A second launch goes through revealOnSecondInstance only; main.ts itself never calls show() or focus().
-    expect(source).not.toMatch(/mainWindow\.show\(\)|mainWindow\.focus\(\)/);
-    expect(source).toMatch(/app\.on\("second-instance", \(_event, argv\) => revealOnSecondInstance\(mainWindow, process\.env, argv\)\);/);
+    // A second launch goes through revealOnSecondInstance; main.ts itself calls show() only when the Dock icon reopens
+    // the window an agent's start kept hidden, and never focus().
+    expect(source.match(/mainWindow\.show\(\)/g) ?? []).toHaveLength(1);
+    expect(source).toMatch(/if \(agentWindowPending && mainWindow && !mainWindow\.isDestroyed\(\) && !mainWindow\.isVisible\(\)\) \{ agentWindowRevealed\(\); mainWindow\.show\(\); \}/);
+    expect(source).not.toMatch(/mainWindow\.focus\(\)/);
+    expect(source).toMatch(/app\.on\("second-instance", \(_event, argv\) => \{\n\s+if \(!agentStartOf\(argv\)\) agentWindowRevealed\(\);\n\s+revealOnSecondInstance\(mainWindow, process\.env, argv\);/);
   });
 });
 
@@ -90,11 +106,41 @@ describe('an app an agent started (novelai/src/app-launch.mjs: --started-by-agen
     for (const arg of ['--started-by-agent=%E0%A4%A', '--started-by-agent=a%0Ab', '--started-by-agent=']) expect(agentStartOf(['exe', arg])).toEqual({ client: null });
     expect(agentStartOf(['exe', '--started-by-agent-x', '--not-started-by-agent'])).toBeNull();
   });
-  it('its first window is shown without activating; without the flag it is show() as before', () => {
-    const w = win(); showMainWindow(w, {}, { inactive: true });
-    expect(w.showInactive).toHaveBeenCalledTimes(1); expect(w.show).not.toHaveBeenCalled();
+  it('its first window is hidden on macOS and Linux and minimized without activation on Windows; any other start is show() as before', () => {
+    expect(agentWindowMode('darwin')).toBe('hidden'); expect(agentWindowMode('linux')).toBe('hidden'); expect(agentWindowMode('win32')).toBe('minimized');
+    for (const platform of ['darwin', 'linux'] as const) {
+      const w = agentWin();
+      expect(presentAgentWindow(w, platform)).toMatchObject({ mode: 'hidden', state: 'hidden' });
+      expect(w.calls).toEqual([]);
+    }
     const normal = win(); showMainWindow(normal, {}, { inactive: false });
     expect(normal.show).toHaveBeenCalledTimes(1); expect(normal.showInactive).not.toHaveBeenCalled();
+  });
+  it('Windows: transparent, shown without activation, minimized, opaque again after the animation; never activated', () => {
+    const timers: Array<[() => void, number]> = [];
+    const w = agentWin();
+    const shown = presentAgentWindow(w, 'win32', { setTimer: (fn, ms) => timers.push([fn, ms]) });
+    expect(shown).toMatchObject({ mode: 'minimized', state: 'minimized' });
+    expect(w.calls).toEqual(['setOpacity(0)', 'showInactive', 'minimize']);
+    expect(timers.map(([, ms]) => ms)).toEqual([MINIMIZE_TRANSPARENT_MS]);
+    timers[0][0]();
+    expect(w.calls.at(-1)).toBe('setOpacity(1)');
+    shown.restoreOpacity(); expect(w.calls.filter(call => call === 'setOpacity(1)')).toHaveLength(1);
+    // The user restored it before the timer: opaque at once, the timer then changes nothing.
+    const early = agentWin(), later: Array<() => void> = [];
+    showMinimizedInactive(early, { setTimer: fn => later.push(fn) }).restoreOpacity();
+    later[0](); expect(early.calls.filter(call => call === 'setOpacity(1)')).toHaveLength(1);
+  });
+  it('Windows: a window that is not shown normally after showInactive() is never minimized (minimize() of a hidden window activates it)', () => {
+    const hidden = agentWin({ visibleAfterShow: false });
+    expect(showMinimizedInactive(hidden, { setTimer: fn => fn() }).state).toBe('not_shown');
+    expect(hidden.calls).toEqual(['setOpacity(0)', 'showInactive', 'setOpacity(1)']);
+    const already = agentWin({ minimizedAfterShow: true });
+    expect(showMinimizedInactive(already, { setTimer: () => {} }).state).toBe('minimized');
+    expect(already.calls).toEqual(['setOpacity(0)', 'showInactive']);
+    const failing = agentWin({ throwOnShow: true });
+    expect(() => showMinimizedInactive(failing, { setTimer: () => {} })).toThrow('show failed');
+    expect(failing.calls.at(-1)).toBe('setOpacity(1)');
   });
   it('a second launch by an agent never restores, shows or focuses the running window; a user\'s second launch still does', () => {
     const second = () => ({ isMinimized: vi.fn(() => true), restore: vi.fn(), show: vi.fn(), focus: vi.fn() });
@@ -105,9 +151,11 @@ describe('an app an agent started (novelai/src/app-launch.mjs: --started-by-agen
     const user = second(); revealOnSecondInstance(user, {}, ['exe']);
     expect(user.restore).toHaveBeenCalledTimes(1); expect(user.show).toHaveBeenCalledTimes(1); expect(user.focus).toHaveBeenCalledTimes(1);
   });
-  it('main.ts makes only the first window inactive and records the start for Settings › MCP access', () => {
+  it('main.ts keeps only the first window waiting, unthrottled while it waits, and records the start for Settings › MCP access', () => {
     const source = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
-    expect(source).toMatch(/const agentStart = agentStartOf\(process\.argv\);\nlet firstWindowInactive = agentStart !== null;/);
+    expect(source).toMatch(/const agentStart = agentStartOf\(process\.argv\);\nlet agentWindowPending = agentStart !== null;/);
+    expect(source).toMatch(/if \(agentWindowPending\) \{\n\s+mainWindow\.webContents\.setBackgroundThrottling\(false\);\n\s+\/\/[^\n]*\n\s+mainWindow\.on\("restore", agentWindowRevealed\);\n\s+mainWindow\.on\("focus", agentWindowRevealed\);/);
+    expect(source).toMatch(/function agentWindowRevealed\(\) \{\n\s+if \(!agentWindowPending\) return;\n\s+agentWindowPending = false;\n\s+restoreAgentWindowOpacity\(\);\n\s+if \(mainWindow && !mainWindow\.isDestroyed\(\) && !uiCapturePath\) mainWindow\.webContents\.setBackgroundThrottling\(true\);/);
     expect(source).toMatch(/if \(agentStart\) \{\n\s+agentActivity\.recordAppStart\(agentStart\.client\);/);
     expect(source).toMatch(/app\.once\("did-become-active", \(\) => logInfo\(/);
     // Not an accessory app and no LSUIElement: the Dock icon of an agent-started app is the ordinary one.

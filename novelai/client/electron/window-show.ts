@@ -3,8 +3,12 @@ import { plainClientText } from '../src/agent-clients';
 /**
  * How the main window first appears. Normally show() (it comes to the front, as it always did). An app that an agent's
  * MCP server started (novelai/src/app-launch.mjs: STARTED_BY_AGENT_ARG on its command line, macOS through LaunchServices
- * in the background) shows its first window with showInactive(): it appears without activating the app or taking the
- * focus, with its ordinary Dock or taskbar icon; a later window (the Dock icon reopening it) shows normally. A dev-tools test client
+ * in the background) never puts its first window over the user's windows and never takes the focus (agentWindowMode):
+ * on macOS and Linux the window is not shown at all (it is created and its page loads, so the canvas tools work) — macOS
+ * shows the ordinary Dock icon, and clicking it (the activate event) shows the window; on Linux the app runs in the
+ * background without a taskbar entry until the user opens it again (a second launch without the switch). On Windows the
+ * window appears minimized in the taskbar without being activated (showMinimizedInactive); clicking its button restores
+ * it. Opening the app again (second-instance without the switch) always shows the window. A dev-tools test client
  * started in the background (dev-tools/test-client.mjs, the default since step 4c1; --foreground turns it off) sets
  * NAI_DEV_TOOLS_BACKGROUND=1: the window is shown without activating the app or taking the focus (showInactive), so a
  * test run never pulls the window in front of what the user is doing; on macOS it also runs as an accessory app from
@@ -59,7 +63,61 @@ export function agentStartOf(argv: readonly string[] = process.argv): { client: 
   return null;
 }
 
-/** `inactive`: the first window of an app an agent started (agentStartOf). */
+/**
+ * How the first window of an app an agent started appears: 'minimized' on Windows (in the taskbar, not activated),
+ * 'hidden' elsewhere. macOS: Electron's showInactive() orders the window in front of other apps' windows (it only skips
+ * the activation), so it is not used. Windows: a hidden window's minimize() shows it with SW_SHOWMINIMIZED, which
+ * activates it, so showMinimizedInactive takes another path. Linux: no way is known to put a window into the taskbar
+ * minimized without a visible map first (X11 maps it, then iconifies it; setOpacity does nothing there).
+ */
+export type AgentWindowMode = 'hidden' | 'minimized';
+export const agentWindowMode = (platform: NodeJS.Platform = process.platform): AgentWindowMode => platform === 'win32' ? 'minimized' : 'hidden';
+
+export interface AgentWindowTarget {
+  showInactive(): void;
+  minimize(): void;
+  isMinimized(): boolean;
+  isVisible(): boolean;
+  isDestroyed?(): boolean;
+  setOpacity(opacity: number): void;
+  getOpacity(): number;
+}
+/** How long the window stays fully transparent after it was minimized, so no part of the minimize animation shows. */
+export const MINIMIZE_TRANSPARENT_MS = 1000;
+
+/**
+ * Windows: shows the window minimized in the taskbar without activating it and without a visible frame. It is made fully
+ * transparent, shown without activation (SW_SHOWNOACTIVATE), minimized (SC_MINIMIZE, which leaves the activation alone
+ * for a window that is not the active one) and made opaque again after MINIMIZE_TRANSPARENT_MS (at once when the user
+ * restores it first: `restoreOpacity()`). A window that is not normally visible after showInactive() is not minimized
+ * (minimize() of a hidden window would activate it): it stays as it is. Returns {state, restoreOpacity}.
+ */
+export function showMinimizedInactive(win: AgentWindowTarget, { transparentMs = MINIMIZE_TRANSPARENT_MS, setTimer = (fn: () => void, ms: number) => setTimeout(fn, ms) }: { transparentMs?: number; setTimer?: (fn: () => void, ms: number) => unknown } = {}) {
+  const opacity = win.getOpacity();
+  let restored = false;
+  const restoreOpacity = () => { if (restored || win.isDestroyed?.()) return; restored = true; win.setOpacity(opacity); };
+  win.setOpacity(0);
+  let state: 'minimized' | 'not_shown';
+  try {
+    win.showInactive();
+    if (win.isMinimized()) state = 'minimized';
+    else if (win.isVisible()) { win.minimize(); state = win.isMinimized() ? 'minimized' : 'not_shown'; }
+    else state = 'not_shown';
+  } catch (error) { restoreOpacity(); throw error; }
+  setTimer(restoreOpacity, transparentMs);
+  return { state, restoreOpacity };
+}
+
+/**
+ * The first window of an app an agent started: nothing on macOS and Linux (it stays hidden), showMinimizedInactive on
+ * Windows. Returns what it did, and on Windows the opacity restorer.
+ */
+export function presentAgentWindow(win: AgentWindowTarget, platform: NodeJS.Platform = process.platform, options: Parameters<typeof showMinimizedInactive>[1] = {}) {
+  if (agentWindowMode(platform) === 'hidden') return { mode: 'hidden' as const, state: 'hidden' as const, restoreOpacity: () => {} };
+  return { mode: 'minimized' as const, ...showMinimizedInactive(win, options) };
+}
+
+/** `inactive`: shown without activating (a background dev-tools test client). */
 export function showMainWindow(win: { show(): void; showInactive(): void }, env: NodeJS.ProcessEnv = process.env, { inactive = false }: { inactive?: boolean } = {}) {
   if (inactive || backgroundWindowRequested(env)) win.showInactive();
   else win.show();

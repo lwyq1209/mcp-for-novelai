@@ -85,7 +85,7 @@ import {
   saveReferencePreset,
 } from "./ipc/reference-presets";
 import { hostText, setInterfaceLanguageSource } from "./host-language";
-import { agentStartOf, hideWhenActivated, prepareBackgroundApp, revealOnSecondInstance, showMainWindow } from "./window-show";
+import { agentStartOf, hideWhenActivated, prepareBackgroundApp, presentAgentWindow, revealOnSecondInstance, showMainWindow } from "./window-show";
 import {
   copyStylePromptPreviewImages,
   importStylePromptPresetImages,
@@ -214,13 +214,27 @@ const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 prepareBackgroundApp(app);
 // Should it become active anyway, it hides at once and logs it (window-show.ts).
 hideWhenActivated(app);
-// Started by an agent's MCP server (window-show.ts): the first window appears without taking the focus; otherwise this
-// start is like any other (recovered queue batches stay paused until resumed, batch-service.ts).
+// Started by an agent's MCP server (window-show.ts): the first window waits for the user — hidden on macOS and Linux,
+// minimized and not activated on Windows — and never takes the focus; otherwise this start is like any other (recovered
+// queue batches stay paused until resumed, batch-service.ts). While it waits, its page is not throttled in the
+// background, so the canvas tools answer as from a visible window.
 const agentStart = agentStartOf(process.argv);
-let firstWindowInactive = agentStart !== null;
+let agentWindowPending = agentStart !== null;
+let restoreAgentWindowOpacity = () => {};
+/** The user brings the window of an agent's start forward (Dock icon, taskbar button, opening the app again): from now
+ * on it is an ordinary window. */
+function agentWindowRevealed() {
+  if (!agentWindowPending) return;
+  agentWindowPending = false;
+  restoreAgentWindowOpacity();
+  if (mainWindow && !mainWindow.isDestroyed() && !uiCapturePath) mainWindow.webContents.setBackgroundThrottling(true);
+}
 // A second launch brings the running window to the front, except a second launch by an agent and a background test
 // client (window-show.ts).
-app.on("second-instance", (_event, argv) => revealOnSecondInstance(mainWindow, process.env, argv));
+app.on("second-instance", (_event, argv) => {
+  if (!agentStartOf(argv)) agentWindowRevealed();
+  revealOnSecondInstance(mainWindow, process.env, argv);
+});
 
 /**
  * Right-click context menu for text fields: 剪切 / 复制 / 粘贴 / 全选. Electron
@@ -295,10 +309,18 @@ function createWindow() {
 
   // Windows only: the session is ending (log-off / shut-down) and before-quit may not run.
   mainWindow.on("session-end", closeBridgeNow);
+  if (agentWindowPending) {
+    mainWindow.webContents.setBackgroundThrottling(false);
+    // Windows: its taskbar button restores it; any focus means the user has it now.
+    mainWindow.on("restore", agentWindowRevealed);
+    mainWindow.on("focus", agentWindowRevealed);
+  }
   mainWindow.once("ready-to-show", () => {
-    // An app an agent started, and a background dev-tools test client, appear without taking the focus (window-show.ts);
-    // otherwise show() as before. Only the first window: one the Dock icon reopens later shows normally.
-    if (!uiCapturePath && mainWindow) { showMainWindow(mainWindow, process.env, { inactive: firstWindowInactive }); firstWindowInactive = false; }
+    if (uiCapturePath || !mainWindow) return;
+    // The first window of an agent's start waits for the user (window-show.ts presentAgentWindow); a background
+    // dev-tools test client appears without taking the focus; otherwise show() as before.
+    if (agentWindowPending) { restoreAgentWindowOpacity = presentAgentWindow(mainWindow).restoreOpacity; return; }
+    showMainWindow(mainWindow, process.env, { inactive: false });
   });
 
   if (uiCapturePath) {
@@ -976,7 +998,9 @@ app.whenReady().then(async () => {
   if (shouldScheduleAutomaticChecks({ packaged: app.isPackaged, uiCapture: Boolean(uiCapturePath) })) updateChecker.start();
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) { agentWindowRevealed(); createWindow(); return; }
+    // macOS: the Dock icon (or opening the app again) shows the window an agent's start kept hidden.
+    if (agentWindowPending && mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) { agentWindowRevealed(); mainWindow.show(); }
   });
 }).catch(error => {
   const failure = startupFailureDialog(startupStep, error, dataPaths.runtime);
