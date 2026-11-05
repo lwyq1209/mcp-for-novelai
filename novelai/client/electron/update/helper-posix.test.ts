@@ -50,6 +50,7 @@ afterEach(() => {
 });
 
 /** An "app" that is still running: a sleep the test ends (or a pid that has already exited). */
+const app_ = (running: boolean) => app(running).pid;
 function app(running = true) {
   if (!running) { const done = spawnSync("sh", ["-c", "echo $$"], { encoding: "utf8" }); return { pid: Number(done.stdout.trim()), quit() {} }; }
   const child = spawn("sleep", ["60"], { stdio: "ignore" });
@@ -166,6 +167,32 @@ describe.runIf(posix)("the POSIX update helper", () => {
     expect(fs.existsSync(staging)).toBe(false);
     expect(fs.existsSync(path.join(updates, "pending.json"))).toBe(false);
     expect(fs.readFileSync(path.join(state, "confirmed"), "utf8").trim()).toBe(String(process.pid));
+  });
+
+  it.runIf(process.platform === "linux")("Linux: starts the new folder's executable without the descriptors the helper inherited", async () => {
+    // The new "app": records the descriptors it got, then starts and confirms.
+    const app = path.join(staging, "new", "MCP for NovelAI.app", "mcp-for-novelai");
+    fs.writeFileSync(app, `#!/bin/sh\nls /proc/self/fd > "${root}/fds"\nprintf '%s\\n' "$@" > "${root}/args"\nprintf '%s\\n' "$$" > "${state}/started"\nprintf '%s\\n' "$$" > "${state}/confirmed"\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(state, "launch.args"), "--use-mock-keychain\n--remote-debugging-port=19999\n");
+    for (const shell of ["/bin/bash", "/bin/sh"].filter(candidate => fs.existsSync(candidate))) {
+      fs.rmSync(path.join(root, "fds"), { force: true });
+      // An extra descriptor the helper inherits (as from the old app), at a two-digit number.
+      const stdio: Array<"ignore" | "pipe"> = [...Array(53).fill("ignore"), "pipe"];
+      const child = spawn(shell, [path.join(state, "helper.sh"), "linux", state, String(app_(false)), target, staging, "0.1.3", "0.1.4", "mcp-for-novelai", "0", "5", "5"], { stdio });
+      children.push(child);
+      expect(await new Promise(resolve => child.once("exit", resolve))).toBe(0);
+      const fds = fs.readFileSync(path.join(root, "fds"), "utf8").split("\n").filter(Boolean).map(Number);
+      // bash (which the app uses on Linux when there is one) closes every inherited descriptor; dash only 3-9.
+      if (shell === "/bin/bash") expect(fds.every(fd => fd <= 3), `${shell}: ${fds}`).toBe(true);
+      expect(fs.readFileSync(path.join(root, "args"), "utf8").trim().split("\n")).toEqual(["--updated-from=0.1.3", "--use-mock-keychain", "--remote-debugging-port=19999"]);
+      expect(fs.existsSync(staging)).toBe(false);
+      // Back to the starting point for the next shell: the new app staged again, an old app in place.
+      fs.mkdirSync(path.join(staging, "new"), { recursive: true });
+      fs.renameSync(target, path.join(staging, "new", "MCP for NovelAI.app"));
+      fs.mkdirSync(path.join(target, "Contents"), { recursive: true });
+      fs.rmSync(path.join(state, "helper-state"), { force: true });
+      for (const name of ["started", "confirmed"]) fs.rmSync(path.join(state, name), { force: true });
+    }
   });
 
   it("is safe when stopped while it waits: nothing changed, and the old version reports the attempt", async () => {

@@ -239,7 +239,9 @@ export function createUpdater(options: UpdaterOptions): Updater {
     }
     const script = path.posix.join(stateDir, "helper.sh");
     const launcher = platform === "darwin" ? "/usr/bin/open" : ready.executable;
-    return { platform: platform as "darwin" | "linux", script, command: "/bin/sh", cwd: stateDir, env, args: [script, platform, stateDir, String(options.pid), ready.target, ready.staged!.staging, from, to, launcher, options.background ? "1" : "0"] };
+    // Linux: bash where there is one (it closes every inherited descriptor before it starts the new app; sh only 3-9).
+    const shell = platform === "linux" && fs.existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh";
+    return { platform: platform as "darwin" | "linux", script, command: shell, cwd: stateDir, env, args: [script, platform, stateDir, String(options.pid), ready.target, ready.staged!.staging, from, to, launcher, options.background ? "1" : "0"] };
   }
 
   async function install(): Promise<UpdateProgress> {

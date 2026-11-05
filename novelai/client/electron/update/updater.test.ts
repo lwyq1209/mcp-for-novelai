@@ -103,7 +103,7 @@ describe.runIf(process.platform !== "win32")("Update and restart", () => {
     const [launch] = h.launches;
     const pending = readPending(path.join(root, "data", "updates"))!;
     expect(pending).toMatchObject({ platform: "linux", from: "0.1.3", to: "0.1.4", target: path.join(root, "apps", "mcp-for-novelai") });
-    expect(launch.command).toBe("/bin/sh");
+    expect(launch.command).toBe(fs.existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh");
     expect(launch.args).toEqual([path.join(pending.stateDir, "helper.sh"), "linux", pending.stateDir, "4242", pending.target, pending.staging, "0.1.3", "0.1.4", "mcp-for-novelai", "0"]);
     expect(fs.readFileSync(launch.args[0], "utf8")).toMatch(/^#!\/bin\/sh/);
     expect(launch.env.ELECTRON_RUN_AS_NODE).toBeUndefined();

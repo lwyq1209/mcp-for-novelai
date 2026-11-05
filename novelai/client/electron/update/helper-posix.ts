@@ -1,7 +1,8 @@
 // The update helper of macOS and Linux: a fixed /bin/sh script that the app writes into the update's state folder and
 // starts detached right before it quits (updater.ts). Every value reaches it as a separate argument ("$1" … quoted
 // everywhere, never evaluated); the app checks them first (install-posix.ts). It uses only system tools (sh, mv, rm,
-// sleep, kill, date, and on macOS open and xattr), nothing inside either app.
+// sleep, kill, date, and on macOS open and xattr), nothing inside either app. Linux runs it with bash where there is
+// one (so it can close every descriptor it inherited before it starts the new app), else with sh.
 //
 //   sh helper.sh <platform> <state> <pid> <target> <staging> <from> <to> <launcher> <background> [<exitTimeout> <confirmTimeout>]
 //
@@ -61,6 +62,13 @@ log "the app has quit"
 # The app withdraws an update it could not hand over by removing the state folder (and pending.json).
 if [ ! -f "$state/helper-state" ] || [ ! -f "$(dirname "$state")/pending.json" ]; then exit 1; fi
 
+close_inherited() {
+  for l_fd in /proc/self/fd/*; do
+    l_fd=${"${"}l_fd##*/}
+    case "$l_fd" in ''|*[!0-9]*|0|1|2) ;; *) eval "exec $l_fd>&-" 2>/dev/null ;; esac
+  done
+}
+
 # launch.args: extra arguments of the started app, one per line (rehearsal builds only: the test switches of the run).
 launch() {
   # $1 the app (bundle or folder), $2 the argument for it
@@ -94,10 +102,12 @@ launch() {
           [ -n "$l_line" ] && set -- "$@" "$l_line"
         done < "$state/launch.args"
       fi
+      # The new app must not inherit what the old one left open in this helper (a listening socket of the old app
+      # would keep its port taken): every descriptor above 2 is closed first (bash closes any number; dash 3-9).
       if command -v setsid >/dev/null 2>&1; then
-        ( cd "$l_app" && exec setsid "./$launcher" "$@" < /dev/null > /dev/null 2>&1 ) &
+        ( cd "$l_app" || exit 1; close_inherited; exec setsid "./$launcher" "$@" < /dev/null > /dev/null 2>&1 ) &
       else
-        ( cd "$l_app" && exec nohup "./$launcher" "$@" < /dev/null > /dev/null 2>&1 ) &
+        ( cd "$l_app" || exit 1; close_inherited; exec nohup "./$launcher" "$@" < /dev/null > /dev/null 2>&1 ) &
       fi
       ;;
   esac
