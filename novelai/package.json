@@ -1,0 +1,23 @@
+{
+  "name": "mcp-for-novelai-server",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "node tests/run-tests.mjs tests/*.test.mjs",
+    "mcp": "node src/mcp.mjs",
+    "build:contracts": "node scripts/build-contracts.mjs",
+    "check:contracts": "node scripts/build-contracts.mjs --check"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "ajv": "8.20.0",
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "jiti": "2.7.0",
+    "playwright-core": "1.63.0",
+    "typescript": "6.0.3"
+  }
+}

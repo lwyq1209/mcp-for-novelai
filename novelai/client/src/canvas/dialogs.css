@@ -1,0 +1,53 @@
+/* Dialogs of the canvas rebuilt in step 4c2: restore saved parameters (hp-), save a reference as a preset (rq-) and
+   the Style / prompt preset images (spi-). Only --ui-* variables and these classes; the dialog box is the UI kit's. */
+
+/* ── Restore saved parameters ───────────────────────────────────────────── */
+.hp-body { display: flex; flex-direction: column; gap: 10px; overflow-wrap: anywhere; font-size: 12.5px; line-height: 1.6; }
+.hp-body p { margin: 0; }
+.hp-source { font-size: 12px; }
+.hp-warn { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: var(--ui-r-l); background: var(--ui-bg-3); border: 1px solid var(--ui-line); color: var(--ui-text-2); }
+.hp-warn strong { display: flex; align-items: center; gap: 6px; color: var(--ui-text-1); font-weight: 600; }
+.hp-warn strong .ui-glyph { color: var(--ui-accent-text); flex: none; }
+.hp-seed { display: flex; flex-wrap: wrap; gap: 4px; align-items: baseline; }
+.hp-seed strong { font-weight: 600; }
+.hp-note { color: var(--ui-text-2); }
+.hp-alert { color: var(--ui-danger); padding: 8px 12px; border-radius: var(--ui-r-m); background: var(--ui-danger-soft); }
+.hp-chars { display: flex; flex-direction: column; gap: 8px; }
+.hp-chars h3 { margin: 4px 0 0; font-size: 13px; font-weight: 600; }
+.hp-char { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: var(--ui-r-m); background: var(--ui-bg-1); border: 1px solid var(--ui-line); }
+.hp-char h4 { margin: 0; font-size: 12.5px; font-weight: 600; }
+.hp-label { font-size: 11.5px; color: var(--ui-text-3); }
+.hp-body pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.hp-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12px; }
+.hp-table th, .hp-table td { text-align: left; padding: 7px 8px; vertical-align: top; border-bottom: 1px solid var(--ui-line); }
+.hp-table thead th { color: var(--ui-text-3); font-weight: 500; font-size: 11.5px; }
+.hp-table tbody th { width: 24%; color: var(--ui-text-2); font-weight: 500; }
+.hp-table thead th:first-child { width: 24%; }
+.hp-table pre { font: inherit; color: var(--ui-text-1); }
+
+/* ── Save a reference as a preset ───────────────────────────────────────── */
+.rq-body { display: grid; grid-template-columns: 132px 1fr; gap: 14px; align-items: start; }
+.rq-thumb { width: 132px; height: 132px; border-radius: var(--ui-r-l); background: var(--ui-bg-1); border: 1px solid var(--ui-line); object-fit: contain; display: block; }
+.rq-fields { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+/* ── Style / prompt preset images ───────────────────────────────────────── */
+.spi-sub { font-size: 12px; }
+.spi-drop { display: flex; flex-direction: column; gap: 12px; padding: 12px; border-radius: var(--ui-r-l); border: 1.5px dashed var(--ui-line-2); outline: none; transition: border-color var(--ui-t-fast), background var(--ui-t-fast); }
+.spi-drop:focus-visible { border-color: var(--ui-accent); }
+.spi-drop.is-over { border-color: var(--ui-accent); background: var(--ui-accent-soft); }
+.spi-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 200px; padding: 20px; border-radius: var(--ui-r-m); color: var(--ui-text-2); text-align: center; cursor: pointer; }
+.spi-empty:hover { background: var(--ui-bg-3); }
+.spi-empty:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
+.spi-empty .ui-glyph { color: var(--ui-text-3); }
+.spi-empty strong { color: var(--ui-text-1); font-weight: 600; font-size: 13px; }
+.spi-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.spi-card { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.spi-img { display: block; width: 100%; aspect-ratio: 1; padding: 0; border: 1px solid var(--ui-line); border-radius: var(--ui-r-m); background: var(--ui-bg-1); overflow: hidden; cursor: zoom-in; }
+.spi-img:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
+.spi-img img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.spi-name { font-size: 11.5px; color: var(--ui-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spi-acts { display: flex; flex-wrap: wrap; gap: 4px; }
+.spi-hint { margin: 0; font-size: 12px; color: var(--ui-text-3); }
+.spi-lightbox { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: 40px; background: rgba(5, 4, 10, .86); }
+.spi-lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--ui-r-m); box-shadow: var(--ui-shadow-pop); }
+.spi-lightbox-close { position: absolute; top: 16px; right: 16px; }

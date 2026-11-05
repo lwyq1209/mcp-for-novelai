@@ -1,0 +1,37 @@
+# Dependencies, build products and local test caches
+node_modules/
+dist/
+dist-electron/
+dist-mcp/
+release/
+coverage/
+.cache/
+.tmp/
+.vite/
+playwright-report/
+test-results/
+*.tsbuildinfo
+*.log
+.DS_Store
+
+# Live client state of a checkout (test data roots never go there: novelai/client/dev-tools/lib/guard.mjs)
+.runtime/
+.isolated/
+
+# MCP inbox and export folders when the MCP server's project root is this repository
+/novelai/library/
+/novelai/library-inbox/
+/novelai/library-exports/
+/novelai/study-inbox/
+/novelai/study-exports/
+
+# Local environment and signing/private-key material
+.env
+.env.*
+!.env.example
+!.env.sample
+*.key
+*.pem
+*.p12
+*.pfx
+*.keystore

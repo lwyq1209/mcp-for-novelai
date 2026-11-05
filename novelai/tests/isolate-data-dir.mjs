@@ -1,0 +1,20 @@
+// Preloaded into every test process (node --test --import ./tests/isolate-data-dir.mjs): unless the run already gave
+// it one, the test process gets a throwaway data root, and every child it starts with the inherited environment
+// uses it. So no test reads or writes the real <appData>/mcp-for-novelai (bridge.json, tag cache, default inbox
+// folders). `npm test` (tests/run-tests.mjs) already sets one data root and temp folder for the whole run; this is for
+// a single file run directly. Tests that start children with a hand-built environment set their own NOVELAI_DATA_DIR.
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+// The test run's own data root (set by tests/run-tests.mjs, or by this file in a parent test process) is kept; any
+// other value, such as one set in the shell, is replaced with a warning, so no test uses a real data folder.
+const inherited = process.env.NOVELAI_DATA_DIR?.trim();
+if (!inherited || inherited !== process.env.NOVELAI_TEST_RUN_DATA_DIR) {
+  if (inherited) console.error(`[test isolation] NOVELAI_DATA_DIR=${inherited} from the environment is replaced by a throwaway data root; no test reads or writes it.`);
+  const directory = mkdtempSync(join(tmpdir(), 'novelai-test-data-'));
+  process.env.NOVELAI_DATA_DIR = process.env.NOVELAI_TEST_RUN_DATA_DIR = directory;
+  const owner = String(process.pid);
+  process.env.NOVELAI_TEST_DATA_DIR_OWNER = owner;
+  process.once('exit', () => { if (process.env.NOVELAI_TEST_DATA_DIR_OWNER === owner) rmSync(directory, { recursive: true, force: true }); });
+}

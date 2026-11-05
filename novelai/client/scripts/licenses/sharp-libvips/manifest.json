@@ -1,0 +1,512 @@
+{
+  "note": "Written by scripts/fetch-libvips-licenses.mjs; read by scripts/generate-notices.mjs. Do not edit by hand.",
+  "sharpLibvips": "1.3.3",
+  "release": "https://github.com/lovell/sharp-libvips/tree/v1.3.3",
+  "versions": {
+    "aom": "3.15.0",
+    "archive": "3.8.9",
+    "cairo": "1.18.4",
+    "cgif": "0.5.3",
+    "exif": "0.6.26",
+    "expat": "2.8.3",
+    "ffi": "3.8.0",
+    "fontconfig": "2.18.3",
+    "freetype": "2.14.3",
+    "fribidi": "1.0.16",
+    "glib": "2.89.4",
+    "harfbuzz": "14.3.1",
+    "heif": "1.23.2",
+    "highway": "1.4.0",
+    "imagequant": "2.4.1",
+    "lcms": "2.19.1",
+    "mozjpeg": "0826579",
+    "pango": "1.58.2",
+    "pixman": "0.46.4",
+    "png": "1.6.58",
+    "proxy-libintl": "0.5",
+    "rsvg": "2.62.91",
+    "tiff": "4.7.2",
+    "uhdr": "2.0.2",
+    "vips": "8.18.6",
+    "webp": "1.6.0",
+    "xml2": "2.15.3",
+    "zlib-ng": "2.3.3"
+  },
+  "windows": {
+    "package": "@img/sharp-win32-x64@0.35.4",
+    "builtBy": "https://github.com/libvips/build-win64-mxe/releases/tag/v8.18.6",
+    "differences": {
+      "aom": "3.14.1"
+    }
+  },
+  "freetypeYear": "2026",
+  "notices": {
+    "file": "THIRD-PARTY-NOTICES.md",
+    "from": "https://raw.githubusercontent.com/lovell/sharp-libvips/v1.3.3/THIRD-PARTY-NOTICES.md",
+    "sha256": "25ffcfa69e28b1913ced27ec778b90f24911a1bb3021253577e8b0af55db0d49"
+  },
+  "components": [
+    {
+      "id": "aom",
+      "key": "aom",
+      "name": "aom",
+      "version": "3.15.0",
+      "source": "https://storage.googleapis.com/aom-releases/libaom-3.15.0.tar.gz",
+      "files": [
+        {
+          "file": "aom/LICENSE",
+          "from": "https://storage.googleapis.com/aom-releases/libaom-3.15.0.tar.gz → LICENSE",
+          "sha256": "4764a286d8b2faeaf42f4418e7d7a28d58fc8fd4d00a3d0a7f44b0a4099de7f2"
+        },
+        {
+          "file": "aom/PATENTS",
+          "from": "https://storage.googleapis.com/aom-releases/libaom-3.15.0.tar.gz → PATENTS",
+          "sha256": "661fb8e504744e95587b556b94a58343448300606a41bea8c7a9b97125696e61"
+        }
+      ]
+    },
+    {
+      "id": "archive",
+      "key": "archive",
+      "name": "libarchive",
+      "version": "3.8.9",
+      "source": "https://github.com/libarchive/libarchive/releases/download/v3.8.9/libarchive-3.8.9.tar.xz",
+      "files": [
+        {
+          "file": "archive/COPYING",
+          "from": "https://github.com/libarchive/libarchive/releases/download/v3.8.9/libarchive-3.8.9.tar.xz → COPYING",
+          "sha256": "30e556b3959e3985d66efefec5eaac51d4995053caa1d3cffe6eb916f146f229"
+        }
+      ]
+    },
+    {
+      "id": "cairo",
+      "key": "cairo",
+      "name": "cairo",
+      "version": "1.18.4",
+      "source": "https://cairographics.org/releases/cairo-1.18.4.tar.xz",
+      "files": [
+        {
+          "file": "cairo/COPYING",
+          "from": "https://cairographics.org/releases/cairo-1.18.4.tar.xz → COPYING",
+          "sha256": "67228a9f7c5f9b67c58f556f1be178f62da4d9e2e6285318d8c74d567255abdf"
+        },
+        {
+          "file": "cairo/COPYING-MPL-1.1",
+          "from": "https://cairographics.org/releases/cairo-1.18.4.tar.xz → COPYING-MPL-1.1",
+          "sha256": "53692a2ed6c6a2c6ec9b32dd0b820dfae91e0a1fcdf625ca9ed0bdf8705fcc4f"
+        },
+        {
+          "file": "cairo/COPYING-LGPL-2.1",
+          "from": "https://cairographics.org/releases/cairo-1.18.4.tar.xz → COPYING-LGPL-2.1",
+          "sha256": "9e9e8608c4cdda51a78cc3a385f4ec9a2e4c96d5ecad74ac8bca5fca3e563b7d"
+        },
+        {
+          "file": "cairo/MPL-2.0.txt",
+          "from": "https://www.mozilla.org/media/MPL/2.0/index.txt",
+          "note": "Mozilla Public License 2.0, the license sharp-libvips names for cairo",
+          "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"
+        }
+      ]
+    },
+    {
+      "id": "cgif",
+      "key": "cgif",
+      "name": "cgif",
+      "version": "0.5.3",
+      "source": "https://github.com/dloebl/cgif/archive/v0.5.3.tar.gz",
+      "files": [
+        {
+          "file": "cgif/LICENSE",
+          "from": "https://github.com/dloebl/cgif/archive/v0.5.3.tar.gz → LICENSE",
+          "sha256": "7264dede477abab4ac3fe8236beb8153845c04ccd33b18f281085087e219fc6d"
+        }
+      ]
+    },
+    {
+      "id": "exif",
+      "key": "exif",
+      "name": "libexif",
+      "version": "0.6.26",
+      "source": "https://github.com/libexif/libexif/releases/download/v0.6.26/libexif-0.6.26.tar.xz",
+      "files": [
+        {
+          "file": "exif/COPYING",
+          "from": "https://github.com/libexif/libexif/releases/download/v0.6.26/libexif-0.6.26.tar.xz → COPYING",
+          "sha256": "36b6d3fa47916943fd5fec313c584784946047ec1337a78b440e5992cb595f89"
+        }
+      ]
+    },
+    {
+      "id": "expat",
+      "key": "expat",
+      "name": "expat",
+      "version": "2.8.3",
+      "source": "https://github.com/libexpat/libexpat/releases/download/R_2_8_3/expat-2.8.3.tar.xz",
+      "files": [
+        {
+          "file": "expat/COPYING",
+          "from": "https://github.com/libexpat/libexpat/releases/download/R_2_8_3/expat-2.8.3.tar.xz → COPYING",
+          "sha256": "31b15de82aa19a845156169a17a5488bf597e561b2c318d159ed583139b25e87"
+        }
+      ]
+    },
+    {
+      "id": "ffi",
+      "key": "ffi",
+      "name": "libffi",
+      "version": "3.8.0",
+      "source": "https://github.com/libffi/libffi/releases/download/v3.8.0/libffi-3.8.0.tar.gz",
+      "files": [
+        {
+          "file": "ffi/LICENSE",
+          "from": "https://github.com/libffi/libffi/releases/download/v3.8.0/libffi-3.8.0.tar.gz → LICENSE",
+          "sha256": "17b64dc60f3b6897a60f971e288b973f655c2edcdf08b25f3c3dd5549857881c"
+        }
+      ]
+    },
+    {
+      "id": "fontconfig",
+      "key": "fontconfig",
+      "name": "fontconfig",
+      "version": "2.18.3",
+      "source": "https://gitlab.freedesktop.org/fontconfig/fontconfig/-/archive/2.18.3/fontconfig-2.18.3.tar.gz",
+      "files": [
+        {
+          "file": "fontconfig/COPYING",
+          "from": "https://gitlab.freedesktop.org/fontconfig/fontconfig/-/archive/2.18.3/fontconfig-2.18.3.tar.gz → COPYING",
+          "sha256": "51a51aa9823704fd90bccc616cdd17ebabb5b2b3e9cbde886ca02c7002288067"
+        }
+      ]
+    },
+    {
+      "id": "freetype",
+      "key": "freetype",
+      "name": "freetype",
+      "version": "2.14.3",
+      "source": "https://github.com/freetype/freetype/archive/VER-2-14-3.tar.gz",
+      "files": [
+        {
+          "file": "freetype/LICENSE.TXT",
+          "from": "https://github.com/freetype/freetype/archive/VER-2-14-3.tar.gz → LICENSE.TXT",
+          "sha256": "bd36c8b474855fa294c2ec5c184544478ef3720aad37d65a6296a4f264fd2d3b"
+        },
+        {
+          "file": "freetype/FTL.TXT",
+          "from": "https://github.com/freetype/freetype/archive/VER-2-14-3.tar.gz → docs/FTL.TXT",
+          "sha256": "5a5ee54c5001bbad1cdc1a57cc3dd4c42199b2da09d39c7ee41fab002d02967f"
+        },
+        {
+          "file": "freetype/bdf-README",
+          "from": "https://github.com/freetype/freetype/archive/VER-2-14-3.tar.gz → src/bdf/README",
+          "sha256": "7984455e7e5a9faba3797c8bf095fbe10cc846316b7320aff8c58402e22b82fe"
+        },
+        {
+          "file": "freetype/pcf-README",
+          "from": "https://github.com/freetype/freetype/archive/VER-2-14-3.tar.gz → src/pcf/README",
+          "sha256": "18d9782898d9eac04476e2f744678137b2a889689ed3e923e052fc396a86f86b"
+        },
+        {
+          "file": "freetype/fthash.c-license.txt",
+          "from": "https://github.com/freetype/freetype/archive/VER-2-14-3.tar.gz → src/base/fthash.c (excerpt: the first /* … */ comment containing \"Permission is hereby granted\")",
+          "sha256": "5285d96f6aa3188193d5fbefd8710ed6a46af185e0a43817c17acee5f4b1ab3d"
+        }
+      ]
+    },
+    {
+      "id": "fribidi",
+      "key": "fribidi",
+      "name": "fribidi",
+      "version": "1.0.16",
+      "source": "https://github.com/fribidi/fribidi/releases/download/v1.0.16/fribidi-1.0.16.tar.xz",
+      "files": [
+        {
+          "file": "fribidi/COPYING",
+          "from": "https://github.com/fribidi/fribidi/releases/download/v1.0.16/fribidi-1.0.16.tar.xz → COPYING",
+          "sha256": "32434afcc8666ba060e111d715bfdb6c2d5dd8a35fa4d3ab8ad67d8f850d2f2b"
+        }
+      ]
+    },
+    {
+      "id": "glib",
+      "key": "glib",
+      "name": "glib",
+      "version": "2.89.4",
+      "source": "https://download.gnome.org/sources/glib/2.89/glib-2.89.4.tar.xz",
+      "files": [
+        {
+          "file": "glib/COPYING",
+          "from": "https://download.gnome.org/sources/glib/2.89/glib-2.89.4.tar.xz → COPYING",
+          "sha256": "fa6f36630bb1e0c571d34b2bbdf188d08495c9dbf58f28cac112f303fc1f58fb"
+        }
+      ]
+    },
+    {
+      "id": "harfbuzz",
+      "key": "harfbuzz",
+      "name": "harfbuzz",
+      "version": "14.3.1",
+      "source": "https://github.com/harfbuzz/harfbuzz/archive/14.3.1.tar.gz",
+      "files": [
+        {
+          "file": "harfbuzz/COPYING",
+          "from": "https://github.com/harfbuzz/harfbuzz/archive/14.3.1.tar.gz → COPYING",
+          "sha256": "ba8f810f2455c2f08e2d56bb49b72f37fcf68f1f4fade38977cfd7372050ad64"
+        }
+      ]
+    },
+    {
+      "id": "heif",
+      "key": "heif",
+      "name": "libheif",
+      "version": "1.23.2",
+      "source": "https://github.com/strukturag/libheif/releases/download/v1.23.2/libheif-1.23.2.tar.gz",
+      "files": [
+        {
+          "file": "heif/COPYING",
+          "from": "https://github.com/strukturag/libheif/releases/download/v1.23.2/libheif-1.23.2.tar.gz → COPYING",
+          "sha256": "fa81ce652315b013359d6e8e4744335f31a50c7c192907176d3632f78a3b4596"
+        }
+      ]
+    },
+    {
+      "id": "highway",
+      "key": "highway",
+      "name": "highway",
+      "version": "1.4.0",
+      "source": "https://github.com/google/highway/archive/1.4.0.tar.gz",
+      "files": [
+        {
+          "file": "highway/LICENSE",
+          "from": "https://github.com/google/highway/archive/1.4.0.tar.gz → LICENSE",
+          "sha256": "e340270d4f64384569a91d546acb5b094d69ce47f0c015db77abb74dc6f815af"
+        }
+      ]
+    },
+    {
+      "id": "imagequant",
+      "key": "imagequant",
+      "name": "libimagequant",
+      "version": "2.4.1",
+      "source": "https://github.com/lovell/libimagequant/archive/v2.4.1.tar.gz",
+      "files": [
+        {
+          "file": "imagequant/COPYRIGHT",
+          "from": "https://github.com/lovell/libimagequant/archive/v2.4.1.tar.gz → COPYRIGHT",
+          "sha256": "7391bfbcde4404cefb9849553362c3ab436f929f5cc1abb57071ec045590ee99"
+        }
+      ]
+    },
+    {
+      "id": "lcms",
+      "key": "lcms",
+      "name": "lcms",
+      "version": "2.19.1",
+      "source": "https://github.com/mm2/Little-CMS/releases/download/lcms2.19.1/lcms2-2.19.1.tar.gz",
+      "files": [
+        {
+          "file": "lcms/LICENSE",
+          "from": "https://github.com/mm2/Little-CMS/releases/download/lcms2.19.1/lcms2-2.19.1.tar.gz → LICENSE",
+          "sha256": "6dbd60437f8ef91d8de1f08ad75882547fd4931bfcc3566a0735f28db1484d31"
+        }
+      ]
+    },
+    {
+      "id": "mozjpeg",
+      "key": "mozjpeg",
+      "name": "mozjpeg",
+      "version": "0826579",
+      "source": "https://github.com/mozilla/mozjpeg/archive/0826579.tar.gz",
+      "files": [
+        {
+          "file": "mozjpeg/LICENSE.md",
+          "from": "https://github.com/mozilla/mozjpeg/archive/0826579.tar.gz → LICENSE.md",
+          "sha256": "96f5b328adbb78eeaaec6980d73fd558cb1e4d62560ed615646bc3cf5e532430"
+        },
+        {
+          "file": "mozjpeg/README.ijg",
+          "from": "https://github.com/mozilla/mozjpeg/archive/0826579.tar.gz → README.ijg",
+          "sha256": "f4a85f8677ca4e41b185c0a9f7c31a30ddb9ce43c561483ee92ef12db37c2a10"
+        }
+      ]
+    },
+    {
+      "id": "pango",
+      "key": "pango",
+      "name": "pango",
+      "version": "1.58.2",
+      "source": "https://download.gnome.org/sources/pango/1.58/pango-1.58.2.tar.xz",
+      "files": [
+        {
+          "file": "pango/COPYING",
+          "from": "https://download.gnome.org/sources/pango/1.58/pango-1.58.2.tar.xz → COPYING",
+          "sha256": "d245807f90032872d1438d741ed21e2490e1175dc8aa3afa5ddb6c8e529b58e5"
+        }
+      ]
+    },
+    {
+      "id": "pixman",
+      "key": "pixman",
+      "name": "pixman",
+      "version": "0.46.4",
+      "source": "https://cairographics.org/releases/pixman-0.46.4.tar.gz",
+      "files": [
+        {
+          "file": "pixman/COPYING",
+          "from": "https://cairographics.org/releases/pixman-0.46.4.tar.gz → COPYING",
+          "sha256": "fac9270f0987b96ff4533fca3548c633e02083cbba4a0172a3b149b2e4019793"
+        }
+      ]
+    },
+    {
+      "id": "png",
+      "key": "png",
+      "name": "libpng",
+      "version": "1.6.58",
+      "source": "https://github.com/pnggroup/libpng/archive/v1.6.58.tar.gz",
+      "files": [
+        {
+          "file": "png/LICENSE",
+          "from": "https://github.com/pnggroup/libpng/archive/v1.6.58.tar.gz → LICENSE",
+          "sha256": "bdb0a645ea18c60507d0368379b1ac5474b92255fcc2d115e07486a7672ba526"
+        }
+      ]
+    },
+    {
+      "id": "proxy-libintl",
+      "key": "proxy-libintl",
+      "name": "proxy-libintl",
+      "version": "0.5",
+      "source": "https://github.com/frida/proxy-libintl/archive/0.5.tar.gz",
+      "files": [
+        {
+          "file": "proxy-libintl/COPYING",
+          "from": "https://github.com/frida/proxy-libintl/archive/0.5.tar.gz → COPYING",
+          "sha256": "d245807f90032872d1438d741ed21e2490e1175dc8aa3afa5ddb6c8e529b58e5"
+        }
+      ]
+    },
+    {
+      "id": "rsvg",
+      "key": "rsvg",
+      "name": "librsvg",
+      "version": "2.62.91",
+      "source": "https://download.gnome.org/sources/librsvg/2.62/librsvg-2.62.91.tar.xz",
+      "files": [
+        {
+          "file": "rsvg/COPYING.LIB",
+          "from": "https://download.gnome.org/sources/librsvg/2.62/librsvg-2.62.91.tar.xz → COPYING.LIB",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        }
+      ]
+    },
+    {
+      "id": "tiff",
+      "key": "tiff",
+      "name": "libtiff",
+      "version": "4.7.2",
+      "source": "https://gitlab.com/libtiff/libtiff/-/archive/v4.7.2/libtiff-v4.7.2.tar.gz",
+      "files": [
+        {
+          "file": "tiff/LICENSE.md",
+          "from": "https://gitlab.com/libtiff/libtiff/-/archive/v4.7.2/libtiff-v4.7.2.tar.gz → LICENSE.md",
+          "sha256": "0e27c2382d7b8147972bbb746e04059a1152c8d0fda9d03ef1399d1a433c4ade"
+        }
+      ]
+    },
+    {
+      "id": "uhdr",
+      "key": "uhdr",
+      "name": "libultrahdr",
+      "version": "2.0.2",
+      "source": "https://github.com/google/libultrahdr/archive/v2.0.2.tar.gz",
+      "files": [
+        {
+          "file": "uhdr/LICENSE",
+          "from": "https://github.com/google/libultrahdr/archive/v2.0.2.tar.gz → LICENSE",
+          "sha256": "c9247b5cb07866938643cc238292434e6f2af8642e1fce10771c0e4cc7909316"
+        },
+        {
+          "file": "uhdr/NOTICE",
+          "from": "https://github.com/google/libultrahdr/archive/v2.0.2.tar.gz → adobe-hdr-gain-map-license/NOTICE",
+          "sha256": "746d8c9c414b335bb7c9615918a15a6489a4dcc1c5c3aac2bda410d1072c332a"
+        }
+      ]
+    },
+    {
+      "id": "vips",
+      "key": "vips",
+      "name": "libvips",
+      "version": "8.18.6",
+      "source": "https://github.com/libvips/libvips/releases/download/v8.18.6/vips-8.18.6.tar.xz",
+      "files": [
+        {
+          "file": "vips/LICENSE",
+          "from": "https://github.com/libvips/libvips/releases/download/v8.18.6/vips-8.18.6.tar.xz → LICENSE",
+          "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+        }
+      ]
+    },
+    {
+      "id": "libnsgif",
+      "key": "vips",
+      "name": "libnsgif",
+      "version": "8.18.6",
+      "source": "https://github.com/libvips/libvips/releases/download/v8.18.6/vips-8.18.6.tar.xz",
+      "files": [
+        {
+          "file": "libnsgif/COPYING",
+          "from": "https://github.com/libvips/libvips/releases/download/v8.18.6/vips-8.18.6.tar.xz → libvips/foreign/libnsgif/COPYING",
+          "sha256": "1469b759cf18e43c6e1b4ff892307d3962cbbb337ac497620d6690a219fad10c"
+        }
+      ]
+    },
+    {
+      "id": "webp",
+      "key": "webp",
+      "name": "libwebp",
+      "version": "1.6.0",
+      "source": "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0.tar.gz",
+      "files": [
+        {
+          "file": "webp/COPYING",
+          "from": "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0.tar.gz → COPYING",
+          "sha256": "5aec868f669e384a22372a4e8a1a6cd7d44c64cd451f960ca69cc170d1e13acf"
+        },
+        {
+          "file": "webp/PATENTS",
+          "from": "https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0.tar.gz → PATENTS",
+          "sha256": "cc3273e0694ea5896145e0677699b53471b03ea43021ddc50e7923fbb9f5023c"
+        }
+      ]
+    },
+    {
+      "id": "xml2",
+      "key": "xml2",
+      "name": "libxml2",
+      "version": "2.15.3",
+      "source": "https://download.gnome.org/sources/libxml2/2.15/libxml2-2.15.3.tar.xz",
+      "files": [
+        {
+          "file": "xml2/Copyright",
+          "from": "https://download.gnome.org/sources/libxml2/2.15/libxml2-2.15.3.tar.xz → Copyright",
+          "sha256": "5d4873884a890122a4b9b20ad56ac6f7da1d796a5bfcf04a427970ac96217626"
+        }
+      ]
+    },
+    {
+      "id": "zlib-ng",
+      "key": "zlib-ng",
+      "name": "zlib-ng",
+      "version": "2.3.3",
+      "source": "https://github.com/zlib-ng/zlib-ng/archive/2.3.3.tar.gz",
+      "files": [
+        {
+          "file": "zlib-ng/LICENSE.md",
+          "from": "https://github.com/zlib-ng/zlib-ng/archive/2.3.3.tar.gz → LICENSE.md",
+          "sha256": "6c9f0d975b41afaa34d22f55bb8986ce69e5cb7ad327cb2b28820cd425edf5ee"
+        }
+      ]
+    }
+  ]
+}

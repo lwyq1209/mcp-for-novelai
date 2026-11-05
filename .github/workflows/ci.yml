@@ -1,0 +1,95 @@
+# Tests, contract and notice checks and the client build on Linux, macOS and Windows; the release workflow runs it
+# first (workflow_call). Needs no secrets. Actions are pinned to a full commit SHA (the version is in the comment).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  # github.workflow is the caller's name when the release workflow calls this one, so that run has its own group.
+  # A newer update of a pull request cancels the older run; pushes and releases always run to the end.
+  group: ${{ github.workflow }}-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            novelai/package-lock.json
+            novelai/client/package-lock.json
+
+      - name: Install the MCP server dependencies
+        working-directory: novelai
+        run: npm ci
+
+      - name: Install the client dependencies
+        working-directory: novelai/client
+        run: npm ci
+
+      # Always through npm test (tests/run-tests.mjs), never node --test on single files: run-tests.mjs gives the run a
+      # throwaway data root and temp folder, so no test writes into the runner's real app data location.
+      - name: MCP server tests
+        working-directory: novelai
+        run: npm test
+
+      - name: Contract check
+        working-directory: novelai
+        run: npm run check:contracts
+
+      - name: Client typecheck
+        working-directory: novelai/client
+        run: npm run typecheck
+
+      - name: Client tests
+        working-directory: novelai/client
+        run: npm test
+
+      - name: Client build (renderer, main process, MCP bundle)
+        working-directory: novelai/client
+        run: npm run build
+
+      - name: Third-party notices check
+        working-directory: novelai/client
+        run: npm run notices:check
+
+      # After the build, so the tests that need the built client run instead of skipping. The tests that need a real
+      # window skip themselves where Electron cannot open one (Linux runners have no display); see the job log.
+      - name: Dev-tools tests
+        working-directory: novelai/client
+        env:
+          NODE_DISABLE_COMPILE_CACHE: '1'
+        run: npm run test:dev-tools
+
+      - name: The checks leave the checkout unchanged
+        shell: bash
+        run: |
+          git status --porcelain --untracked-files=all > "$RUNNER_TEMP/status.txt"
+          if [ -s "$RUNNER_TEMP/status.txt" ]; then
+            echo "::error::Tests or build changed or created files in the checkout:"
+            cat "$RUNNER_TEMP/status.txt"
+            exit 1
+          fi

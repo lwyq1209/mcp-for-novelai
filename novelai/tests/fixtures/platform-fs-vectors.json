@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "note": "Shared behavior vectors for novelai/src/platform-fs.mjs and novelai/client/electron/platform-fs.ts. Calls use a fake io; flags are opaque numbers passed through on POSIX.",
+  "privateModeOk": [
+    { "platform": "linux", "mode": 33152, "expect": true },
+    { "platform": "darwin", "mode": 16832, "expect": true },
+    { "platform": "linux", "mode": 33188, "expect": false },
+    { "platform": "darwin", "mode": 16872, "expect": false },
+    { "platform": "win32", "mode": 33206, "expect": true },
+    { "platform": "win32", "mode": 16822, "expect": true }
+  ],
+  "syncDirectory": [
+    { "platform": "linux", "expectCalls": ["open:dir:r", "sync", "close"] },
+    { "platform": "darwin", "expectCalls": ["open:dir:r", "sync", "close"] },
+    { "platform": "linux", "syncError": "EIO", "expect": "EIO", "expectCalls": ["open:dir:r", "sync", "close"] },
+    { "platform": "win32", "expectCalls": [] }
+  ],
+  "openNoFollow": [
+    { "platform": "linux", "flags": 131072, "entry": { "type": "symlink" }, "expect": "opened", "expectCalls": ["open:f:131072"] },
+    { "platform": "darwin", "flags": 260, "entry": { "type": "file", "dev": "1", "ino": "2" }, "expect": "opened", "expectCalls": ["open:f:260"] },
+    { "platform": "win32", "flags": 131072, "entry": { "type": "symlink" }, "expect": "ELOOP", "expectCalls": ["lstat:f"] },
+    { "platform": "win32", "flags": 131072, "entry": { "type": "directory" }, "expect": "EINVAL", "expectCalls": ["lstat:f"] },
+    { "platform": "win32", "flags": 131072, "entry": { "type": "missing" }, "expect": "ENOENT", "expectCalls": ["lstat:f"] },
+    { "platform": "win32", "flags": 133120, "entry": { "type": "file", "dev": "1", "ino": "2" }, "opened": { "type": "file", "dev": "1", "ino": "2" }, "expect": "opened", "expectCalls": ["lstat:f", "open:f:0", "fstat"] },
+    { "platform": "win32", "flags": 131072, "entry": { "type": "file", "dev": "1", "ino": "2" }, "opened": { "type": "file", "dev": "1", "ino": "3" }, "expect": "ELOOP", "expectCalls": ["lstat:f", "open:f:0", "fstat", "close"] },
+    { "platform": "win32", "flags": 131072, "entry": { "type": "file", "dev": "1", "ino": "2" }, "opened": { "type": "file", "dev": "4", "ino": "2" }, "expect": "ELOOP", "expectCalls": ["lstat:f", "open:f:0", "fstat", "close"] },
+    { "platform": "win32", "flags": 131072, "entry": { "type": "file", "dev": "1", "ino": "2" }, "opened": { "type": "directory", "dev": "1", "ino": "2" }, "expect": "ELOOP", "expectCalls": ["lstat:f", "open:f:0", "fstat", "close"] }
+  ],
+  "renameReplace": [
+    { "platform": "win32", "errors": [], "expect": "ok", "renames": 1, "sleeps": [] },
+    { "platform": "win32", "errors": ["EPERM", "EBUSY"], "expect": "ok", "renames": 3, "sleeps": [10, 20] },
+    { "platform": "win32", "errors": ["EACCES"], "expect": "ok", "renames": 2, "sleeps": [10] },
+    { "platform": "win32", "errors": ["EPERM", "EPERM", "EPERM", "EPERM", "EPERM"], "expect": "ok", "renames": 6, "sleeps": [10, 20, 40, 60, 70] },
+    { "platform": "win32", "errors": ["EPERM", "EPERM", "EPERM", "EPERM", "EPERM", "EPERM"], "expect": "EPERM", "renames": 6, "sleeps": [10, 20, 40, 60, 70] },
+    { "platform": "win32", "errors": ["ENOENT"], "expect": "ENOENT", "renames": 1, "sleeps": [] },
+    { "platform": "win32", "errors": ["EPERM", "EXDEV"], "expect": "EXDEV", "renames": 2, "sleeps": [10] },
+    { "platform": "linux", "errors": ["EPERM"], "expect": "EPERM", "renames": 1, "sleeps": [] },
+    { "platform": "darwin", "errors": ["EBUSY"], "expect": "EBUSY", "renames": 1, "sleeps": [] },
+    { "platform": "linux", "errors": [], "expect": "ok", "renames": 1, "sleeps": [] }
+  ]
+}

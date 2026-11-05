@@ -1,0 +1,764 @@
+/*
+ * Global styles of the parts that are not in src/ui yet (step 4c2 pruned the old stylesheet to what the renderer still
+ * uses): base reset and scrollbars, the startup splash, the inpaint canvas and the before/after divider, the prompt
+ * box with tag completion, the error boundary card, the image save notices and the reduce-motion switch. Colors are
+ * the old dark theme variables (:root, .theme-dark). New styles go to the css of src/ui, src/shell, src/library, src/
+ * canvas, src/queue, src/settings or src/onboarding.
+ */
+/* ── Base reset ──────────────────────────────────────────────────────────────── */
+* { box-sizing: border-box; }
+
+html, html body, html body #root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg-window);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+
+button, input, select, textarea { font: inherit; }
+input, select, textarea { user-select: text; }
+button { user-select: none; }
+
+/* ── Thin custom scrollbar ───────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-md);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ── Splash ──────────────────────────────────────────────────────────────────── */
+.splash-page {
+  display: grid;
+  grid-template-columns: 55% 45%;
+  width: 100%;
+  height: 100%;
+  background: #fff;
+  animation: fadeIn 0.45s var(--ease-out);
+}
+
+.splash-art {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse at 25% 30%, rgba(139, 92, 246, 0.32), transparent 48%),
+    radial-gradient(ellipse at 78% 72%, rgba(196, 181, 253, 0.22), transparent 48%),
+    linear-gradient(135deg, #f4f2ff, #ede8fe);
+}
+
+.splash-orb {
+  position: absolute;
+  border-radius: var(--radius-pill);
+  filter: blur(44px);
+  opacity: 0.55;
+}
+.splash-orb-a {
+  width: 360px; height: 360px;
+  left: 70px; top: 100px;
+  background: rgba(124, 58, 237, 0.42);
+}
+.splash-orb-b {
+  width: 280px; height: 280px;
+  right: 50px; bottom: 90px;
+  background: rgba(196, 181, 253, 0.48);
+}
+
+/* Geometric logo mark */
+.splash-logo-mark {
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: 120px; height: 120px;
+}
+.logo-gem {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, #7c3aed, #a78bfa);
+  clip-path: polygon(50% 0%, 100% 38%, 82% 100%, 18% 100%, 0% 38%);
+  box-shadow: 0 0 60px rgba(124, 58, 237, 0.4);
+}
+.logo-ring {
+  position: absolute;
+  inset: -16px;
+  border: 2px solid rgba(139, 92, 246, 0.28);
+  border-radius: var(--radius-round);
+  animation: spin 14s linear infinite;
+}
+
+/* Splash title panel */
+.splash-title {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 72px;
+  animation: slideIn 0.7s var(--ease-out);
+}
+.splash-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.brand-icon-img {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-lg);
+  object-fit: cover;
+  box-shadow: var(--shadow-md);
+}
+.splash-title h1 {
+  margin: 0;
+  font-size: 50px;
+  font-weight: 800;
+  letter-spacing: -1.5px;
+  color: var(--text-primary);
+  line-height: 1.08;
+}
+.splash-divider {
+  width: 56px; height: 3px;
+  margin: 22px 0 16px;
+  background: linear-gradient(90deg, var(--accent), #a78bfa, transparent);
+  border-radius: var(--radius-sm);
+}
+.splash-sub {
+  margin: 0 0 6px;
+  font-size: 15px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.splash-ver {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.splash-title p { margin: 3px 0; font-size: 14px; }
+
+/* ── Prompt box ──────────────────────────────────────────────────────────────── */
+
+.prompt-box {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 7px 8px;
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color 0.14s, box-shadow 0.14s;
+}
+.prompt-box:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(109, 40, 217, 0.12);
+}
+
+/* ── Prompt area ─────────────────────────────────────────────────────────────── */
+.prompt-box {
+  min-height: 260px;
+  resize: vertical;
+  border-top: 0;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  line-height: 1.55;
+}
+
+/* ── Image stage ─────────────────────────────────────────────────────────────── */
+.compare-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: var(--z-raised);
+  width: 34px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: ew-resize;
+  transform: translateX(-50%);
+  touch-action: none;
+  will-change: left;
+}
+.compare-divider::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow:
+    0 0 0 1px rgba(124, 58, 237, 0.58),
+    0 0 18px rgba(124, 58, 237, 0.28);
+}
+.compare-divider span {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 24px;
+  height: 42px;
+  border: 1px solid rgba(124, 58, 237, 0.34);
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: var(--shadow-sm);
+  transform: translate(-50%, -50%);
+}
+.compare-divider span::before,
+.compare-divider span::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  border-top: 1.6px solid var(--accent);
+  border-left: 1.6px solid var(--accent);
+}
+.compare-divider span::before {
+  left: 6px;
+  transform: translateY(-50%) rotate(-45deg);
+}
+.compare-divider span::after {
+  right: 6px;
+  transform: translateY(-50%) rotate(135deg);
+}
+/* Mirror .image-stage so the 重绘 preview matches the other three tabs: a
+   definite absolute-inset box, image centered and sized by max-height:100%.
+   The mask canvas shares the image's intrinsic aspect + max constraints, so it
+   renders at the exact same rect (centered) and overlays the image precisely. */
+.inpaint-stage {
+  position: absolute;
+  inset: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.inpaint-base-img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xl);
+  user-select: none;
+  pointer-events: none;
+  transform-origin: top left;
+  transition: transform 0.12s var(--ease-out);
+}
+.inpaint-mask-canvas {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius-md);
+  cursor: none;
+  touch-action: none;
+  /* The opacity slider is the only transparency control. A blend mode here
+     made black invisible and shifted every other selected color. */
+  mix-blend-mode: normal;
+  opacity: 1;
+  transform-origin: top left;
+  transition: transform 0.12s var(--ease-out);
+  image-rendering: pixelated;
+}
+.inpaint-cursor {
+  position: absolute;
+  z-index: var(--z-base);
+  border: 2px solid rgba(255, 255, 255, 0.96);
+  border-radius: var(--radius-pill);
+  box-shadow:
+    0 0 0 1px rgba(109, 40, 217, 0.72),
+    0 0 14px rgba(109, 40, 217, 0.24);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  transition: width 0.08s ease, height 0.08s ease, opacity 0.08s ease;
+}
+.inpaint-compare-img,
+.inpaint-compare-after-clip {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.inpaint-compare-img {
+  z-index: var(--z-base);
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  transform-origin: top left;
+  transition: transform 0.12s var(--ease-out);
+  will-change: transform;
+}
+.inpaint-compare-after-clip {
+  z-index: var(--z-base);
+  overflow: hidden;
+  contain: paint;
+  will-change: clip-path;
+}
+.inpaint-compare-divider {
+  z-index: var(--z-raised);
+}
+.inpaint-export-preview {
+  position: absolute;
+  z-index: var(--z-base);
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  opacity: 1;
+  mix-blend-mode: normal;
+  pointer-events: none;
+  transform-origin: top left;
+  transition: transform 0.12s var(--ease-out);
+}
+
+/* ── Tag autocomplete dropdown ───────────────────────────────────────────────── */
+.prompt-ac-wrap {
+  position: relative;
+}
+.ac-dropdown {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  z-index: var(--z-dropdown);
+}
+/* Caret-anchored variant: vertical position follows the caret line, but the
+   dropdown stays full-width (left:0/right:0 from the base rule) so long tag
+   names never overflow the panel and get clipped. */
+.ac-dropdown.ac-dropdown-caret {
+  top: auto;
+}
+.ac-dropdown {
+  background: var(--bg-dialog);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  max-height: 260px;
+  overflow-y: auto;
+  animation: popIn 0.12s var(--ease-out);
+  margin-top: 6px;
+}
+.ac-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--text-primary);
+  transition: background 0.09s;
+}
+.ac-item:last-child { border-bottom: none; }
+.ac-item:hover, .ac-active {
+  background: var(--bg-hover);
+}
+.ac-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-round);
+  flex-shrink: 0;
+}
+.ac-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.ac-tag {
+  font-family: "Cascadia Code", "Consolas", "Courier New", monospace;
+  font-size: 12px;
+  letter-spacing: 0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ac-desc {
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ac-meta {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  min-width: 48px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Dark theme overrides */
+.theme-dark .ac-dropdown {
+  background: var(--bg-dialog);
+  border-color: var(--border);
+}
+.theme-dark .ac-item {
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+.theme-dark .ac-item:hover, .theme-dark .ac-active {
+  background: var(--bg-hover);
+}
+
+/* ── Keyframes ───────────────────────────────────────────────────────────────── */
+@keyframes popIn {
+  from { opacity: 0; transform: translateY(-4px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0)    scale(1);    }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(16px); }
+  to   { opacity: 1; transform: translateX(0);    }
+}
+
+/* Dark: inputs */
+.theme-dark .prompt-box {
+  background: #1a1730;
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+.theme-dark .prompt-box:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.12);
+}
+
+/* Dark: splash */
+.theme-dark .splash-page { background: #100d20; }
+.theme-dark .splash-art {
+  background:
+    radial-gradient(ellipse at 25% 30%, rgba(109, 40, 217, 0.28), transparent 52%),
+    radial-gradient(ellipse at 78% 72%, rgba(124, 58, 237, 0.18), transparent 52%),
+    linear-gradient(135deg, #1a1530, #100d20);
+}
+.theme-dark .splash-title h1 { color: var(--text-primary); }
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   STUDIO V2 — expressive creator workspace
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+html, body, #root {
+  background:
+    radial-gradient(circle at 7% 10%, rgba(6, 182, 212, 0.20), transparent 30%),
+    radial-gradient(circle at 42% -8%, rgba(124, 58, 237, 0.20), transparent 34%),
+    radial-gradient(circle at 92% 12%, rgba(245, 158, 11, 0.16), transparent 30%),
+    #f7f3ff;
+}
+/* Static halo, never animated (see 13.8). */
+.prompt-box {
+  border: 1px solid rgba(124, 58, 237, 0.14);
+  border-radius: var(--radius-lg);
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.72);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.85);
+}
+.prompt-box:focus {
+  border-color: rgba(124, 58, 237, 0.58);
+  box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.12), inset 0 1px 0 rgba(255,255,255,0.85);
+}
+.prompt-box {
+  min-height: 238px;
+}
+.theme-dark .prompt-box {
+  background: rgba(23, 20, 42, 0.68);
+  border-color: rgba(167, 139, 250, 0.18);
+}
+
+/* ── Splash custom image + entrance animation ──────────────────────────────── */
+.splash-animate { animation: splash-fade 0.6s ease both; }
+
+@keyframes splash-fade {
+  from { opacity: 0; transform: scale(1.02); }
+  to { opacity: 1; transform: scale(1); }
+}
+.splash-custom {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  object-fit: cover;
+  object-position: center;
+  animation: splash-image-in 1.1s cubic-bezier(0.22, 1, 0.36, 1) both;
+  filter: saturate(1.06) contrast(1.02);
+}
+@keyframes splash-image-in {
+  from { opacity: 0; transform: scale(1.06); filter: blur(8px) saturate(0.92); }
+  to { opacity: 1; transform: scale(1); filter: blur(0) saturate(1.06) contrast(1.02); }
+}
+
+.lazy-tool-loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 40px;
+}
+
+.theme-dark .compare-divider span {
+  background: rgba(24, 20, 44, 0.92);
+  border-color: rgba(168, 139, 250, 0.28);
+}
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Product Design pass · dark theme stabilization
+   The light theme already carries the intended soft glass look. Dark mode needs
+   its own contrast system instead of reusing translucent light surfaces.
+   ────────────────────────────────────────────────────────────────────────────── */
+
+html.theme-dark,
+html.theme-dark body,
+html.theme-dark #root {
+  background:
+    radial-gradient(circle at 6% 12%, rgba(6, 182, 212, 0.07), transparent 30%),
+    radial-gradient(circle at 46% -8%, rgba(124, 58, 237, 0.10), transparent 38%),
+    radial-gradient(circle at 94% 10%, rgba(245, 158, 11, 0.035), transparent 30%),
+    linear-gradient(180deg, #070915 0%, #040611 100%);
+  color: var(--text-primary);
+}
+
+.theme-dark ::-webkit-scrollbar-thumb {
+  background: rgba(196, 181, 253, 0.34);
+}
+
+.theme-dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(216, 204, 255, 0.56);
+}
+
+/* Form controls: readable text, visible borders, consistent focus ring */
+.theme-dark .prompt-box {
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border-color: rgba(160, 144, 214, 0.16);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.018) inset;
+}
+
+.theme-dark .prompt-box::placeholder {
+  color: rgba(184, 176, 207, 0.48);
+}
+
+.theme-dark .prompt-box:focus {
+  outline: none;
+  border-color: rgba(157, 130, 240, 0.46);
+  box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.14), 0 1px 0 rgba(255, 255, 255, 0.024) inset;
+}
+
+.theme-dark .compare-divider span {
+  color: var(--text-secondary);
+  background: rgba(10, 10, 23, 0.84);
+  border-color: rgba(160, 144, 214, 0.14);
+}
+
+/* One visual language for structural icons and controls.
+   SVGs must remain inline and clipped to their own box. The old `display:block`
+   + `overflow:visible` pair made direct button icons sit above their labels and
+   let strokes escape compact controls. */
+
+button:has(> .ui-icon):not(.select-menu-trigger) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  line-height: 1.25;
+}
+
+/* ── 1. Light semantic tokens（对齐报告 §6.4 语义色，覆盖 STUDIO V2 的半透明玻璃 token）── */
+:root {
+  /* Backgrounds — 内容面一律稳定实色，不再用半透明叠加制造层级 */
+  --bg-window:   #f3f3fa;
+  --bg-panel:    #f8f7fc;
+  --bg-canvas:   #ffffff;
+  --bg-dialog:   #ffffff;
+  --bg-input:    #ffffff;
+  --bg-hover:    #ece7f9;
+  --bg-selected: #e3dcf7;
+
+  /* Borders */
+  --border:        #dcd7ee;
+  --border-strong: #bfb5da;
+
+  /* Brand violet + cyan accent（cyan 仅配合品牌/状态） */
+  --accent:       #7047d8;
+  --accent-hover: #5e35c7;
+  --accent-soft:  #eee9fb;
+
+  /* Semantic */
+  --danger:       #d14343;
+
+  /* Text — #736a82 在白底、面板底和页面底均达到 WCAG AA 4.5:1 */
+  --text-primary:   #211b2e;
+  --text-secondary: #625a75;
+  --text-muted:     #736a82;
+
+  /* Typography, radius and stacking scales. */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-round: 50%;
+  --radius-pill: 999px;
+  --z-base: 1;
+  --z-raised: 10;
+  --z-dropdown: 200;
+  --z-notification: 21000;
+
+  /* 统一聚焦环 */
+  --focus-ring: 0 0 0 3px rgba(112, 71, 216, 0.20);
+
+  /* Compatibility aliases for feature modules that predate the semantic
+     token consolidation. Dark mode inherits their canonical references. */
+  --font-sans: "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", "Hiragino Sans GB", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* Consolidated legacy tokens: one authoritative selector block. */
+  --shadow-sm: 0 8px 22px rgba(59, 31, 128, 0.07);
+  --shadow-md: 0 18px 45px rgba(59, 31, 128, 0.10);
+  --shadow-lg: 0 26px 70px rgba(59, 31, 128, 0.14);
+  --shadow-xl: 0 38px 110px rgba(59, 31, 128, 0.20);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ── 2. Dark semantic tokens（对齐报告 §6.5；让深色成为 token 驱动的系统，
+      现有 .theme-dark 组件级补丁因优先级更高仍然生效，本块负责补齐语义底座）── */
+.theme-dark {
+  --bg-window:   #090a12;
+  --bg-panel:    #11111d;
+  --bg-canvas:   #181725;
+  --bg-dialog:   #201e30;
+  --bg-input:    #0e0f19;
+  --bg-hover:    rgba(157, 130, 240, 0.10);
+  --bg-selected: rgba(157, 130, 240, 0.16);
+
+  --border:        rgba(205, 195, 235, 0.14);
+  --border-strong: rgba(215, 205, 245, 0.28);
+
+  --accent:       #9d82f0;
+  --accent-hover: #b09af8;
+  --accent-soft:  rgba(157, 130, 240, 0.16);
+
+  --danger:       #d14343;
+
+  --text-primary:   #eeeaf6;
+  --text-secondary: #b9b1c8;
+  --text-muted:     #8f869f;
+
+  --focus-ring: 0 0 0 3px rgba(157, 130, 240, 0.28);
+
+  /* Consolidated legacy tokens: one authoritative selector block. */
+  --shadow-sm: 0 10px 26px rgba(0, 0, 0, 0.28), 0 1px 0 rgba(255, 255, 255, 0.018) inset;
+  --shadow-md: 0 18px 42px rgba(0, 0, 0, 0.34), 0 0 0 1px rgba(255, 255, 255, 0.014) inset;
+  --shadow-lg: 0 26px 68px rgba(0, 0, 0, 0.40), 0 0 34px rgba(124, 58, 237, 0.045);
+  --shadow-xl: 0 36px 110px rgba(0, 0, 0, 0.54), 0 0 54px rgba(124, 58, 237, 0.07);
+}
+
+/* ── 3. 选中态着色，统一品牌感 ─────────────────────────────────────────────── */
+::selection { background: var(--accent-soft); color: var(--text-primary); }
+
+/* 13.7 懒加载占位：淡入 + 柔和呼吸，缓解等待焦虑 */
+.lazy-tool-loading { animation: fadeIn 0.2s var(--ease-out), lazy-breathe 1.6s ease-in-out 0.2s infinite; }
+@keyframes lazy-breathe {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
+
+/* Native select controls are interactive everywhere. */
+select:not(:disabled) { cursor: pointer; }
+
+.app-error-boundary {
+  grid-column: 1 / -1;
+  align-self: center;
+  justify-self: center;
+  display: grid;
+  gap: 10px;
+  width: min(560px, calc(100% - 32px));
+  padding: 22px;
+  border: 1px solid color-mix(in srgb, var(--danger) 34%, var(--border));
+  border-radius: var(--radius-lg);
+  background: var(--bg-dialog);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-lg);
+}
+.app-error-boundary.is-root { margin: 10vh auto 0; }
+.app-error-boundary strong { font-size: 16px; }
+.app-error-boundary p { margin: 0; color: var(--text-secondary); line-height: 1.6; }
+.app-error-boundary code { max-height: 120px; overflow: auto; padding: 9px; border-radius: var(--radius-sm); background: var(--bg-window); color: var(--danger); }
+.app-error-boundary > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.app-error-boundary button { min-height: 34px; padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-canvas); color: var(--text-primary); cursor: pointer; }
+.app-error-boundary button:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Explicit in-app motion preference. Windows' generic animation-performance flag no
+   longer disables the product's navigation and feedback animations implicitly. */
+html.motion-reduced *,
+html.motion-reduced *::before,
+html.motion-reduced *::after {
+  scroll-behavior: auto !important;
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+/* Image saves: persistent in-flight feedback above lightboxes, separate from
+   short generic toasts. A spinner is indeterminate; no fabricated percentage. */
+.image-save-feedback { position: fixed; top: clamp(96px, 18vh, 176px); left: 50%; transform: translateX(-50%); z-index: var(--z-notification); width: min(440px, calc(100vw - 24px)); max-height: 60dvh; overflow: auto; display: grid; gap: 10px; pointer-events: none; }
+.image-save-notice { pointer-events: auto; display: flex; align-items: flex-start; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-panel); color: var(--text-primary); box-shadow: var(--shadow-lg); animation: image-save-enter 140ms ease-out both; }
+.image-save-notice-icon { width: 32px; height: 32px; flex: 0 0 32px; border-radius: var(--radius-md); display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+.image-save-notice-icon svg { width: 20px; height: 20px; }
+.image-save-notice.is-pending .image-save-notice-icon svg { animation: image-save-spin 1s linear infinite; }
+.image-save-notice.is-error, .image-save-notice.is-partial { border-color: var(--danger, #d14343); }
+.image-save-notice-content { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.image-save-notice-content strong { font-size: 15px; font-weight: 700; }
+.image-save-notice-content p { margin: 7px 0; line-height: 1.5; font-size: 12px; color: var(--text-secondary); }
+.image-save-notice-content .image-save-path { user-select: text; word-break: break-all; }
+.image-save-notice-content .ui-btn { margin-top: 4px; }
+.image-save-dismiss { padding: 4px; border: 0; background: transparent; color: var(--text-muted); border-radius: var(--radius-sm); cursor: pointer; }
+.image-save-dismiss svg { width: 16px; height: 16px; }
+.image-save-progress { height: 4px; border-radius: var(--radius-sm); overflow: hidden; background: var(--accent-soft); margin-top: 10px; }
+.image-save-progress span { display: block; width: 35%; height: 100%; background: var(--accent); animation: image-save-progress 1.2s ease-in-out infinite alternate; }
+@keyframes image-save-spin { to { transform: rotate(360deg); } }
+@keyframes image-save-progress { from { transform: translateX(-100%); } to { transform: translateX(285%); } }
+@keyframes image-save-enter { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+html.motion-reduced .image-save-notice, html.motion-reduced .image-save-notice-icon svg, html.motion-reduced .image-save-progress span { animation: none !important; }
+
+ 
+
+/* Keyboard image-input target; no layout movement. */
+[data-image-paste-active="true"] { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* DISCLOSURE FEEDBACK — visible states without moving the clicked anchor. */
+details > summary {
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background-color 140ms var(--ease-out), color 140ms var(--ease-out), box-shadow 140ms var(--ease-out);
+}
+details > summary:hover {
+  background-color: var(--accent-soft);
+  color: var(--accent);
+}
+details > summary:active {
+  background-color: color-mix(in srgb, var(--accent) 18%, var(--bg-panel));
+}
+details > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring);
+}
+details > summary:hover > svg { color: var(--accent); }

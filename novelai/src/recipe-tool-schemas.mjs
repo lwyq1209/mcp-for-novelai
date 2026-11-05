@@ -1,0 +1,104 @@
+/**
+ * Public schemas and descriptions of the recipe tools (prepare_recipe,
+ * enqueue_recipes, lookup_enqueue). Kept apart from src/mcp-core-tools.mjs so the
+ * recipe modes can evolve here without touching the rest of the core layer. The
+ * server-side rules stay in src/recipe-queue.mjs, which validates every
+ * field again (per mode) before any host call; the mask is validated only there,
+ * so its errors carry details {reason, path}.
+ */
+import { DIRECTOR_EMOTIONS, DIRECTOR_TOOLS, MAX_DIMENSION, MAX_QUEUE_ITEMS, MAX_QUEUE_SEED, MAX_TEXT, NOISE_SCHEDULES, QUALITY_PRESETS, QUEUE_FILE_PREFIX_MAX, QUEUE_FILE_PREFIX_PATTERN, QUEUE_HISTORY_GROUP_MAX, RECIPE_HOST_METHODS, RECIPE_MODES, RECIPE_SOURCE_HOST_METHODS, T2I_MODELS, T2I_SAMPLERS } from './recipe-queue.mjs';
+
+const schema = (properties = {}, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
+const positive = { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER };
+const uuid = { type: 'string', pattern: '^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$' };
+const hash64 = { type: 'string', pattern: '^[a-f0-9]{64}$' };
+const promptText = { type: 'string', maxLength: MAX_TEXT };
+const side = { type: 'integer', minimum: 64, maximum: MAX_DIMENSION, multipleOf: 64 };
+const queueSeed = { type: 'integer', minimum: 0, maximum: MAX_QUEUE_SEED };
+const identity = { type: 'string', minLength: 1, maxLength: 512, pattern: '\\S' };
+const level = { type: 'integer', minimum: 0, maximum: 5 };
+const requestKey = { type: 'string', minLength: 1, maxLength: 120, pattern: '\\S', description: 'Your idempotency key for this enqueue intent (1–120 printable characters). The server namespaces it (mcp-…); reuse the same key for the same intent, including after a restart.' };
+const recipeRef = { recipeId: { ...uuid, description: 'Recipe ID from prepare_recipe.' }, recipeRevision: positive, inputHash: { ...hash64, description: 'Exact inputHash returned with that recipe revision.' } };
+
+const text = { type: 'string', minLength: 1, pattern: '\\S' };
+// The live-canvas input (src/recipe-queue.mjs canvasPlan checks it again); patch is read_prompt_review's detached t2i text patch.
+const canvasInput = { type: 'object', additionalProperties: false, required: ['workspaceId', 'expectedRevision'],
+  description: 'Capture the live canvas instead of inline fields (only mode and preview may accompany it); see the tool description.',
+  properties: { workspaceId: text, expectedRevision: { type: 'integer', minimum: 0, description: 'The workspace revision from read_workspace.' }, draftId: text,
+    patch: { type: 'object', additionalProperties: false, properties: { params: { type: 'object' }, charCaptions: { type: 'array' } }, description: 't2i only, without draftId: a detached text patch.' } } };
+
+const PREPARE_RECIPE_SCHEMA = schema({
+  canvas: canvasInput,
+  recipeId: { ...uuid, description: 'Revise: the plain recipe of the same mode to revise; requires expectedRevision (its current revision).' },
+  expectedRevision: positive,
+  mode: { type: 'string', enum: [...RECIPE_MODES] },
+  preview: { type: 'boolean', description: 'Dry run: validate and build without saving (no recipeId, revision or quota).' },
+  // Two shapes in one nested object (no anyOf); the server checks the per-kind fields (src/recipe-sources.mjs sourceIdentity).
+  source: { type: 'object', additionalProperties: false, required: ['kind'], description: 'Image modes: see the tool description.',
+    properties: { kind: { enum: ['history', 'study'] }, historyId: identity, historyRevision: positive, assetId: identity, studyId: uuid, studyRevision: positive } },
+  mask: { type: 'object', description: 'inpaint only: {units:"fraction"|"px", layers:[1–16]} applied in order to an empty mask, first layer add. Layer {op:"add"|"subtract", shape|alpha, growPx? −256…256 (+ grow, − shrink), invert?}; per layer rasterize → grow → invert → combine. shape: {type:"rect",x,y,width,height} | {type:"ellipse",cx,cy,rx,ry} | {type:"polygon",points:[[x,y],…] 3–256, even-odd} | {type:"stroke",points 1–512,widthPx 1–512 (≥12 for thin lines)}. alpha (≤2 layers): {historyId,historyRevision,assetId,threshold? 1–255, default 128} of a PNG history original; alpha ≥ threshold selects. fraction scales x by width and y by height; px are source pixels; origin top-left. Coordinates are rounded (fraction 4 decimals, px whole pixels). The host repaints whole 8×8 latent cells; 0 selected cells is refused (mask_empty).' },
+  model: { type: 'string', enum: [...T2I_MODELS] },
+  width: side, height: side,
+  steps: { type: 'integer', minimum: 1, maximum: 50 },
+  cfgScale: { type: 'number', minimum: 0, maximum: 10 },
+  cfgRescale: { type: 'number', minimum: 0, maximum: 1, description: 'Optional, default 0.' },
+  sampler: { type: 'string', enum: [...T2I_SAMPLERS] },
+  noiseSchedule: { type: 'string', enum: [...NOISE_SCHEDULES], description: 'V5 models require karras.' },
+  ucPreset: { type: 'integer', minimum: 0, maximum: 3, description: 'UC preset index; its text depends on the model (commonly 0 Heavy, 1 Light, 2 Human Focus, 3 None). On some models a preset adds nothing (for example 2 on V4 Full/Curated, every preset on Furry V3); the readback shows the actual text and warns when it is empty.' },
+  qualityPreset: { type: 'string', enum: [...QUALITY_PRESETS], description: 'Automatic quality tags; light is V5-only, none disables them. Some models add no quality text (Furry V3); the readback shows the actual text and warns when it is empty.' },
+  stylePrompt: promptText,
+  positivePrompt: { ...promptText, minLength: 1, pattern: '\\S' },
+  negativePrompt: promptText,
+  seed: { type: ['integer', 'null'], minimum: 0, maximum: MAX_QUEUE_SEED, description: 'Fixed seed, or null for a random seed drawn at enqueue.' },
+  characters: { type: 'array', maxItems: 32, description: 't2i/i2i/enhance, V4+ models only: up to 6 (V4/V4.5) or 32 (V5).', items: { type: 'object', additionalProperties: false, required: ['prompt', 'useCoords'], properties: {
+    prompt: { ...promptText, minLength: 1, pattern: '\\S' }, negativePrompt: promptText, useCoords: { type: 'boolean' },
+    x: { type: 'number', minimum: 0, maximum: 1, description: 'Required when useCoords is true.' }, y: { type: 'number', minimum: 0, maximum: 1, description: 'Required when useCoords is true.' } } } },
+  transparentBackground: { type: 'boolean', description: 'Optional, default false. t2i on V5 models only: requests a transparent background (the builder appends "transparent background" to the prompt and sets tag_hint_transparent_background and straight_alpha); judge the actual result from the image. Do not also write that text in the prompt. A revision rewrites every field, so pass true again to keep it. Rejected on other models, where the host would turn it off silently.' },
+  strength: { type: 'number', minimum: 0, maximum: 1, description: 'i2i: how much to change the source; inpaint: repaint strength (1 = full).' },
+  extraNoiseSeed: { type: ['integer', 'null'], minimum: 1, maximum: MAX_QUEUE_SEED, description: 'i2i/enhance, optional: fixed extra noise seed; omit or null for a random one per image.' },
+  magnitude: { type: 'integer', minimum: 1, maximum: 10, description: 'enhance: 1–10 (strength is derived from it).' },
+  scale: { type: 'integer', enum: [1, 2], description: 'enhance: 1 or 2; upscale: 2.' },
+  tool: { type: 'string', enum: [...DIRECTOR_TOOLS], description: 'director tool.' },
+  defry: { ...level, description: 'director, optional, default 0.' },
+  colorizePrompt: { ...promptText, description: 'director tool colorize only (may be empty).' },
+  emotion: { type: 'string', enum: [...DIRECTOR_EMOTIONS], description: 'director tool emotion only.' },
+  emotionLevel: { ...level, description: 'director tool emotion only.' },
+  acceptDownscale: { type: 'boolean', description: 'upscale/director: allow the host to downscale a source over 1,048,576 px (default false: refused).' },
+}, ['mode']);
+const ENQUEUE_RECIPES_SCHEMA = schema({
+  requestKey,
+  intervalSeconds: { type: 'number', minimum: 0, maximum: 60, description: 'Pause between images, default 0.' },
+  historyGroup: { type: 'string', minLength: 1, maxLength: QUEUE_HISTORY_GROUP_MAX, pattern: '^\\S(?:.*\\S)?$', description: 'Optional history group (your project name): images save under outputDir/<date>/<group>/ and join that group. Created on first use, reused by case-insensitive name.' },
+  fileNamePrefix: { type: 'string', minLength: 1, maxLength: QUEUE_FILE_PREFIX_MAX, pattern: QUEUE_FILE_PREFIX_PATTERN, description: 'Optional file-name prefix for every image (all modes): "proj" → proj_<date>_01_<model>.png.' },
+  items: { type: 'array', minItems: 1, maxItems: MAX_QUEUE_ITEMS, items: { type: 'object', additionalProperties: false, required: ['recipeId', 'recipeRevision', 'inputHash'], properties: {
+    ...recipeRef, count: { type: 'integer', minimum: 1, maximum: MAX_QUEUE_ITEMS }, seeds: { type: 'array', minItems: 1, maxItems: MAX_QUEUE_ITEMS, items: queueSeed, description: 'Explicit seed per image; length must equal count. Not for upscale/director.' } } } },
+}, ['requestKey', 'items']);
+const LOOKUP_ENQUEUE_SCHEMA = schema({ requestKey });
+
+const PREPARE_RECIPE_DESCRIPTION = 'Freeze one independent recipe revision in the shared host recipe store from inline fields (no inbox file) or from the live canvas, or dry-run it with preview:true. Six modes; a field of another mode is refused, never ignored, and nothing the host would clamp, snap, resize, convert or drop is accepted silently. '
+  + 't2i: model; width/height multiples of 64 with width×height ≤ 3,145,728; steps 1–50; cfgScale 0–10; optional cfgRescale 0–1; sampler; noiseSchedule (V5: karras); ucPreset 0–3; qualityPreset standard/light (V5 only)/none; stylePrompt; non-blank positivePrompt; negativePrompt; seed 0–2147483646 or null for random at enqueue; optional characters (V4+ only, at most 6, V5 32) and transparentBackground (V5 only). '
+  + 'Image modes take source {kind:"history", historyId, historyRevision, assetId} from asset_library (look at it first with action:image; read_queue/get_queue_result give the historyId of queue results), or {kind:"study", studyId, studyRevision} of an imported image (material_studies id/revision): a PNG/JPEG/WebP original; nothing else is a source. '
+  + 'i2i: the t2i fields without transparentBackground, plus source and strength 0–1, optional extraNoiseSeed; width/height must keep the source aspect within 3% (the host stretches). '
+  + 'enhance: the t2i fields without width/height/transparentBackground, plus source, magnitude 1–10, scale 1|2, optional extraNoiseSeed; the size is source × scale, so the source must be 64-aligned and the result ≤ 3,145,728 px. '
+  + 'inpaint: the generation fields without width/height/characters/transparentBackground (model: no furry-3; runs as <model>-inpainting), plus source (64-aligned, ≤ 1600 px per side), strength 0–1 and mask (shapes and alpha layers, see mask). '
+  + 'upscale: source, scale 2. director: source, tool, optional defry 0–5, colorizePrompt (colorize only), emotion + emotionLevel 0–5 (emotion only). upscale/director use no seed and refuse a source over 1,048,576 px unless acceptDownscale:true. '
+  + 'preview:true runs the same checks and the host builder without saving anything; for inpaint it returns a WebP of the actual request source with the latent cells the mask selects tinted red, so check the mask, adjust and preview again before saving. '
+  + 'To revise, pass recipeId with its current expectedRevision, the same mode and every field again (source too); the host saves a new immutable revision. '
+  + 'canvas {workspaceId, expectedRevision, draftId?|patch?} with mode (and optional preview) instead captures the live canvas at exactly that revision into a new recipe: every input of that mode as the canvas holds it, its source and mask copied in. draftId reads that unapplied draft, patch a detached t2i text patch (params/charCaptions), as read_prompt_review does; nothing is adopted or changed, and a newer revision is a conflict (read the workspace again). A canvas recipe takes no other field, cannot be revised and does not inherit the canvas history group (pass historyGroup to enqueue_recipes); to show a draft on the canvas, apply_edit it. '
+  + 'Returns recipeId, recipeRevision, inputHash and a readback of the actual effective input from the host builder: final prompts with the automatic quality text (and the transparent-background text when enabled), final negative with the UC preset text, characters, sampling, mode parameters, source (identity, sha256, size), mask (selected cells, layers, spec) and warnings. Check the readback before enqueueing. Does not generate or enqueue. An unknown save outcome is never retried automatically.';
+
+const { put, read, preview, lookup, enqueue, list, capture } = RECIPE_HOST_METHODS;
+/**
+ * name -> public definition parts and the fixed host methods the tool may reach
+ * (named once, in RECIPE_HOST_METHODS and RECIPE_SOURCE_HOST_METHODS); annotations
+ * are completed by the registry entry in src/mcp-core-tools.mjs. A test checks every
+ * observed host call against hostMethods.
+ */
+export const RECIPE_TOOL_SPECS = Object.freeze({
+  prepare_recipe: { readOnlyHint: false, openWorldHint: false, hostMethods: [read, RECIPE_SOURCE_HOST_METHODS.image, put, preview, capture], inputSchema: PREPARE_RECIPE_SCHEMA, description: PREPARE_RECIPE_DESCRIPTION },
+  enqueue_recipes: { readOnlyHint: false, openWorldHint: true, hostMethods: [lookup, read, enqueue, list], inputSchema: ENQUEUE_RECIPES_SCHEMA,
+    description: 'Enqueue exact frozen recipes into the shared host FIFO queue; the host then GENERATES these images with NovelAI (paid), with no further confirmation. items [{recipeId, recipeRevision, inputHash, count?, seeds?}]: 1 up to the client\'s per-enqueue limit of images in total (a client setting, default 20, at most 200; a larger plan is refused with enqueue_limit_exceeded naming the current limit, and the client\'s total queue limit, default 200, refuses with queue_full), one provider request each (n_samples=1), one generation mode per enqueue (split other modes into their own enqueue and requestKey), optional intervalSeconds 0–60. seeds give one explicit seed per image (length = count); without seeds the recipe seed policy applies, and a fixed-seed recipe used for more than one image requires explicit seeds. upscale and director recipes use no seed: list each once, without seeds or count > 1 (one image per recipe per enqueue). The images\' frozen sources and masks are bounded at about 32 MiB per enqueue. requestKey is your idempotency key: the server namespaces it and looks it up first, so a key that already has a host receipt never enqueues again; reuse the same requestKey for the same intent, including after a restart, because a new key is a new paid request. A mismatched revision or inputHash, a blocked recipe, mixed modes or a source that is gone are rejected before anything is sent, and the key stays unused. Any host-ready recipe may be enqueued, including ones prepared elsewhere; the receipt lists warnings (for example a recipe_input_mismatch reported by prepare_recipe, characters not sent, presets that add nothing). An explicit host refusal is followed by one confirming lookup and reported as definite, with any batch already under the key attached. An unknown outcome is never resent automatically: call lookup_enqueue with the same requestKey. '
+      + 'Projects share this queue and output folder: pass historyGroup and fileNamePrefix for your project (both part of the plan; the batch reports output), and take files only by the fileName/file read_queue gives per historyId, never by number ranges.' },
+  lookup_enqueue: { readOnlyHint: false, openWorldHint: false, hostMethods: [lookup, list], inputSchema: LOOKUP_ENQUEUE_SCHEMA,
+    description: 'Look up the host receipt for one of your enqueue requestKeys (same server namespacing as enqueue_recipes): enqueued (with the compact batch), rejected, unknown or not_found. Never enqueues, resends or retries, but it is not read-only: the host reconciles its own receipt during the lookup (an interrupted receipt becomes unknown, a found batch becomes accepted). unknown can still turn into accepted while an earlier enqueue is in flight, so it also checks the host queue and returns a settlement: settling (look up the same key again after retryAfterSeconds; do not resend or switch keys) or, only after two unknown lookups at least the settle window (about 130 s) apart with no batch in the queue, stale with newKeyAdvised (enqueue the same plan under a NEW requestKey; a late acceptance of the old key could still duplicate it). not_found means no receipt yet: an earlier timed-out request may still be accepted late, so resend only the same plan with the same key, and look up this key again before changing the plan; it also releases this server\'s resend hold. For a key this server process never sent or saw unknown (after a restart, or sent by another process), the first not_found returns settlement settling with retryAfterSeconds (the settle window): resending the same plan with the same key stays safe, but wait the window and look up the same key again before changing the plan or the key; a not_found after the window returns settlement clear, after which changing the plan or the key is fine (a late acceptance of the old request could still duplicate it; check list_queue first).' },
+});

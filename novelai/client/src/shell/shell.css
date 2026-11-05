@@ -1,0 +1,68 @@
+/* The frame of the new interface (step 4b1): top bar and pages. Only --ui-* variables and ui-/as- classes. */
+.as-shell { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; background: var(--ui-bg-0); color: var(--ui-text-1); overflow: hidden; }
+
+/* Top bar (48px, drags the window) */
+.as-topbar { height: 48px; flex: none; display: flex; align-items: center; gap: var(--ui-sp-2); padding: 0 8px 0 14px; background: var(--ui-bg-1); border-bottom: 1px solid var(--ui-line); -webkit-app-region: drag; user-select: none; }
+.as-topbar > * { -webkit-app-region: no-drag; }
+.as-brand { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 13px; margin-right: 14px; -webkit-app-region: drag; white-space: nowrap; }
+.as-nav { display: flex; gap: 2px; }
+.as-nav-item { position: relative; display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px; border: 0; border-radius: var(--ui-r-m); background: transparent; color: var(--ui-text-2); font-weight: 500; transition: background var(--ui-t-fast), color var(--ui-t-fast); }
+.as-nav-item:hover { color: var(--ui-text-1); background: var(--ui-bg-3); }
+.as-nav-item.is-on { color: var(--ui-text-1); background: var(--ui-bg-3); }
+.as-nav-badge { position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--ui-agent); box-shadow: 0 0 0 2px var(--ui-bg-1); }
+.as-live-pill { display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0 7px 0 6px; border-radius: 999px; background: var(--ui-agent-soft); color: var(--ui-agent); font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.as-top-right { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.as-anlas { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--ui-line-2); color: var(--ui-text-2); font-size: 12px; background: transparent; white-space: nowrap; }
+.as-anlas b { color: var(--ui-text-1); font-weight: 600; }
+.as-anlas:hover { background: var(--ui-bg-3); }
+.as-anlas.is-off { color: var(--ui-warn); border-color: color-mix(in srgb, var(--ui-warn) 40%, transparent); }
+.as-anlas.is-stale b { color: var(--ui-text-2); }
+.as-langsw { display: inline-flex; height: 28px; padding: 2px; border-radius: 999px; border: 1px solid var(--ui-line-2); }
+.as-langsw button { border: 0; background: transparent; color: var(--ui-text-3); padding: 0 9px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+.as-langsw button.is-on { background: var(--ui-bg-4); color: var(--ui-text-1); }
+.as-update-pill { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 999px; background: var(--ui-accent-soft); color: var(--ui-accent-text); font-size: 12px; font-weight: 500; border: 0; white-space: nowrap; }
+.as-winctl { display: flex; margin-left: 6px; }
+.as-winctl button { width: 36px; height: 32px; border: 0; background: transparent; color: var(--ui-text-3); border-radius: var(--ui-r-s); display: grid; place-items: center; }
+.as-winctl button:hover { background: var(--ui-bg-3); color: var(--ui-text-1); }
+.as-winctl button.is-close:hover { background: var(--ui-danger-strong); color: #fff; }
+
+/* Pages: each fills the area; hidden pages stay laid out (the canvas keeps its size) but are invisible and inert.
+   A descendant's own visibility:visible shows through an ancestor's visibility:hidden, and the old canvas styles set
+   it (.persistent-tools-view, the workbench view). So, in this order of strength:
+   - a hidden page is also transparent as a whole (opacity 0, which no descendant can undo), its layout untouched;
+   - every page is its own stacking context, and the shown page lies above the hidden ones with an opaque background,
+     so nothing of a hidden page can paint over it (the canvas comes after the library in the document);
+   - inert (AppShell) keeps a hidden page from focus, clicks and keys. */
+.as-pages { position: relative; flex: 1; min-height: 0; }
+.as-page { position: absolute; inset: 0; z-index: 0; isolation: isolate; display: flex; min-width: 0; min-height: 0; visibility: hidden; opacity: 0; pointer-events: none; }
+.as-page.is-active { z-index: 1; visibility: visible; opacity: 1; pointer-events: auto; background: var(--ui-bg-0); }
+/* Animations inside a hidden page are paused (a visibility:hidden subtree restyles them every frame otherwise);
+   they continue when the page is shown. src/hidden-view-animation.test.ts guards this. */
+.as-page:not(.is-active) *,
+.as-page:not(.is-active) *::before,
+.as-page:not(.is-active) *::after { animation-play-state: paused !important; }
+
+/* The canvas inside the frame (step 4b3: src/canvas). Since 4b3c it has no rail beside it and no page over it. */
+.as-canvas-page { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--ui-bg-0); }
+
+/* The existing queue panel inside the frame */
+.as-queue-page { flex: 1; min-width: 0; overflow-y: auto; padding: 18px 24px 40px; display: flex; flex-direction: column; gap: 14px; }
+.as-page-head { display: flex; align-items: flex-start; gap: 16px; }
+.as-page-head > div { flex: 1; min-width: 0; }
+.as-page-head h1 { margin: 0 0 4px; font-size: 18px; font-weight: 600; }
+.as-page-head p { margin: 0; font-size: 12.5px; }
+.as-note { display: flex; align-items: center; gap: 10px; margin: 0; padding: 9px 11px; border-radius: var(--ui-r-m); background: var(--ui-bg-2); color: var(--ui-text-2); font-size: 12px; }
+.as-note--warn { background: var(--ui-warn-soft); color: var(--ui-text-1); }
+.as-legacy-panel { max-width: 960px; border: 1px solid var(--ui-line); border-radius: var(--ui-r-l); background: var(--ui-bg-1); padding: 14px 16px; }
+.as-legacy-panel .generation-jobs > h3 { margin-top: 0; }
+
+/* An error boundary of a page or of the first-run guide (review rework 4b2): one centred card in its own area, never a
+   second layer under or beside the page. The guide's boundary covers the window like the guide. */
+.as-page > .app-error-boundary { margin: auto; box-shadow: none; }
+/* Under the 48px top bar: its window buttons and pages stay reachable while the guide shows its failure. */
+.as-overlay-error { position: absolute; inset: 48px 0 0; z-index: 60; display: flex; background: var(--ui-bg-0); }
+.as-overlay-error > .app-error-boundary { margin: auto; box-shadow: none; }
+
+/* The library's background read-model error (src/workspace/MaterialLibraryLauncher.tsx; step 4c2 moved it here from
+   the old asset-library/assets.css and gave it the --ui colors). */
+.material-background-error { position: fixed; bottom: 16px; right: 16px; z-index: 100; max-width: 380px; margin: 0; padding: 8px 12px; border-radius: var(--ui-r-m); background: var(--ui-danger-soft); color: var(--ui-danger); font-size: 12px; }

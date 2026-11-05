@@ -1,0 +1,135 @@
+/* The queue page (step 4b2, prototype 17–19). Only --ui-* variables and ui-/qp- classes. */
+.qp-page { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--ui-bg-0); }
+.qp-cols { flex: 1; min-height: 0; display: flex; }
+.qp-center { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--ui-text-2); font-size: 13px; padding: 24px; }
+.qp-num { font-variant-numeric: tabular-nums; }
+.qp-code { font: 11px/1.4 var(--ui-mono); color: var(--ui-text-3); margin-left: 8px; white-space: nowrap; }
+
+/* Token banner */
+.qp-banner { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 16px; background: var(--ui-warn-soft); color: var(--ui-text-1); font-size: 12.5px; border-bottom: 1px solid var(--ui-line); }
+.qp-banner .qp-note-ic { color: var(--ui-warn); }
+.qp-banner .ui-btn { margin-left: auto; }
+
+/* List column */
+.qp-list { width: 440px; flex: none; border-right: 1px solid var(--ui-line); background: var(--ui-bg-1); display: flex; flex-direction: column; min-height: 0; }
+.qp-list-head { padding: 16px 16px 12px; border-bottom: 1px solid var(--ui-line); display: flex; flex-direction: column; gap: 10px; }
+.qp-list-head h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -.01em; }
+.qp-stats { margin: 0; font-size: 12.5px; color: var(--ui-text-2); font-variant-numeric: tabular-nums; }
+.qp-list-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 10px 16px; }
+.qp-group-h { margin: 0; font-size: 11px; font-weight: 600; color: var(--ui-text-3); text-transform: uppercase; letter-spacing: .02em; padding: 14px 8px 6px; }
+.qp-list-empty { margin: 24px 8px; color: var(--ui-text-3); font-size: 12.5px; }
+.qp-more { display: flex; justify-content: center; padding: 8px 0 0; }
+.qp-inline-error { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 10px 8px 0; color: var(--ui-danger); font-size: 12.5px; }
+
+/* Batch card */
+.qp-card { display: flex; gap: 12px; width: 100%; padding: 10px; border-radius: var(--ui-r-l); border: 1px solid transparent; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background var(--ui-t-fast); }
+.qp-card:hover { background: var(--ui-bg-2); }
+.qp-card.is-on { background: var(--ui-bg-2); border-color: var(--ui-line-2); }
+.qp-card:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: -2px; }
+.qp-stack { position: relative; width: 52px; height: 60px; flex: none; }
+.qp-stack.is-empty { display: grid; place-items: center; width: 44px; margin-right: 8px; border-radius: 7px; background: var(--ui-bg-3); color: var(--ui-text-3); }
+.qp-stack-img { position: absolute; width: 44px; height: 56px; border-radius: 7px; overflow: hidden; box-shadow: 0 2px 8px rgba(0, 0, 0, .4); background: var(--ui-bg-3); }
+.qp-stack-img .lib-thumb { border-radius: inherit; }
+.qp-stack-img:nth-last-child(1) { left: 0; top: 0; }
+.qp-stack-img:nth-last-child(2) { left: 4px; top: 2px; opacity: .75; }
+.qp-stack-img:nth-last-child(3) { left: 8px; top: 4px; opacity: .5; }
+.qp-card-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.qp-card-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.qp-card-top b { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.qp-card-top .qp-status { margin-left: auto; flex: none; }
+.qp-card-meta { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ui-text-2); flex-wrap: wrap; min-width: 0; }
+.qp-card-meta .ui-tag { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qp-sep { color: var(--ui-text-3); }
+.qp-card-progress { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--ui-text-3); }
+.qp-card-progress .ui-progress { flex: 1; }
+.qp-flag { display: inline-flex; }
+.qp-flag--halted, .qp-flag--unknown { color: var(--ui-warn); }
+.qp-flag--failed { color: var(--ui-danger); }
+.qp-status { gap: 5px; }
+
+/* Detail */
+.qp-detail { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.qp-detail-head { flex: none; padding: 18px 24px 14px; border-bottom: 1px solid var(--ui-line); display: flex; flex-direction: column; gap: 12px; }
+.qp-detail-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.qp-detail-title h2 { margin: 0; font-size: 18px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.qp-acts { position: relative; margin-left: auto; display: flex; gap: 6px; flex: none; border-radius: var(--ui-r-s); }
+.qp-acts:focus { outline: none; }
+.qp-acts:focus-visible { box-shadow: var(--ui-focus-ring); }
+/* Review rework (4b2 P1): after a state change the buttons are off for a moment and the change is said below them
+   (absolutely placed, so nothing moves under the pointer). */
+.qp-acts.is-changed .ui-btn { box-shadow: 0 0 0 1px var(--ui-warn); transition: box-shadow var(--ui-t-med); }
+.qp-acts-changed { position: absolute; top: calc(100% + 4px); right: 0; white-space: nowrap; font-size: 11.5px; color: var(--ui-warn); background: var(--ui-bg-2); border: 1px solid var(--ui-line-2); border-radius: var(--ui-r-s); padding: 1px 7px; pointer-events: none; z-index: 2; }
+.qp-next { display: flex; align-items: center; gap: 10px; margin: 10px 12px 0; padding: 9px 12px; border: 1px solid var(--ui-agent-line); border-radius: var(--ui-r-m); background: var(--ui-agent-soft); color: var(--ui-text-1); text-align: left; font-size: 12.5px; }
+.qp-next:hover { background: color-mix(in srgb, var(--ui-agent) 18%, transparent); }
+.qp-next:focus-visible { outline: none; box-shadow: var(--ui-focus-ring); }
+.qp-next-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.qp-next-k { color: var(--ui-text-2); font-size: 11.5px; }
+.qp-next-text b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qp-next > .ui-glyph { color: var(--ui-agent); flex: none; }
+.qp-confirm-batch { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0 0 10px; font-size: 13px; color: var(--ui-text-1); }
+.qp-confirm-batch b { font-weight: 600; }
+.qp-meta { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 0; font-size: 12.5px; }
+.qp-meta > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.qp-meta dt { color: var(--ui-text-3); font-size: 11.5px; }
+.qp-meta dd { margin: 0; display: flex; align-items: center; gap: 6px; color: var(--ui-text-1); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qp-total { display: flex; align-items: center; gap: 12px; font-size: 12.5px; color: var(--ui-text-2); }
+.qp-total .ui-progress { flex: 1; }
+.qp-detail-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 24px 24px; display: flex; flex-direction: column; gap: 14px; }
+
+/* Notes: grey / cyan / yellow / red, icon first */
+.qp-note { display: flex; gap: 8px; align-items: flex-start; margin: 0; padding: 9px 11px; border-radius: var(--ui-r-m); background: var(--ui-bg-2); color: var(--ui-text-2); font-size: 12.5px; line-height: 1.5; }
+.qp-note-ic { flex: none; margin-top: 2px; }
+.qp-note-text { flex: 1; min-width: 0; }
+/* NovelAI's own answer to a failed agent image (step 4c1), on its own line under the failure. */
+.qp-upstream { display: block; margin-top: 4px; color: var(--ui-text-2); font-size: 12.5px; overflow-wrap: anywhere; }
+.qp-note .ui-btn { flex: none; margin: -3px 0; }
+.qp-note--agent { background: var(--ui-agent-soft); color: var(--ui-text-1); }
+.qp-note--agent .qp-note-ic { color: var(--ui-agent); }
+.qp-note--warn { background: var(--ui-warn-soft); color: var(--ui-text-1); }
+.qp-note--warn .qp-note-ic { color: var(--ui-warn); }
+.qp-note--danger { background: var(--ui-danger-soft); color: var(--ui-text-1); }
+.qp-note--danger .qp-note-ic { color: var(--ui-danger); }
+
+/* Images of a batch: fixed cells, off-screen cells skip layout and paint */
+.qp-items-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.qp-items-h h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.qp-link { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; color: var(--ui-text-2); font: inherit; font-size: 12.5px; cursor: pointer; padding: 4px 6px; border-radius: var(--ui-r-s); }
+.qp-link:hover { color: var(--ui-text-1); background: var(--ui-bg-3); }
+.qp-link:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 1px; }
+.qp-grid { display: grid; grid-template-columns: repeat(auto-fill, 128px); gap: 10px; }
+.qp-cell { position: relative; width: 128px; height: 187px; border-radius: var(--ui-r-m); overflow: hidden; background: var(--ui-bg-2); border: 1px solid var(--ui-line); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: 12px; color: var(--ui-text-3); content-visibility: auto; contain-intrinsic-size: 128px 187px; }
+.qp-cell::before { content: attr(data-n); position: absolute; left: 7px; top: 5px; z-index: 2; font-size: 11px; font-weight: 600; color: var(--ui-text-3); font-variant-numeric: tabular-nums; pointer-events: none; }
+.qp-cell.is-done::before { color: rgba(255, 255, 255, .85); text-shadow: 0 1px 2px rgba(0, 0, 0, .6); }
+.qp-cell.is-pending { border-style: dashed; background: transparent; }
+.qp-cell.is-off { background: transparent; color: var(--ui-text-3); opacity: .7; }
+.qp-cell.is-failed { border-color: var(--ui-danger); color: var(--ui-danger); background: var(--ui-danger-soft); }
+.qp-cell.is-unknown { border: 1px dashed var(--ui-warn); color: var(--ui-warn); background: transparent; }
+.qp-cell.is-running { color: var(--ui-text-1); border-color: var(--ui-agent-line); }
+.qp-cell-open { position: absolute; inset: 0; padding: 0; border: 0; background: transparent; cursor: pointer; display: block; border-radius: inherit; }
+.qp-cell-open:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: -2px; }
+.qp-cell-open .lib-thumb { border-radius: inherit; }
+.qp-cell-ok { position: absolute; left: 6px; bottom: 6px; z-index: 2; display: grid; place-items: center; width: 20px; height: 20px; border-radius: var(--ui-r-xs); background: var(--ui-ok-soft); color: var(--ui-ok); pointer-events: none; }
+.qp-shimmer { position: absolute; inset: 0; background: linear-gradient(110deg, var(--ui-bg-2) 30%, var(--ui-bg-4) 50%, var(--ui-bg-2) 70%); background-size: 220% 100%; animation: qp-shimmer 1.6s linear infinite; }
+@keyframes qp-shimmer { to { background-position: -120% 0; } }
+.qp-cell-lbl { position: relative; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+
+/* Technical details */
+.qp-tech { border-top: 1px solid var(--ui-line); padding-top: 6px; }
+.qp-tech-list { display: grid; gap: 6px; margin: 8px 0 12px; font-size: 12px; }
+.qp-tech-row { display: grid; grid-template-columns: 96px 1fr; align-items: center; gap: 8px; }
+.qp-tech-row dt { color: var(--ui-text-3); }
+.qp-tech-row dd { margin: 0; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.qp-tech-row code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ui-text-2); }
+.qp-tech-items-h { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--ui-text-3); }
+.qp-tech-table { width: 100%; max-width: 520px; border-collapse: collapse; font-size: 12px; margin: 4px 0 8px; }
+.qp-tech-table th { text-align: left; font-weight: 500; color: var(--ui-text-3); padding: 3px 8px 3px 0; }
+.qp-tech-table td { padding: 2px 8px 2px 0; color: var(--ui-text-2); }
+.qp-copy { display: inline-flex; align-items: center; gap: 6px; }
+.qp-copy-msg { font-size: 11.5px; color: var(--ui-ok); }
+.qp-copy-msg.is-fail { color: var(--ui-danger); }
+
+/* Cancel confirmation */
+.qp-confirm p { margin: 0 0 8px; color: var(--ui-text-2); font-size: 13px; line-height: 1.5; }
+.qp-confirm-charge { display: flex; align-items: flex-start; gap: 6px; color: var(--ui-text-1) !important; }
+.qp-confirm-charge .ui-glyph { color: var(--ui-warn); margin-top: 3px; flex: none; }
+.qp-next-k .qp-sep { margin: 0 5px; }

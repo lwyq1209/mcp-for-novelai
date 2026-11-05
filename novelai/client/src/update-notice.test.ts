@@ -1,0 +1,89 @@
+// The renderer side of the new-version notice: the store follows the main process's published results, "Later"
+// and "Skip this version" hide the banner, and a manual check returns its result without a failure touching the
+// banner. The banner itself offers exactly Download (release page), Later and Skip this version.
+import { readFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAppStore } from "./store";
+import type { UpdateInfo } from "./types";
+import { waitUntil } from './test-support/wait-until';
+
+const available: UpdateInfo = { status: "available", hasUpdate: true, currentVersion: "0.1.0", latestVersion: "0.2.0", releaseUrl: "https://github.com/lwyq1209/mcp-for-novelai/releases/tag/v0.2.0" };
+
+function naiDesktop(overrides: Record<string, unknown> = {}) {
+  let publish: ((info: UpdateInfo) => void) | undefined;
+  const api = {
+    onGenerationPreview: vi.fn(() => vi.fn()),
+    onUpdateEvent: vi.fn((callback: (info: UpdateInfo) => void) => { publish = callback; return vi.fn(); }),
+    getUpdateStatus: vi.fn().mockResolvedValue(null),
+    checkUpdate: vi.fn().mockResolvedValue(available),
+    setSetting: vi.fn(async (_key: string, value: unknown) => value),
+    getSettings: vi.fn().mockResolvedValue({ language: "zh-CN", persistGenerateParams: true, persistI2IParams: true, persistInpaintParams: true, persistUpscaleParams: true, persistDirectorParams: true, autoCheckUpdates: true, ignoredUpdateVersion: "" }),
+    accountCached: vi.fn().mockResolvedValue({ hasToken: false }),
+    isFirstRun: vi.fn().mockResolvedValue(false),
+    getHistoryDates: vi.fn().mockResolvedValue([]),
+    getHistoryGroups: vi.fn().mockResolvedValue([]),
+    getHistory: vi.fn().mockResolvedValue([]),
+    ...overrides,
+  };
+  return { api, publish: (info: UpdateInfo) => publish?.(info) };
+}
+
+beforeEach(() => useAppStore.setState(useAppStore.getInitialState(), true));
+afterEach(() => vi.unstubAllGlobals());
+
+describe("new-version notice in the renderer", () => {
+  it("shows what the main process publishes and reads a result published before it listened", async () => {
+    const early = naiDesktop({ getUpdateStatus: vi.fn().mockResolvedValue(available) });
+    vi.stubGlobal("window", { naiDesktop: early.api });
+    await useAppStore.getState().load();
+    await waitUntil(() => expect(useAppStore.getState().updateInfo).toEqual(available));
+
+    useAppStore.setState(useAppStore.getInitialState(), true);
+    const later = naiDesktop();
+    vi.stubGlobal("window", { naiDesktop: later.api });
+    await useAppStore.getState().load();
+    expect(useAppStore.getState().updateInfo).toBeNull();
+    later.publish(available);
+    expect(useAppStore.getState().updateInfo).toEqual(available);
+    later.publish({ status: "current", hasUpdate: false, currentVersion: "0.1.0", latestVersion: "0.1.0" });
+    expect(useAppStore.getState().updateInfo?.hasUpdate).toBe(false);
+  });
+
+  it("hides the banner for now on Later and remembers the skipped version on Skip this version", async () => {
+    const desktop = naiDesktop();
+    vi.stubGlobal("window", { naiDesktop: desktop.api });
+    useAppStore.setState({ updateInfo: available });
+    useAppStore.getState().dismissUpdate();
+    expect(useAppStore.getState().updateInfo).toBeNull();
+    expect(desktop.api.setSetting).not.toHaveBeenCalled();
+
+    useAppStore.setState({ updateInfo: available });
+    await useAppStore.getState().ignoreUpdate("0.2.0");
+    expect(desktop.api.setSetting).toHaveBeenCalledWith("ignoredUpdateVersion", "0.2.0");
+    expect(useAppStore.getState().updateInfo).toMatchObject({ status: "ignored", hasUpdate: false, latestVersion: "0.2.0" });
+  });
+
+  it("returns a manual check's result; a failed one leaves the banner as it was", async () => {
+    const failed: UpdateInfo = { status: "failed", hasUpdate: false, currentVersion: "0.1.0", error: "timeout of 10000ms exceeded" };
+    const desktop = naiDesktop({ checkUpdate: vi.fn().mockResolvedValueOnce(failed).mockResolvedValueOnce(available) });
+    vi.stubGlobal("window", { naiDesktop: desktop.api });
+    await expect(useAppStore.getState().checkUpdate()).resolves.toEqual(failed);
+    expect(useAppStore.getState().updateInfo).toBeNull();
+    await expect(useAppStore.getState().checkUpdate()).resolves.toEqual(available);
+    expect(useAppStore.getState().updateInfo).toEqual(available);
+  });
+
+  it("offers Download, Later and Skip this version, and never downloads or installs in the app", () => {
+    const app = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+    // Step 4b1: the notice is the top bar's 新版本 pill and its menu (src/shell/TopBar.tsx).
+    const pill = readFileSync(new URL("./shell/TopBar.tsx", import.meta.url), "utf8");
+    expect(pill).toContain("window.naiDesktop.openExternal(updateInfo.releaseUrl)");
+    for (const key of ["top.updateDownload", "top.updateLater", "top.updateIgnore"]) expect(pill).toContain(`t('${key}')`);
+    expect(pill).toContain("dismissUpdate()");
+    expect(pill).toContain("ignoreUpdate(updateInfo.latestVersion!)");
+    expect(pill).not.toMatch(/downloadUpdate|installUpdate/);
+    expect(app).not.toMatch(/downloadUpdate|installUpdate|update-install-overlay/);
+    const preload = readFileSync(new URL("../electron/preload.ts", import.meta.url), "utf8");
+    expect(preload).not.toMatch(/downloadUpdate|installUpdate/);
+  });
+});

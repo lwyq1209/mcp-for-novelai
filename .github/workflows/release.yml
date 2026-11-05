@@ -1,0 +1,348 @@
+# Builds the installers on GitHub-hosted runners and, for a version tag, drafts a GitHub Release with them.
+#
+#   push of a tag v<version>          tests (ci.yml) → 4 builds and checks, third-party sources → SHA256SUMS.txt →
+#                                     draft release (after approval)
+#   workflow_dispatch on a tag        the same
+#   workflow_dispatch on a branch     everything but the draft release (the files stay artifacts of the run)
+#
+# Release files: MCP-for-NovelAI-<version>-mac-arm64.{dmg,zip}, …-mac-x64.{dmg,zip}, …-win-x64-setup.exe (NSIS),
+# …-linux-x64.tar.gz, third-party-sources-<version>.tar.gz (source code of the libraries in the bundled libvips, some of
+# them LGPL; .github/scripts/third-party-sources.mjs) and SHA256SUMS.txt.
+#
+# electron-builder never publishes (--publish never, build.publish null). The draft release is created by the last job,
+# which runs in the protected environment "release" (required reviewers, deployments limited to v* tags: configure it in
+# the repository settings BEFORE the first tag push, or GitHub creates it unprotected). A maintainer checks the draft and
+# publishes it by hand. Nothing here needs a secret; Windows signing (SignPath) runs only once its secret and variables
+# exist. Actions are pinned to a full commit SHA (the version is in the comment).
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  prepare:
+    name: version and tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Version of the packages and the tag
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          client=$(node -p "require('./novelai/client/package.json').version")
+          server=$(node -p "require('./novelai/package.json').version")
+          if [ "$client" != "$server" ]; then
+            echo "::error::novelai/client/package.json ($client) and novelai/package.json ($server) have different versions."
+            exit 1
+          fi
+          tag=''
+          if [ "$REF_TYPE" = tag ]; then
+            if [ "$REF_NAME" != "v$client" ]; then
+              echo "::error::Tag $REF_NAME does not match the package version $client (expected v$client)."
+              exit 1
+            fi
+            tag="$REF_NAME"
+          fi
+          case "$client" in *-*) prerelease=true ;; *) prerelease=false ;; esac
+          {
+            echo "version=$client"
+            echo "tag=$tag"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+          echo "Version $client, tag '${tag:-none (no release)}', prerelease $prerelease" >> "$GITHUB_STEP_SUMMARY"
+
+  test:
+    name: tests
+    needs: prepare
+    uses: ./.github/workflows/ci.yml
+
+  third-party-sources:
+    name: third-party sources
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      # Downloads every source archive the vendored license manifests name, checks the recorded license files in each,
+      # and fails on any download error or mismatch.
+      - name: Collect the third-party source archives
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          node .github/scripts/third-party-sources.mjs --version "$VERSION" --out "$RUNNER_TEMP/release-files" > "$RUNNER_TEMP/sources.json"
+          { echo '```json'; cat "$RUNNER_TEMP/sources.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the source archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-third-party-sources
+          path: ${{ runner.temp }}/release-files/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  build:
+    name: build (${{ matrix.name }})
+    needs: [prepare, test]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      # Only the reserved SignPath step uses it (SignPath reads the uploaded unsigned artifact of this run).
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: mac-arm64
+            os: macos-15
+            script: dist:mac
+            arch: arm64
+          # Intel runner: npm ci installs sharp's x64 macOS binaries from the lockfile and the check below runs the
+          # x64 app natively. macos-15-intel is GitHub's last x86_64 macOS image (available until August 2027).
+          - name: mac-x64
+            os: macos-15-intel
+            script: dist:mac
+            arch: x64
+          - name: win-x64
+            os: windows-2025
+            script: dist
+            arch: x64
+          - name: linux-x64
+            os: ubuntu-24.04
+            script: dist:linux
+            arch: x64
+    env:
+      # The reserved Windows signing steps run only when this is true (no SignPath secret yet: they are skipped).
+      SIGNING_CONFIGURED: ${{ secrets.SIGNPATH_API_TOKEN != '' && vars.SIGNPATH_ORGANIZATION_ID != '' }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # No dependency cache in release builds: every installer comes from a clean npm ci of the lockfiles.
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Install the MCP server dependencies
+        working-directory: novelai
+        run: npm ci
+
+      - name: Install the client dependencies
+        working-directory: novelai/client
+        run: npm ci
+
+      # build (renderer, main process, MCP bundle), notices:check, then electron-builder --publish never.
+      - name: Package (electron-builder)
+        working-directory: novelai/client
+        env:
+          MATRIX_SCRIPT: ${{ matrix.script }}
+          MATRIX_ARCH: ${{ matrix.arch }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run "$MATRIX_SCRIPT" -- "--$MATRIX_ARCH"
+
+      - name: Check the packaged app and stage its installers
+        env:
+          MATRIX_ARCH: ${{ matrix.arch }}
+        run: |
+          node .github/scripts/packaged-app-check.mjs --arch "$MATRIX_ARCH" \
+            --json "$RUNNER_TEMP/packaged-app-check.json" --stage "$RUNNER_TEMP/release-files" --summary "$GITHUB_STEP_SUMMARY" > /dev/null \
+            || { cat "$RUNNER_TEMP/packaged-app-check.json"; exit 1; }
+
+      # --- Windows code signing (reserved; skipped until SignPath is set up) ---------------------------------------
+      # Needs the secret SIGNPATH_API_TOKEN and the variables SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG,
+      # SIGNPATH_SIGNING_POLICY_SLUG and SIGNPATH_ARTIFACT_CONFIGURATION_SLUG. SignPath signs the uploaded artifact of this
+      # run (origin verification) after its manual approval and returns the signed files, which replace the unsigned ones.
+      - name: Upload the unsigned Windows executables for signing
+        id: unsigned
+        if: runner.os == 'Windows' && env.SIGNING_CONFIGURED == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unsigned-${{ matrix.name }}
+          path: ${{ runner.temp }}/release-files/*.exe
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Sign the Windows executables (SignPath)
+        if: runner.os == 'Windows' && env.SIGNING_CONFIGURED == 'true'
+        uses: SignPath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: ${{ runner.temp }}/release-files
+
+      - name: Verify the Windows signatures
+        if: runner.os == 'Windows' && env.SIGNING_CONFIGURED == 'true'
+        shell: pwsh
+        run: |
+          $bad = Get-ChildItem "$env:RUNNER_TEMP/release-files/*.exe" | Where-Object { (Get-AuthenticodeSignature $_.FullName).Status -ne 'Valid' }
+          if ($bad) { $bad | ForEach-Object { Write-Output "::error::Not validly signed: $($_.Name)" }; exit 1 }
+      # ---------------------------------------------------------------------------------------------------------------
+
+      - name: Upload the installers
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ matrix.name }}
+          path: ${{ runner.temp }}/release-files/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  checksums:
+    name: SHA256SUMS.txt
+    needs: [build, third-party-sources]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download the installers
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          path: files
+          merge-multiple: true
+
+      - name: Write SHA256SUMS.txt
+        working-directory: files
+        run: |
+          # 2 macOS arm64 + 2 macOS x64 (dmg, zip), 1 Windows (NSIS setup), 1 Linux (tar.gz), 1 third-party sources.
+          count=$(find . -maxdepth 1 -type f | wc -l)
+          if [ "$count" -ne 7 ]; then
+            echo "::error::Expected 7 release files, found $count:"; ls -l; exit 1
+          fi
+          find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort | xargs sha256sum > "$RUNNER_TEMP/SHA256SUMS.txt"
+          { echo '```'; cat "$RUNNER_TEMP/SHA256SUMS.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload SHA256SUMS.txt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: checksums
+          path: ${{ runner.temp }}/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  draft-release:
+    name: draft GitHub release
+    needs: [prepare, checksums]
+    if: needs.prepare.outputs.tag != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # Protected environment: the job waits for a required reviewer's approval before it starts.
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the installers
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          path: files
+          merge-multiple: true
+
+      - name: Download SHA256SUMS.txt
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: checksums
+          path: files
+
+      - name: Verify the checksums
+        working-directory: files
+        run: sha256sum --check --strict SHA256SUMS.txt
+
+      - name: Release notes from CHANGELOG.md
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          notes="$RUNNER_TEMP/notes.md"
+          : > "$notes"
+          if [ -f CHANGELOG.md ]; then
+            # The entry "## <version>" (CHANGELOG.md's format; "## [<version>]" and a date after it are accepted too),
+            # up to the next "## " heading.
+            awk -v version="$VERSION" '
+              /^## / { if (found) exit; heading = $2; gsub(/^\[?v?|\]$/, "", heading); if (heading == version) { found = 1; next } }
+              found { print }' CHANGELOG.md > "$notes"
+          fi
+          if ! grep -q '[^[:space:]]' "$notes"; then
+            echo "::error::CHANGELOG.md has no entry '## $VERSION'."
+            exit 1
+          fi
+          cat >> "$notes" <<'FILES'
+
+          ### Files
+
+          - macOS: `-mac-arm64` for Apple silicon, `-mac-x64` for Intel Macs (the dmg, or the same app as a zip).
+          - Windows: `-win-x64-setup.exe`.
+          - Linux: `-linux-x64.tar.gz`; extract it to a folder that stays where it is and run `mcp-for-novelai` in it.
+          - `third-party-sources-<version>.tar.gz`: the source code of the libraries in the bundled libvips, some of them
+            under the LGPL (see THIRD_PARTY_NOTICES.md).
+          - `SHA256SUMS.txt`: the SHA-256 checksum of every file of this release.
+          FILES
+
+      - name: Create or update the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        run: |
+          flags=()
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
+          if draft=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$draft" != true ]; then
+              echo "::error::Release $TAG is already published; this workflow does not change a published release."
+              exit 1
+            fi
+            # A re-run replaces the files of the existing draft.
+            gh release upload "$TAG" files/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" files/* --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+              --title "MCP for NovelAI $VERSION" --notes-file "$RUNNER_TEMP/notes.md" "${flags[@]}"
+          fi
+          echo "Draft release $TAG is ready: check it, then publish it by hand." >> "$GITHUB_STEP_SUMMARY"

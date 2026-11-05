@@ -1,0 +1,14 @@
+# Text files are stored and checked out with LF on every platform, Windows included, so generated files, fixtures
+# and the --check scripts (contracts, third-party notices) see the same bytes everywhere.
+* text=auto eol=lf
+# Windows batch files must keep CRLF: LF-only .cmd files mis-parse labels and goto.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+# Binary assets are never converted.
+*.png binary
+*.ico binary
+*.icns binary
+*.jpg binary
+*.webp binary
+# Vendored license texts are checked by sha256: keep their bytes exactly as fetched.
+novelai/client/scripts/licenses/** -text

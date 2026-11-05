@@ -1,0 +1,15 @@
+# gitleaks (gitleaks git / gitleaks dir): the default rules, with one narrow allowlist for findings that are not
+# credentials, limited to the rules that report them, one file and a pattern of the matched text.
+title = "MCP for NovelAI"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic credentials that upstream-reason.test.ts feeds to the upstream error scrubber"
+targetRules = ["jwt", "generic-api-key"]
+condition = "AND"
+paths = ['''(?:^|/)novelai/client/electron/upstream-reason\.test\.ts$''']
+regexTarget = "match"
+# The sample JWT (header {"alg":"HS256","typ":"JWT"}, payload {"sub":"1234567890"}) and the sample api_key value.
+regexes = ['''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0\.''', '''api_key=Zx9-''']

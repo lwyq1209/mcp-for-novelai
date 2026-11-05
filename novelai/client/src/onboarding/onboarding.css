@@ -1,0 +1,43 @@
+/* The first-run guide (step 4b2, prototype 30–33). Only --ui-* variables and ui-/as-/mc-/ob- classes. */
+.ob-root { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; color: var(--ui-text-1);
+  background: radial-gradient(120% 80% at 0% 0%, color-mix(in srgb, var(--ui-accent) 12%, transparent), transparent 55%),
+    radial-gradient(90% 70% at 100% 100%, color-mix(in srgb, var(--ui-agent) 6%, transparent), transparent 60%), var(--ui-bg-0); }
+.ob-top { height: 56px; flex: none; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 0 20px; -webkit-app-region: drag; user-select: none; }
+.ob-top > * { -webkit-app-region: no-drag; }
+.ob-brand { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 13px; -webkit-app-region: drag; }
+.ob-top-right { justify-self: end; display: flex; align-items: center; gap: 14px; }
+.ob-skip { border: 0; background: transparent; color: var(--ui-text-2); font-size: 13px; padding: 4px 6px; border-radius: var(--ui-r-s); }
+.ob-skip:hover { color: var(--ui-text-1); }
+.ob-skip:focus-visible { outline: none; box-shadow: var(--ui-focus-ring); }
+
+/* Steps */
+.ob-steps { list-style: none; margin: 0; padding: 0; display: flex; align-items: center; gap: 10px; }
+.ob-step { display: flex; align-items: center; gap: 8px; color: var(--ui-text-3); font-size: 13px; }
+.ob-step-line { width: 40px; height: 1px; background: var(--ui-line-2); margin-right: 2px; }
+.ob-step-num { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 11.5px; font-weight: 600; border: 1px solid var(--ui-line-2); font-variant-numeric: tabular-nums; }
+.ob-step.is-on { color: var(--ui-text-1); }
+.ob-step.is-on .ob-step-num { background: var(--ui-accent); border-color: var(--ui-accent); color: #fff; }
+.ob-step.is-done .ob-step-num { border-color: var(--ui-ok); color: var(--ui-ok); }
+
+/* Body */
+.ob-main { flex: 1; min-height: 0; overflow-y: auto; display: flex; }
+.ob-body { margin: auto; width: min(640px, calc(100% - 48px)); padding: 32px 0 48px; display: flex; flex-direction: column; gap: 12px; }
+.ob-step-body { display: flex; flex-direction: column; gap: 16px; }
+.ob-step-body h1 { margin: 0; font-size: 26px; font-weight: 600; letter-spacing: .01em; }
+.ob-hero { display: flex; align-items: center; gap: 16px; }
+.ob-hero-mark { width: 48px; height: 48px; flex: none; border-radius: 12px; display: grid; place-items: center; background: var(--ui-bg-2); border: 1px solid var(--ui-line); }
+.ob-hero-mark.is-ok { background: var(--ui-ok-soft); border-color: transparent; color: var(--ui-ok); width: 56px; height: 56px; border-radius: 14px; }
+.ob-kicker { display: block; color: var(--ui-text-2); font-size: 12.5px; margin-bottom: 4px; }
+.ob-desc { margin: 0; color: var(--ui-text-2); font-size: 14px; line-height: 1.6; }
+.ob-card { border: 1px solid var(--ui-line); border-radius: var(--ui-r-xl); background: color-mix(in srgb, var(--ui-bg-1) 92%, transparent); padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.ob-label { font-size: 12.5px; color: var(--ui-text-2); }
+.ob-link { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; color: var(--ui-text-2); font-size: 13px; padding: 2px 0; }
+.ob-link:hover { color: var(--ui-text-1); }
+.ob-link:focus-visible { outline: none; box-shadow: var(--ui-focus-ring); border-radius: var(--ui-r-s); }
+.ob-proxy { border-top: 1px solid var(--ui-line); padding-top: 12px; }
+.ob-foot { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.ob-gap { flex: 1; }
+.ob-tips { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.ob-tips li { display: flex; align-items: center; gap: 12px; padding: 13px 16px; border: 1px solid var(--ui-line); border-radius: var(--ui-r-l); background: var(--ui-bg-1); font-size: 13px; }
+.ob-tips .ui-glyph { color: var(--ui-accent-text); flex: none; }
+.ob-error { margin: 0; color: var(--ui-danger); font-size: 12.5px; }
