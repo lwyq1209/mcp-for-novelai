@@ -35,8 +35,14 @@ export declare function appDataDirectory(options?: PlatformOptions): string;
 export declare function resolveDataRoot(options?: PlatformOptions): string;
 export declare function dataPathsFor(root: string, options?: { platform?: string }): DataPaths;
 export declare function resolveDataPaths(options?: PlatformOptions): DataPaths;
-/** <data root>/output when NOVELAI_DATA_DIR is set, else <Pictures>/MCP for NovelAI. */
+/** <data root>/output for an isolated run (isCustomDataRoot), else <Pictures>/MCP for NovelAI. */
 export declare function defaultOutputDirectory(picturesDirectory: string, options?: PlatformOptions): string;
+/** <appData>/mcp-for-novelai: the data root without NOVELAI_DATA_DIR (a path only). */
+export declare function defaultDataRoot(options?: PlatformOptions): string;
+/** Whether two data roots are the same folder (resolved path; for the same last name also symlinks and letter case on disk). */
+export declare function sameDataRoot(a: string, b: string, options?: { platform?: string }): boolean;
+/** NOVELAI_DATA_DIR names another folder than the default data root (set to the default root, it is an ordinary start). */
+export declare function isCustomDataRoot(options?: PlatformOptions): boolean;
 export declare function resolveProjectRoot(options?: PlatformOptions): { root: string; source: 'NOVELAI_PROJECT_ROOT' | 'data-dir-workspace' };
 export declare function projectDirectories(projectRoot: string, options?: { platform?: string }): ProjectDirectories;
 /** A test process (node --test, Vitest, or a *.test.* file started directly): it never resolves the real data root from its own environment. */

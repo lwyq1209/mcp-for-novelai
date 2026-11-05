@@ -27,11 +27,12 @@
  *   logs/     default log folder
  *   image-inputs/  pasted and prepared source images (the only folder restored workbench
  *             inputs are admitted from)
- *   output/   default image output folder of an isolated run (NOVELAI_DATA_DIR set);
- *             otherwise the default is <Pictures>/MCP for NovelAI
+ *   output/   default image output folder of an isolated run (NOVELAI_DATA_DIR naming another folder
+ *             than the default data root, isCustomDataRoot); otherwise the default is <Pictures>/MCP for NovelAI
  *   workspace/novelai/{library,study}-{inbox,exports}       inbox and export folders used
  *             when NOVELAI_PROJECT_ROOT is not set
  */
+const fs = require('node:fs');
 const os = require('node:os');
 const nodePath = require('node:path');
 
@@ -142,17 +143,82 @@ function dataPathsFor(root, options = {}) {
 }
 
 /**
- * The default image output folder (outputDir until the user picks one): <data root>/output when
- * NOVELAI_DATA_DIR is set, so an isolated run (development, tests, worktrees) keeps its images with
- * its data; otherwise <Pictures>/MCP for NovelAI.
- * @param {string} picturesDirectory the user's Pictures folder (Electron app.getPath('pictures'))
+ * <appData>/mcp-for-novelai: the data root without NOVELAI_DATA_DIR (a path only; nothing is read or created).
  * @param {{ platform?: string, env?: Record<string, string | undefined>, homedir?: string }} [options]
  * @returns {string}
  */
-function defaultOutputDirectory(picturesDirectory, options = {}) {
+function defaultDataRoot(options = {}) {
+  return pathFor(options.platform ?? process.platform).join(appDataDirectory(options), APP_DATA_DIR_NAME);
+}
+
+/**
+ * A folder with every symbolic link of its existing part resolved and the part that does not exist yet appended.
+ * @param {string} folder @param {typeof nodePath.posix} p @param {(value: string) => string} realpath
+ */
+function canonicalFolder(folder, p, realpath) {
+  const missing = [];
+  for (let current = folder; ;) {
+    try { return p.join(realpath(current), ...missing); }
+    catch {
+      const parent = p.dirname(current);
+      if (parent === current) return folder;
+      missing.unshift(p.basename(current)); current = parent;
+    }
+  }
+}
+
+/**
+ * Whether two data roots are the same folder: the same resolved path without trailing separators (letter case ignored
+ * on Windows); or, for two paths with the same last name only, the same folder on disk — through a symbolic link on the
+ * way, or another letter case on a case-insensitive volume. A path with another last name (a test or isolated data root)
+ * is never looked at on disk. Paths of another platform than this one are only compared as text.
+ * @param {string} a @param {string} b
+ * @param {{ platform?: string, fs?: { realpathSync: any, statSync: any } }} [options]
+ */
+function sameDataRoot(a, b, options = {}) {
+  const platform = options.platform ?? process.platform;
+  const p = pathFor(platform);
+  const norm = (/** @type {string} */ value) => {
+    const resolved = p.resolve(value), root = p.parse(resolved).root;
+    return resolved.length > root.length ? resolved.replace(/[\\/]+$/, '') : resolved;
+  };
+  const fold = (/** @type {string} */ value) => platform === 'win32' ? value.toLowerCase() : value;
+  const left = norm(a), right = norm(b);
+  if (fold(left) === fold(right)) return true;
+  if (p.basename(left).toLowerCase() !== p.basename(right).toLowerCase() || platform !== process.platform) return false;
+  const files = options.fs ?? fs;
+  try {
+    const realpath = (/** @type {string} */ value) => (files.realpathSync.native ?? files.realpathSync)(value);
+    if (fold(canonicalFolder(left, p, realpath)) === fold(canonicalFolder(right, p, realpath))) return true;
+    const one = files.statSync(left), two = files.statSync(right);
+    return one.dev === two.dev && one.ino === two.ino;
+  } catch { return false; }
+}
+
+/**
+ * Whether NOVELAI_DATA_DIR names another folder than the default data root: an isolated run (development, tests,
+ * worktrees). NOVELAI_DATA_DIR set to the default data root itself (as every configuration of Settings › MCP access
+ * writes it, and so as an agent's MCP server may start the app) is an ordinary start.
+ * @param {{ platform?: string, env?: Record<string, string | undefined>, homedir?: string, fs?: any }} [options]
+ */
+function isCustomDataRoot(options = {}) {
   const env = options.env ?? process.env;
+  const override = nonBlank(env[DATA_DIR_ENV]);
+  if (!override) return false;
+  return !sameDataRoot(override, defaultDataRoot(options), options);
+}
+
+/**
+ * The default image output folder (outputDir until the user picks one): <data root>/output for an isolated run
+ * (isCustomDataRoot), so development, tests and worktrees keep their images with their data; otherwise — also with
+ * NOVELAI_DATA_DIR set to the default data root — <Pictures>/MCP for NovelAI.
+ * @param {string} picturesDirectory the user's Pictures folder (Electron app.getPath('pictures'))
+ * @param {{ platform?: string, env?: Record<string, string | undefined>, homedir?: string, fs?: any }} [options]
+ * @returns {string}
+ */
+function defaultOutputDirectory(picturesDirectory, options = {}) {
   const p = pathFor(options.platform ?? process.platform);
-  if (nonBlank(env[DATA_DIR_ENV])) return p.join(resolveDataRoot(options), 'output');
+  if (isCustomDataRoot(options)) return p.join(resolveDataRoot(options), 'output');
   // The Pictures folder is the caller's (Electron's app.getPath, mocked in tests): only a path is computed here.
   return p.join(picturesDirectory, DEFAULT_OUTPUT_FOLDER_NAME);
 }
@@ -205,6 +271,9 @@ exports.resolveDataRoot = resolveDataRoot;
 exports.dataPathsFor = dataPathsFor;
 exports.resolveDataPaths = resolveDataPaths;
 exports.defaultOutputDirectory = defaultOutputDirectory;
+exports.defaultDataRoot = defaultDataRoot;
+exports.sameDataRoot = sameDataRoot;
+exports.isCustomDataRoot = isCustomDataRoot;
 exports.resolveProjectRoot = resolveProjectRoot;
 exports.projectDirectories = projectDirectories;
 exports.isTestProcess = isTestProcess;

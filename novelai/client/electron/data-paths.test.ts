@@ -1,12 +1,12 @@
 // Step 3a: the single data-root module shared by the client and the MCP server (shared/runtime/data-paths.cjs),
 // and the startup order main.ts depends on. Pure path computation; nothing here touches a real data folder.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import fs, { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  APP_DATA_DIR_NAME, DEFAULT_OUTPUT_FOLDER_NAME, PROJECT_FOLDERS, SETTINGS_FILE_NAME, appDataDirectory, dataPathsFor, defaultOutputDirectory, projectDirectories, resolveDataPaths, resolveDataRoot, resolveProjectRoot, isTestProcess,
+  APP_DATA_DIR_NAME, DEFAULT_OUTPUT_FOLDER_NAME, PROJECT_FOLDERS, SETTINGS_FILE_NAME, appDataDirectory, dataPathsFor, defaultOutputDirectory, projectDirectories, resolveDataPaths, resolveDataRoot, resolveProjectRoot, isTestProcess, isCustomDataRoot, sameDataRoot,
 } from "../shared/runtime/data-paths.cjs";
 
 describe("data root", () => {
@@ -56,6 +56,43 @@ describe("default image output folder", () => {
   it("is <data root>/output when NOVELAI_DATA_DIR isolates the run, so no image reaches the real Pictures folder", () => {
     expect(defaultOutputDirectory("/Users/u/Pictures", { platform: "darwin", env: { NOVELAI_DATA_DIR: "/tmp/isolated" }, homedir: "/Users/u" })).toBe("/tmp/isolated/output");
     expect(defaultOutputDirectory("C:\\Users\\u\\Pictures", { platform: "win32", env: { NOVELAI_DATA_DIR: "D:\\测试 数据" } })).toBe("D:\\测试 数据\\output");
+  });
+});
+
+describe("NOVELAI_DATA_DIR set to the default data root is an ordinary start (review rework P2-1)", () => {
+  it("is not a custom data root on any platform, whatever the spelling; another folder is", () => {
+    const mac = { platform: "darwin", homedir: "/Users/u" };
+    for (const value of ["/Users/u/Library/Application Support/mcp-for-novelai", "/Users/u/Library/Application Support/mcp-for-novelai/", " /Users/u/Library/Application Support/mcp-for-novelai// "])
+      expect(isCustomDataRoot({ ...mac, env: { NOVELAI_DATA_DIR: value } }), value).toBe(false);
+    expect(isCustomDataRoot({ ...mac, env: { NOVELAI_DATA_DIR: "/Users/u/nai" } })).toBe(true);
+    expect(isCustomDataRoot({ ...mac, env: {} })).toBe(false);
+    expect(isCustomDataRoot({ ...mac, env: { NOVELAI_DATA_DIR: "  " } })).toBe(false);
+    const win = { platform: "win32", env: { APPDATA: "C:\\Users\\u\\AppData\\Roaming" } };
+    expect(isCustomDataRoot({ ...win, env: { ...win.env, NOVELAI_DATA_DIR: "c:\\USERS\\u\\appdata\\roaming\\MCP-FOR-NOVELAI\\" } })).toBe(false);
+    expect(isCustomDataRoot({ ...win, env: { ...win.env, NOVELAI_DATA_DIR: "D:\\nai" } })).toBe(true);
+    expect(isCustomDataRoot({ platform: "linux", homedir: "/home/u", env: { XDG_CONFIG_HOME: "/cfg", NOVELAI_DATA_DIR: "/cfg/mcp-for-novelai" } })).toBe(false);
+    expect(isCustomDataRoot({ platform: "linux", homedir: "/home/u", env: { NOVELAI_DATA_DIR: "/home/u/.config/mcp-for-novelai" } })).toBe(false);
+    expect(isCustomDataRoot({ platform: "linux", homedir: "/home/u", env: { XDG_CONFIG_HOME: "/cfg", NOVELAI_DATA_DIR: "/home/u/.config/mcp-for-novelai" } })).toBe(true);
+  });
+
+  it("keeps the default output folder <Pictures>/MCP for NovelAI", () => {
+    expect(defaultOutputDirectory("/Users/u/Pictures", { platform: "darwin", homedir: "/Users/u", env: { NOVELAI_DATA_DIR: "/Users/u/Library/Application Support/mcp-for-novelai" } })).toBe("/Users/u/Pictures/MCP for NovelAI");
+    expect(defaultOutputDirectory("C:\\Users\\u\\Pictures", { platform: "win32", env: { APPDATA: "C:\\Users\\u\\AppData\\Roaming", NOVELAI_DATA_DIR: "C:\\Users\\u\\AppData\\Roaming\\mcp-for-novelai" } })).toBe("C:\\Users\\u\\Pictures\\MCP for NovelAI");
+  });
+
+  it("sees the same folder through a symbolic link; a folder with another name is never looked at on disk", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "nai-same-root-"));
+    try {
+      fs.mkdirSync(path.join(root, "real", "mcp-for-novelai"), { recursive: true });
+      fs.symlinkSync(path.join(root, "real"), path.join(root, "link"), process.platform === "win32" ? "junction" : "dir");
+      expect(sameDataRoot(path.join(root, "link", "mcp-for-novelai"), path.join(root, "real", "mcp-for-novelai"))).toBe(true);
+      expect(sameDataRoot(path.join(root, "link", "missing", "mcp-for-novelai"), path.join(root, "real", "missing", "mcp-for-novelai"))).toBe(true);
+      expect(sameDataRoot(path.join(root, "real", "mcp-for-novelai"), path.join(root, "real", "other"))).toBe(false);
+      const touched: string[] = [];
+      const spy = { realpathSync: Object.assign((file: string) => { touched.push(file); return file; }, { native: (file: string) => { touched.push(file); return file; } }), statSync: (file: string) => { touched.push(file); return fs.statSync(file); } };
+      expect(sameDataRoot("/tmp/novelai-test-data-x", "/Users/u/Library/Application Support/mcp-for-novelai", { fs: spy } as never)).toBe(false);
+      expect(touched).toEqual([]);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 });
 

@@ -1,12 +1,13 @@
-import { DATA_DIR_ENV } from "../shared/runtime/data-paths.cjs";
+import { DATA_DIR_ENV, isCustomDataRoot } from "../shared/runtime/data-paths.cjs";
 
 /**
  * UI capture (NAI_UI_CAPTURE_PATH) is a development tool that starts a full client without a visible window. It
- * must never run on the real data folder, so it requires NOVELAI_DATA_DIR: without it main.ts refuses to start,
- * before the data folder is created or touched. Returns the refusal text, or null when the run may start.
+ * must never run on the real data folder, so it requires NOVELAI_DATA_DIR naming another folder than the default data
+ * root (isCustomDataRoot; set to the default root itself, it is the real data folder): otherwise main.ts refuses to
+ * start, before the data folder is created or touched. Returns the refusal text, or null when the run may start.
  */
-export function uiCaptureRefusal(env: NodeJS.ProcessEnv): string | null {
-  if (!env.NAI_UI_CAPTURE_PATH?.trim() || env[DATA_DIR_ENV]?.trim()) return null;
+export function uiCaptureRefusal(env: NodeJS.ProcessEnv, options: { platform?: string; homedir?: string } = {}): string | null {
+  if (!env.NAI_UI_CAPTURE_PATH?.trim() || isCustomDataRoot({ ...options, env })) return null;
   return [
     `UI capture (NAI_UI_CAPTURE_PATH) needs its own data folder: set ${DATA_DIR_ENV} to a throwaway folder and run it again.`,
     "Nothing was started, so the real data folder was not created or changed.",

@@ -41,6 +41,25 @@ describe("default outputDir", () => {
     expect(store.defaultSettings().outputDir).toBe(path.join(root, "pictures", "MCP for NovelAI"));
   });
 
+  it("an agent's first start of a fresh default data root (NOVELAI_DATA_DIR = that root) saves <Pictures>/MCP for NovelAI (review rework P2-1)", async () => {
+    const root = temporaryRoot();
+    // A throwaway home, so the default data root computed from it is inside the test folder.
+    const home = path.join(root, "home");
+    const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, APPDATA: process.env.APPDATA, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
+    try {
+      process.env.HOME = home; process.env.USERPROFILE = home; process.env.APPDATA = path.join(home, "AppData", "Roaming"); delete process.env.XDG_CONFIG_HOME;
+      const { defaultDataRoot } = await import("../../shared/runtime/data-paths.cjs");
+      process.env.NOVELAI_DATA_DIR = `${defaultDataRoot()}${path.sep}`;
+      expect(process.env.NOVELAI_DATA_DIR.startsWith(home)).toBe(true);
+      const store = await import("./store");
+      expect(store.getSettings().outputDir).toBe(path.join(root, "pictures", "MCP for NovelAI"));
+      const written = JSON.parse(fs.readFileSync(path.join(root, "userData", "settings.json"), "utf8"));
+      expect(written.settings.outputDir).toBe(path.join(root, "pictures", "MCP for NovelAI"));
+    } finally {
+      for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  });
+
   it("keeps an outputDir already saved in the settings, isolated or not", async () => {
     const root = temporaryRoot();
     const chosen = path.join(root, "chosen output");

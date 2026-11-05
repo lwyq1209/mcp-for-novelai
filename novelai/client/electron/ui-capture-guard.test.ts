@@ -12,6 +12,11 @@ describe("uiCaptureRefusal", () => {
     }
   });
 
+  it("refuses NOVELAI_DATA_DIR set to the default data root: that is the real data folder", () => {
+    expect(uiCaptureRefusal({ NAI_UI_CAPTURE_PATH: "/tmp/capture/a.png", NOVELAI_DATA_DIR: "/Users/u/Library/Application Support/mcp-for-novelai/" }, { platform: "darwin", homedir: "/Users/u" })).toMatch(/needs its own data folder/);
+    expect(uiCaptureRefusal({ NAI_UI_CAPTURE_PATH: "C:\\c\\a.png", APPDATA: "C:\\Users\\u\\AppData\\Roaming", NOVELAI_DATA_DIR: "C:\\Users\\u\\AppData\\Roaming\\mcp-for-novelai" }, { platform: "win32" })).toMatch(/needs its own data folder/);
+  });
+
   it("lets an isolated capture run and every non-capture run start", () => {
     expect(uiCaptureRefusal({ NAI_UI_CAPTURE_PATH: "/tmp/capture/a.png", NOVELAI_DATA_DIR: "/tmp/capture-data" })).toBeNull();
     expect(uiCaptureRefusal({})).toBeNull();

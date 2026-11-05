@@ -39,7 +39,7 @@ import {
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
-import { DATA_DIR_ENV, projectDirectories, resolveDataPaths } from "../shared/runtime/data-paths.cjs";
+import { isCustomDataRoot, projectDirectories, resolveDataPaths } from "../shared/runtime/data-paths.cjs";
 import { dataRootFailureDialog, prepareDataRoot, startupFailureDialog, type StartupStep } from "./startup-failure";
 import { buildMcpAccess, temporaryExecutableLocation } from "./mcp-access";
 import { mainWindowSize, uiCaptureLoadOptions, uiCaptureRefusal } from "./ui-capture-guard";
@@ -171,7 +171,7 @@ app.setName(APP_NAME);
 // A data root that cannot be created or written stops the start here with a clear dialog (before anything reads it).
 const dataRootFailure = prepareDataRoot(dataPaths);
 if (dataRootFailure) {
-  const failure = dataRootFailureDialog(dataPaths.root, dataRootFailure, Boolean(process.env[DATA_DIR_ENV]?.trim()));
+  const failure = dataRootFailureDialog(dataPaths.root, dataRootFailure, isCustomDataRoot());
   dialog.showErrorBox(failure.title, failure.message);
   process.exit(1);
 }
@@ -1026,7 +1026,7 @@ function mcpAccessInfo() {
   const inboxes = projectDirectories(dataPaths.workspace);
   return buildMcpAccess({
     platform: process.platform, packaged: app.isPackaged, executable: process.execPath, bundle, bundleExists: fs.existsSync(bundle),
-    sourceEntry: source && fs.existsSync(source) ? source : null, dataRoot: dataPaths.root, customDataRoot: Boolean(process.env[DATA_DIR_ENV]?.trim()),
+    sourceEntry: source && fs.existsSync(source) ? source : null, dataRoot: dataPaths.root, customDataRoot: isCustomDataRoot(),
     workspaceRoot: dataPaths.workspace, materialInbox: inboxes.materialInbox, studyInbox: inboxes.studyInbox,
     temporaryLocation: app.isPackaged && temporaryExecutableLocation(process.platform, process.execPath, process.env),
     bridgeReady: Boolean(workspaceBridge),
