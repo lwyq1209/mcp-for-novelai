@@ -160,8 +160,10 @@ export const invalidKind: LibraryKind = 'made_up';
     const options = {strict:true,noEmit:true,skipLibCheck:true,types:['node'],typeRoots:[path.join(root,'client/node_modules/@types')],target:ts.ScriptTarget.ES2022,module,moduleResolution,jsx:ts.JsxEmit.ReactJSX,resolveJsonModule:true,esModuleInterop:true,rootDir:path.join(root,'client')};
     const host = ts.createCompilerHost(options);
     const read = host.readFile.bind(host), exists = host.fileExists.bind(host);
-    host.readFile = name => name === file ? source : read(name);
-    host.fileExists = name => name === file || exists(name);
+    // TypeScript hands the host forward-slash paths on every platform (D:/a/... on Windows): compare resolved paths.
+    const virtual = name => path.resolve(name) === file;
+    host.readFile = name => virtual(name) ? source : read(name);
+    host.fileExists = name => virtual(name) || exists(name);
     const program = ts.createProgram([file],options,host);
     const diagnostics = ts.getPreEmitDiagnostics(program);
     assert.equal(diagnostics.length,0,ts.formatDiagnosticsWithColorAndContext(diagnostics,{getCanonicalFileName:file=>file,getCurrentDirectory:()=>root,getNewLine:()=> '\n'}));

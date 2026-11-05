@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -217,8 +217,10 @@ const invalidHost: AssetLibraryRequest = { action:'list', category:'presets' };
   const options = { strict: true, noEmit: true, skipLibCheck: true, target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext, types: [] };
   const host = ts.createCompilerHost(options);
   const read = host.readFile.bind(host), exists = host.fileExists.bind(host);
-  host.readFile = name => name === file ? source : read(name);
-  host.fileExists = name => name === file || exists(name);
+  // TypeScript hands the host forward-slash paths on every platform (D:/a/... on Windows): compare resolved paths.
+  const virtual = name => resolve(name) === file;
+  host.readFile = name => virtual(name) ? source : read(name);
+  host.fileExists = name => virtual(name) || exists(name);
   const diagnostics = ts.getPreEmitDiagnostics(ts.createProgram([file], options, host));
   assert.equal(diagnostics.length, 0, ts.formatDiagnosticsWithColorAndContext(diagnostics, { getCanonicalFileName: value => value, getCurrentDirectory: () => root, getNewLine: () => '\n' }));
 });

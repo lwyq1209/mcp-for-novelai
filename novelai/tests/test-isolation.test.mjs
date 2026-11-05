@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const dataPaths = join(root, 'client/shared/runtime/data-paths.cjs');
@@ -33,15 +33,16 @@ console.log('RESULT ' + JSON.stringify({ root: outcome(() => paths.resolveDataRo
 `);
   const read = result => JSON.parse(/RESULT (.*)/.exec(`${result.stdout}`)?.[1] ?? 'null');
   const refused = { refused: 'test_isolation_required' };
-  for (const [label, args, extra] of [['node --test', ['--test', probe], {}], ['node x.test.mjs', [probe], {}], ['Vitest worker', ['-e', `import(${JSON.stringify(`file://${probe}`)})`], { VITEST: 'true' }]]) {
+  for (const [label, args, extra] of [['node --test', ['--test', probe], {}], ['node x.test.mjs', [probe], {}], ['Vitest worker', ['-e', `import(${JSON.stringify(pathToFileURL(probe).href)})`], { VITEST: 'true' }]]) {
     const result = spawnSync(process.execPath, args, { env: { ...shellEnv(home), ...extra }, encoding: 'utf8' });
     const value = read(result);
     assert.ok(value, `${label}: ${result.stdout}${result.stderr}`);
     assert.deepEqual(value.root, refused, label); assert.deepEqual(value.project, refused, label);
-    // The output folder is only a path under the Pictures folder the caller passes (Electron's, mocked in tests).
-    assert.equal(value.output, '/x/Pictures/MCP for NovelAI', label);
-    // Explicit options only compute paths; NOVELAI_DATA_DIR is used as always.
-    assert.equal(value.explicit, '/Users/u/Library/Application Support/mcp-for-novelai', label); assert.equal(value.withRoot, '/tmp/d', label);
+    // The output folder is only a path under the Pictures folder the caller passes (Electron's, mocked in tests),
+    // joined with this platform's separator.
+    assert.equal(value.output, join('/x/Pictures', 'MCP for NovelAI'), label);
+    // Explicit options only compute paths; NOVELAI_DATA_DIR is used as always (resolved on this platform: D:\tmp\d on Windows).
+    assert.equal(value.explicit, '/Users/u/Library/Application Support/mcp-for-novelai', label); assert.equal(value.withRoot, resolve('/tmp/d'), label);
   }
   // Outside a test process nothing changes: the default root is computed.
   const plain = join(home, 'probe.mjs'); writeFileSync(plain, `import { createRequire } from 'node:module'; console.log('RESULT ' + JSON.stringify({ root: createRequire(import.meta.url)(${JSON.stringify(dataPaths)}).resolveDataRoot() }));`);
