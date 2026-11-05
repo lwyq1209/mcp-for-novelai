@@ -5,6 +5,7 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 import net from 'node:net';
 import path from 'node:path';
 import { format } from 'node:util';
+import { SW_HIDE, createOutsideJob as createOutsideJobWith, windowsCommandLine } from '../src/win32-process.mjs';
 
 export const EXIT_REFUSED = 3;
 export const EXIT_PENDING = 5;
@@ -134,30 +135,13 @@ export function attachDetachedLog(novelaiRoot, env = process.env) {
   return fd;
 }
 
-// Win32_Process.Create starts the launcher from the WMI host, outside the caller's process
-// tree and job objects (some terminals and agent hosts kill their whole job when a tab closes).
-const WMI_CREATE = [
-  "$ErrorActionPreference = 'Stop'",
-  '$j = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd().Trim())) | ConvertFrom-Json',
-  '$startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0; EnvironmentVariables = [string[]]$j.env }',
-  '$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = [string]$j.commandLine; CurrentDirectory = [string]$j.cwd; ProcessStartupInformation = $startup }',
-  "[Console]::Out.Write('wmi:' + $r.ReturnValue + ':' + $r.ProcessId)",
-].join('; ');
-
-export function createOutsideJob({ commandLine, cwd, env }, { run = spawnSync } = {}) {
-  const payload = Buffer.from(JSON.stringify({ commandLine, cwd, env: Object.entries(env).map(([k, v]) => `${k}=${v}`) }), 'utf8').toString('base64');
-  const result = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', WMI_CREATE],
-    { input: payload, encoding: 'utf8', windowsHide: true, timeout: 60_000 });
-  const match = /wmi:(\d+):(\d+)$/.exec(String(result.stdout ?? '').trim());
-  if (!result.error && result.status === 0 && match && match[1] === '0' && match[2] !== '0') return { pid: Number(match[2]) };
-  // Ambiguous: the query timed out, or PowerShell succeeded without a readable answer; the
-  // launcher may have been created anyway. A definite failure never created a process.
-  const ambiguous = result.error?.code === 'ETIMEDOUT' || (!result.error && result.status === 0 && !match);
-  const reason = result.error?.message ?? (match ? `Win32_Process.Create returned ${match[1]}` : `PowerShell exit ${result.status}${result.stderr ? `: ${String(result.stderr).trim().split(/\r?\n/)[0]}` : ''}`);
-  return { pid: null, reason, ambiguous };
+// Win32_Process.Create starts the launcher from the WMI host, outside the caller's process tree and job objects (some
+// terminals and agent hosts kill their whole job when a tab closes): src/win32-process.mjs, shared with the MCP
+// server's automatic start of the app. The launcher is a console program, so its window state is SW_HIDE.
+export function createOutsideJob({ commandLine, cwd, env }, options = {}) {
+  return createOutsideJobWith({ commandLine, cwd, env, showWindow: SW_HIDE }, options);
 }
 
-const quoteArg = value => `"${String(value).replace(/"/g, '\\"')}"`;
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; } };
 /** The last [launcher-exit N] marker anywhere in the log (output may follow it). */
 export function launcherExit(file) {
@@ -253,7 +237,7 @@ export async function launchDetached({ novelaiRoot, dataRoot, script, forwarded,
   let pid = null, via = 'wmi', reason = 'NOVELAI_DETACH_VIA=spawn', unknownStart = false;
   if (process.env.NOVELAI_DETACH_VIA !== 'spawn') {
     let ambiguous;
-    ({ pid, reason, ambiguous } = createOutsideJob({ commandLine: [process.execPath, script, ...forwarded].map(quoteArg).join(' '), cwd: repoRoot, env: launchEnv }));
+    ({ pid, reason, ambiguous } = createOutsideJob({ commandLine: windowsCommandLine(process.execPath, [script, ...forwarded]), cwd: repoRoot, env: launchEnv }));
     // The WMI answer was lost but a launcher may be starting: never start a second one blindly.
     if (!pid && ambiguous) for (let waited = 0; waited < 15_000 && !unknownStart; waited += pollMs) {
       if (launcherExit(log) !== null || await probeLauncherLock(dataRoot)) unknownStart = true;

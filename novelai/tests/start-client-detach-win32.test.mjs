@@ -42,6 +42,8 @@ function makeTree(t, name = 'Launcher Tree') {
   // start-client.mjs resolves its data root with the shared module.
   mkdirSync(join(novelai, 'src'), { recursive: true }); mkdirSync(join(client, 'shared', 'runtime'), { recursive: true });
   copyFileSync(new URL('../src/data-paths.mjs', import.meta.url), join(novelai, 'src', 'data-paths.mjs'));
+  // win32-launch.mjs starts the launcher with the shared WMI helper.
+  copyFileSync(new URL('../src/win32-process.mjs', import.meta.url), join(novelai, 'src', 'win32-process.mjs'));
   copyFileSync(new URL('../client/shared/runtime/data-paths.cjs', import.meta.url), join(client, 'shared', 'runtime', 'data-paths.cjs'));
   const dataDir = join(base, 'Data');
   writeFileSync(join(electron, 'path.txt'), 'electron.exe');
