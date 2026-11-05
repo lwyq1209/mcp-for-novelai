@@ -24,6 +24,32 @@ describe("shellWord", () => {
   });
 });
 
+describe("DeepSeek Harness (dsh)", () => {
+  it("writes one @deepseek-ai/dsh-mcp-client row for a user patch layer, with the 26-minute call timeout", () => {
+    const info = buildMcpAccess(mac);
+    expect(info.clients.dsh).toMatchObject({ format: "yaml", file: "~/.dsh/cordis.patch.yml", toolTimeout: "set" });
+    expect(info.clients.dsh.snippet).toBe([
+      "- insert:",
+      "    - id: mcp-novelai",
+      "      name: '@deepseek-ai/dsh-mcp-client'",
+      "      config:",
+      "        serverName: novelai",
+      "        transport: stdio",
+      '        command: "/Applications/MCP for NovelAI.app/Contents/MacOS/MCP for NovelAI"',
+      '        args: ["/Applications/MCP for NovelAI.app/Contents/Resources/mcp/novelai-mcp.mjs"]',
+      "        env:",
+      '          ELECTRON_RUN_AS_NODE: "1"',
+      '          NOVELAI_DATA_DIR: "/Users/u/Library/Application Support/mcp-for-novelai"',
+      "        toolCallTimeoutMs: 1560000",
+    ].join("\n"));
+  });
+  it("quotes Windows paths and Chinese data roots as YAML double-quoted strings", () => {
+    const info = buildMcpAccess({ ...mac, platform: "win32", executable: "C:\\Program Files\\MCP for NovelAI\\MCP for NovelAI.exe", bundle: "C:\\Program Files\\MCP for NovelAI\\resources\\mcp\\novelai-mcp.mjs", dataRoot: "D:\\测试 数据\\nai" });
+    expect(info.clients.dsh.snippet).toContain('        command: "C:\\\\Program Files\\\\MCP for NovelAI\\\\MCP for NovelAI.exe"');
+    expect(info.clients.dsh.snippet).toContain('          NOVELAI_DATA_DIR: "D:\\\\测试 数据\\\\nai"');
+  });
+});
+
 describe("buildMcpAccess", () => {
   it("registers the bundled server with the app's own executable as Node, naming the absolute default data root", () => {
     const info = buildMcpAccess(mac);

@@ -14,10 +14,10 @@ export const MCP_TOOL_GROUPS = {
 } as const;
 export type McpToolGroup = keyof typeof MCP_TOOL_GROUPS;
 export const MCP_TOOL_NAMES: readonly string[] = Object.values(MCP_TOOL_GROUPS).flat();
-export const MCP_CLIENTS: readonly McpClientId[] = ['claude', 'cursor', 'codex', 'pi', 'other'];
+export const MCP_CLIENTS: readonly McpClientId[] = ['claude', 'cursor', 'codex', 'pi', 'dsh', 'other'];
 
 /** The picker tile of an MCP client the activity names (initialize clientInfo.name), when it has one. */
-const CLIENT_TILES: Record<string, McpClientId> = { 'claude-code': 'claude', claude: 'claude', 'cursor-vscode': 'cursor', 'codex-mcp-client': 'codex', pi: 'pi' };
+const CLIENT_TILES: Record<string, McpClientId> = { 'claude-code': 'claude', claude: 'claude', 'cursor-vscode': 'cursor', 'codex-mcp-client': 'codex', pi: 'pi', 'dsh-mcp-client': 'dsh' };
 export const clientTileOf = (name: string | null | undefined): McpClientId | null => name && Object.hasOwn(CLIENT_TILES, name) ? CLIENT_TILES[name] : null;
 
 /** "刚刚" under a minute, "N 分钟前" under an hour, else the day and time (今天 10:21, 昨天 22:14, 11 月 1 日). */
@@ -42,6 +42,12 @@ export function connectionRows(activity: AgentActivity | null, lang: UiLang, now
       key: `${summary.client?.name ?? ''}#${index}`, label: agentClientLabel(summary.client), when: relativeWhen(summary.lastSeenAt, lang, now),
       tool: summary.lastTool, calls: summary.calls, live: now.getTime() - Date.parse(summary.lastSeenAt) < LIVE_CONNECTION_MS,
     }));
+}
+
+/** The newest start of the app by an agent's MCP server, as the recent-connections list shows it, or null. */
+export function lastAppStart(activity: AgentActivity | null, lang: UiLang, now: Date = new Date()): { label: string; when: string; at: string } | null {
+  const start = (activity?.appStarts ?? []).slice().sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0];
+  return start ? { label: agentClientLabel(start.client), when: relativeWhen(start.at, lang, now), at: start.at } : null;
 }
 
 /**

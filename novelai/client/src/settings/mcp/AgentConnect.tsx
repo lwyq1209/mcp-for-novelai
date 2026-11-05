@@ -6,9 +6,9 @@ import type { UiStringKey } from '../../ui/strings';
 import type { McpAccessInfo, McpClientId } from '../../types';
 import { MCP_CLIENTS } from './model';
 
-const LABEL: Record<McpClientId, UiStringKey> = { claude: 'mcp.client.claude', cursor: 'mcp.client.cursor', codex: 'mcp.client.codex', pi: 'mcp.client.pi', other: 'mcp.client.other' };
-const BADGE: Record<McpClientId, string> = { claude: 'C', cursor: 'C', codex: 'C', pi: 'P', other: '…' };
-const HOW: Record<McpClientId, UiStringKey> = { claude: 'mcp.how.command', cursor: 'mcp.how.cursor', codex: 'mcp.how.codex', pi: 'mcp.how.pi', other: 'mcp.how.other' };
+const LABEL: Record<McpClientId, UiStringKey> = { claude: 'mcp.client.claude', cursor: 'mcp.client.cursor', codex: 'mcp.client.codex', pi: 'mcp.client.pi', dsh: 'mcp.client.dsh', other: 'mcp.client.other' };
+const BADGE: Record<McpClientId, string> = { claude: 'C', cursor: 'C', codex: 'C', pi: 'P', dsh: 'D', other: '…' };
+const HOW: Record<McpClientId, UiStringKey> = { claude: 'mcp.how.command', cursor: 'mcp.how.cursor', codex: 'mcp.how.codex', pi: 'mcp.how.pi', dsh: 'mcp.how.dsh', other: 'mcp.how.other' };
 
 /** What to do with the snippet and how the tool timeout is handled, per client (sources in electron/mcp-access.ts). */
 export function clientHint(t: UiText, client: McpClientId, seconds: number, start: number): string {
@@ -18,6 +18,8 @@ export function clientHint(t: UiText, client: McpClientId, seconds: number, star
   if (client === 'codex') return t('mcp.hint.codex', { minutes, start });
   // Seconds as written in the configuration (1560, not 1,560).
   if (client === 'pi') return t('mcp.hint.pi', { seconds: String(seconds) });
+  // Milliseconds as written in the configuration (1560000).
+  if (client === 'dsh') return t('mcp.hint.dsh', { ms: String(seconds * 1000) });
   return t('mcp.hint.other', { minutes, seconds: String(seconds) });
 }
 
@@ -44,7 +46,7 @@ export function Snippet({ text, testId }: { text: string; testId?: string }) {
 }
 
 /**
- * The agent picker (Claude Code / Cursor / Codex / Pi / other) with this run's configuration for the picked one,
+ * The agent picker (Claude Code / Cursor / Codex / Pi / DeepSeek Harness / other) with this run's configuration for the picked one,
  * where it goes, the timeout note and the first thing to try (prototype 22, 23, 31).
  */
 export function AgentConnect({ info, client, onClient, showTry = true }: { info: McpAccessInfo; client: McpClientId; onClient(client: McpClientId): void; showTry?: boolean }) {
@@ -58,7 +60,7 @@ export function AgentConnect({ info, client, onClient, showTry = true }: { info:
     </div>
     <p className="mc-how">{t(HOW[client])}</p>
     <Snippet text={config.snippet} testId="mcp-snippet" />
-    <p className="mc-hint">{config.format === 'command' ? clientHint(t, client, info.toolTimeoutSeconds, info.startupTimeoutSeconds) : `${t(config.format === 'toml' ? 'mcp.mergeToml' : 'mcp.merge')} ${clientHint(t, client, info.toolTimeoutSeconds, info.startupTimeoutSeconds)}`}</p>
+    <p className="mc-hint">{config.format === 'command' || config.format === 'yaml' ? clientHint(t, client, info.toolTimeoutSeconds, info.startupTimeoutSeconds) : `${t(config.format === 'toml' ? 'mcp.mergeToml' : 'mcp.merge')} ${clientHint(t, client, info.toolTimeoutSeconds, info.startupTimeoutSeconds)}`}</p>
     {showTry ? <div className="mc-try"><Icon name="sparkle" size={14} /><span>{t('mcp.try')}</span></div> : null}
   </div>;
 }

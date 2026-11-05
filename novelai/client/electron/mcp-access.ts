@@ -40,6 +40,9 @@ export const MCP_TOOL_TIMEOUT_SECONDS = 1560;
 /** Seconds a client should allow the server to start (Codex waits 10 by default; Electron as Node starts in about one). */
 export const MCP_STARTUP_TIMEOUT_SECONDS = 30;
 
+/** A YAML double-quoted scalar (a JSON string literal is one: YAML double quotes take the same escapes). */
+const yamlString = (value: string) => JSON.stringify(value);
+
 /** A TOML basic string (a JSON string literal is one: the same escapes, and \uXXXX). */
 const tomlString = (value: string) => JSON.stringify(value);
 
@@ -95,6 +98,25 @@ export function buildMcpAccess(facts: McpAccessFacts): McpAccessInfo {
     // Pi (built-in MCP since 0.99): ~/.pi/agent/mcp.json or <project>/.pi/mcp.json, mcpServers format; timeout is the
     // per-request timeout in seconds (default 60) (earendil-works/pi docs/mcp.md).
     pi: { format: "json", file: "~/.pi/agent/mcp.json", snippet: json({ ...server, timeout: MCP_TOOL_TIMEOUT_SECONDS }), toolTimeout: "set" },
+    // DeepSeek Harness (dsh): one @deepseek-ai/dsh-mcp-client plugin row per server, inserted in a user patch layer —
+    // $DSH_HOME/cordis.patch.yml (~/.dsh, every profile) or $DSH_HOME/profiles/<profile>/cordis.patch.yml; the root
+    // cordis.yml is rewritten empty on every start. toolCallTimeoutMs defaults to 60000 ms (deepseekdocs.com/en/docs/
+    // features/mcp, /user-guide/configuration; github.com/deepseek-ai/deepseek-harness packages/mcp/mcp-client/README.md
+    // and docs/user/guide/mcp-memory.md, checked 2026-11-05). Its stdio child gets the ambient environment without
+    // KEY/PASSWORD/SECRET/TOKEN-like and DSH_* names, plus env below.
+    dsh: { format: "yaml", file: "~/.dsh/cordis.patch.yml", toolTimeout: "set", snippet: [
+      "- insert:",
+      "    - id: mcp-novelai",
+      "      name: '@deepseek-ai/dsh-mcp-client'",
+      "      config:",
+      "        serverName: novelai",
+      "        transport: stdio",
+      `        command: ${yamlString(facts.executable)}`,
+      `        args: [${yamlString(facts.bundle)}]`,
+      "        env:",
+      ...Object.entries(env).map(([key, value]) => `          ${key}: ${yamlString(value)}`),
+      `        toolCallTimeoutMs: ${MCP_TOOL_TIMEOUT_SECONDS * 1000}`,
+    ].join("\n") },
     // Any client configured with mcpServers (for example Claude Desktop's claude_desktop_config.json).
     other: { format: "json", file: null, snippet: jsonConfig, toolTimeout: "manual" },
   };

@@ -14,7 +14,7 @@ import type { McpAccessInfo } from '../../types';
 import { uiText } from '../../ui/i18n';
 import { AgentConnect, clientHint } from './AgentConnect';
 import { ServerStatus } from './McpSection';
-import { callSince, captureActivity, clientTileOf, connectionRows, MCP_CLIENTS, MCP_TOOL_GROUPS, MCP_TOOL_NAMES, previousClient, relativeWhen } from './model';
+import { callSince, captureActivity, clientTileOf, connectionRows, lastAppStart, MCP_CLIENTS, MCP_TOOL_GROUPS, MCP_TOOL_NAMES, previousClient, relativeWhen } from './model';
 import { captureStep, completeGuide, Onboarding, OnboardingFailure } from '../../onboarding/Onboarding';
 import { AppErrorBoundary } from '../../components/AppErrorBoundary';
 import { navigate, useShellRoute } from '../../shell/route';
@@ -49,6 +49,8 @@ describe('Settings › MCP access (step 4b2)', () => {
     expect(connectionRows(null, 'en')).toEqual([]);
     expect(clientTileOf('codex-mcp-client')).toBe('codex');
     expect(clientTileOf('Zed')).toBeNull();
+    expect(clientTileOf('dsh-mcp-client')).toBe('dsh');
+    expect(MCP_CLIENTS).toEqual(['claude', 'cursor', 'codex', 'pi', 'dsh', 'other']);
   });
 
   it('waits for a call after the guide step opened; an older call is only “connected before”', () => {
@@ -78,6 +80,7 @@ describe('Settings › MCP access (step 4b2)', () => {
         expect(html).toContain('ELECTRON_RUN_AS_NODE');
         if (client === 'codex') expect(html).toContain('tool_timeout_sec = 1560');
         if (client === 'pi') expect(html).toContain('&quot;timeout&quot;: 1560');
+        if (client === 'dsh') { expect(html).toContain('toolCallTimeoutMs: 1560000'); expect(html).toContain('~/.dsh/cordis.patch.yml'); expect(html).toContain('DeepSeek Harness'); }
         if (client === 'cursor') expect(html).toContain(language === 'zh-CN' ? '别让 Agent 重发' : 'before letting the agent resend');
       }
     }
@@ -95,6 +98,21 @@ describe('Settings › MCP access (step 4b2)', () => {
     expect(starting).toContain('Agent 通道还没有启动');
     expect(starting).toContain('data-testid="mcp-temporary"');
     expect(starting).toContain('还没有 Agent 连接过');
+  });
+
+  it('names the agent that started the app, and when (the newest start only)', () => {
+    const now = new Date(2026, 10, 3, 18, 0);
+    const activity = { ...captureActivity(now, 'sample'), appStarts: [{ at: new Date(now.getTime() - 3 * 60_000).toISOString(), client: { name: 'claude-code', version: null } }, { at: new Date(now.getTime() - 9 * 60_000).toISOString(), client: null }] };
+    expect(lastAppStart(activity, 'zh', now)).toMatchObject({ label: 'Claude Code', when: '3 分钟前' });
+    expect(lastAppStart({ recent: [], clients: [] }, 'en', now)).toBeNull();
+    for (const language of ['zh-CN', 'en-US'] as const) {
+      lang(language);
+      const html = renderToStaticMarkup(<ServerStatus info={info} active={false} activity={activity} />);
+      expect(html).toContain('data-testid="mcp-recent-start"');
+      expect(html).toContain(language === 'zh-CN' ? '启动了应用' : 'started the app');
+      expect((html.match(/data-testid="mcp-recent-start"/g) ?? []).length).toBe(1);
+    }
+    expect(renderToStaticMarkup(<ServerStatus info={info} active={false} activity={captureActivity(now, 'sample')} />)).not.toContain('mcp-recent-start');
   });
 });
 

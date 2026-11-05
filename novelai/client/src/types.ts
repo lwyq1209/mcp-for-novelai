@@ -1036,10 +1036,10 @@ export interface McpAccessInfo {
   /** Step 4b2: the configuration for each MCP client, with this run's real paths. */
   clients: Record<McpClientId, McpClientConfig>;
 }
-export type McpClientId = "claude" | "cursor" | "codex" | "pi" | "other";
+export type McpClientId = "claude" | "cursor" | "codex" | "pi" | "dsh" | "other";
 export interface McpClientConfig {
-  /** command: run once in a terminal; json / toml: merge into the file named (or the client's own configuration). */
-  format: "command" | "json" | "toml";
+  /** command: run once in a terminal; json / toml / yaml: merge into the file named (or the client's own configuration). */
+  format: "command" | "json" | "toml" | "yaml";
   /** The user configuration file the client documents, ~ for the home folder; null for a command or an unnamed file. */
   file: string | null;
   snippet: string;

@@ -7,13 +7,13 @@ import type { McpAccessInfo, McpClientId } from '../../types';
 import { InfoTip, InlineNote, SettingsBlock, SettingsGroup } from '../sections/common';
 import { AgentConnect, Snippet } from './AgentConnect';
 import { useAgentActivity, useMcpAccess, useNow } from './hooks';
-import { clientTileOf, connectionRows, MCP_SERVER_NAME, MCP_TOOL_GROUPS, MCP_TOOL_NAMES, type McpToolGroup } from './model';
+import { clientTileOf, connectionRows, lastAppStart, MCP_SERVER_NAME, MCP_TOOL_GROUPS, MCP_TOOL_NAMES, type McpToolGroup } from './model';
 import './mcp.css';
 
 const GROUP_LABEL = { library: 'mcp.tg.library', queue: 'mcp.tg.queue', canvas: 'mcp.tg.canvas' } as const;
 /** The client a capture name shows (settings-mcp-codex → codex). */
 const captureClient = (capture: CaptureRequest | null): McpClientId | null => {
-  const match = capture ? /^settings-mcp-(cursor|codex|pi|other)$/.exec(capture.page) : null;
+  const match = capture ? /^settings-mcp-(cursor|codex|pi|dsh|other)$/.exec(capture.page) : null;
   return match ? match[1] as McpClientId : null;
 };
 
@@ -50,6 +50,7 @@ export function ServerStatus({ info, active, activity }: { info: McpAccessInfo; 
   const { t, lang } = useUiText();
   const now = useNow(active);
   const rows = connectionRows(activity, lang, now);
+  const started = lastAppStart(activity, lang, now);
   const ready = info.bundleExists && info.bridgeReady;
   return <SettingsGroup className="mc-status" testId="mcp-status">
     <div className="mc-status-head">
@@ -63,6 +64,12 @@ export function ServerStatus({ info, active, activity }: { info: McpAccessInfo; 
     {info.temporaryLocation ? <SettingsBlock><InlineNote tone="warn" icon="alert" testId="mcp-temporary">{t('mcp.temporary')}</InlineNote></SettingsBlock> : null}
     <div className="mc-recent" data-testid="mcp-recent">
       <div className="mc-recent-head"><span>{t('mcp.recent')}<InfoTip content={t('mcp.recentPrivacy')} /></span></div>
+      {started ? <div className="mc-recent-row mc-recent-start" data-testid="mcp-recent-start">
+        <Icon name="plug" size={13} />
+        <b>{started.label}</b>
+        <span>{t('mcp.appStarted')}</span>
+        <span className="mc-when">{started.when}</span>
+      </div> : null}
       {rows.length ? rows.map(row => <div key={row.key} className="mc-recent-row" data-testid="mcp-recent-row">
         <i className={clsx('mc-dot', row.live && 'is-live')} aria-hidden="true" />
         <b>{row.label}</b>
@@ -111,6 +118,10 @@ function Advanced({ info }: { info: McpAccessInfo }) {
             <Button size="sm" icon="folder" onClick={() => void openData()}>{t(info.platform === 'darwin' ? 'mcp.openFolder' : 'mcp.openFolderOther')}</Button></div>
           {openFailed ? <InlineNote tone="danger" icon="alert">{t('c.failed')}</InlineNote> : null}
           <p>{t(info.customDataRoot ? 'mcp.dataCustom' : 'mcp.dataDefault', { env: info.dataDirEnv })}</p>
+        </div>
+        <div className="mc-adv-block" data-testid="mcp-autostart">
+          <b>{t('mcp.autostart')}</b>
+          <p>{t('mcp.autostartHint', { env: 'NOVELAI_MCP_AUTOSTART' })}</p>
         </div>
         <div className="mc-adv-block">
           <b>{t('mcp.source')}</b>
