@@ -6,7 +6,7 @@ import { lstat, mkdir, mkdtemp, readdir, rm, symlink, writeFile, utimes } from '
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BridgeError, undeliveredError } from '../src/bridge-client.mjs';
-import { AUTOSTART_LIMITS, AUTOSTART_STATES, CANVAS_RETRY_METHODS, CLAIM_FILE, CLOCK_SLACK_MS, STILL_LOADING, appInstanceState, autostartPolicy, createAutostartBridge, createStartClaim } from '../src/app-autostart.mjs';
+import { AUTOSTART_LIMITS, AUTOSTART_STATES, CANVAS_RETRY_METHODS, CLAIM_FILE, CLOCK_SLACK_MS, STILL_LOADING, appInstanceState, autostartPolicy, createAutostartBridge, createStartClaim, processStartTime } from '../src/app-autostart.mjs';
 
 const noBridge = () => undeliveredError('no_bridge', 'unavailable', 'no app');
 const refused = fingerprint => undeliveredError('refused', 'unavailable', 'gone', undefined, fingerprint);
@@ -289,8 +289,11 @@ test('appInstanceState: a lock whose pid now belongs to a process started after 
   assert.equal(await appInstanceState(root, { platform: 'darwin', startTime: async () => made + 2_000 }), 'running', 'within the whole-second slack of ps');
   assert.equal(await appInstanceState(root, { platform: 'linux', startTime: async () => made + 3_600_000 }), 'absent', 'a later process reuses the pid');
   assert.equal(await appInstanceState(root, { platform: 'darwin', startTime: async () => null }), 'running', 'unknown start time: the live pid counts');
-  // The real ps of this platform reads this very process (started before the lock).
-  assert.equal(await appInstanceState(root, { platform: process.platform === 'win32' ? 'darwin' : process.platform }), process.platform === 'win32' ? 'absent' : 'running');
+  // The real ps of macOS and Linux reads this very process (started before the lock); Windows uses lockfile instead.
+  if (process.platform !== 'win32') {
+    assert.ok(await processStartTime(process.pid) <= made, 'ps gives this process\'s start time');
+    assert.equal(await appInstanceState(root, { platform: process.platform }), 'running');
+  }
 });
 
 test('the stdio server\'s default bridge in a test process starts nothing and writes nothing', async t => {
