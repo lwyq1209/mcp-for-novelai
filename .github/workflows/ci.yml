@@ -58,7 +58,11 @@ jobs:
       - name: Install the client dependencies
         id: dependencies
         working-directory: novelai/client
-        run: npm ci
+        run: |
+          npm ci
+          # npm ci does not download Electron itself; a test that loads `electron` would then download it lazily, and
+          # two test workers doing so at once collide on Windows (EBUSY on Electron's download cache).
+          node node_modules/electron/install.js
 
       # The checks below run even when an earlier one failed (once the dependencies are installed), so one run shows
       # every failing check on every platform; the job still fails if any of them fails.
