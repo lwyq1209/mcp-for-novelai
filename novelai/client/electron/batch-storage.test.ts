@@ -547,7 +547,9 @@ it('H10 raises the frozen batch limit to 4096 and keeps incremental creates fast
   const empty = await setup(), baseline = await fileReads(() => empty.storage.create(input()));
   // Besides the counts, a loose bound on the CPU time of this process (its file-system threads included) for one
   // create, for O(n) work that opens or reads nothing (the folder scan already lstats every stored file once). Other
-  // busy processes do not count against it.
+  // busy processes do not count against it. On Windows every lstat opens and closes a handle to the file (libuv:
+  // CreateFileW, GetFileInformationByHandle), several times the CPU of a POSIX lstat, so the same scan gets 4x the bound.
+  const cpuBoundMs = process.platform === 'win32' ? 8000 : 2000;
   const cpuMs: number[] = [];
   for (let index = 0; index < 3; index++) {
     let sequence = 0;
@@ -556,7 +558,7 @@ it('H10 raises the frozen batch limit to 4096 and keeps incremental creates fast
     const used = process.cpuUsage(started); cpuMs.push((used.user + used.system) / 1000);
     expect(sequence).toBe(4001 + index);
   }
-  expect(Math.min(...cpuMs), `CPU ms per create: ${cpuMs.map(ms => ms.toFixed(0)).join('/')}`).toBeLessThan(2000);
+  expect(Math.min(...cpuMs), `CPU ms per create: ${cpuMs.map(ms => ms.toFixed(0)).join('/')}`).toBeLessThan(cpuBoundMs);
   expect(storage.capacity!()).toMatchObject({ batches: 4003, batchLimit: 4096 });
 }, 240_000);
 

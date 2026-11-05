@@ -23,9 +23,10 @@ export default defineConfig({
     // real file work, which can exceed vitest's 5 s default on a busy machine. The
     // timeouts are hang guards only: no test outcome depends on how fast the machine
     // is (waits are on conditions, see src/test-support/wait-until.ts), so a failure
-    // is a real failure and is not retried.
-    testTimeout: 30000,
-    hookTimeout: 30000,
+    // is a real failure and is not retried. Windows gets more room: every SQLite commit and atomic file write ends in
+    // a FlushFileBuffers that is 10-50x slower there (most on CI runners), so the file-heavy tests take that much longer.
+    testTimeout: process.platform === "win32" ? 120000 : 30000,
+    hookTimeout: process.platform === "win32" ? 120000 : 30000,
     retry: 0,
   },
 });
