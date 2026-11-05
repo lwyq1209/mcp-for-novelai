@@ -399,7 +399,21 @@ export function createTagQueryCoordinator(options = {}) {
     }
     return responseFrom(await awaitCaller(pending, init.signal));
   }
-  return { fetch: coordinatedFetch, root };
+  /**
+   * Waits for this coordinator's own requests to settle, then closes its coordination database (a later fetch opens
+   * it again). Windows cannot remove an open database file, so a caller that deletes the cache folder (tests) closes
+   * first; the process-wide default coordinator stays open for the life of the process.
+   */
+  async function close() {
+    await Promise.allSettled([...inflight.values()]);
+    const pending = initialization;
+    initialization = undefined;
+    await pending?.catch(() => {});
+    const open = database;
+    database = undefined;
+    open?.close();
+  }
+  return { fetch: coordinatedFetch, close, root };
 }
 
 let defaultCoordinator;

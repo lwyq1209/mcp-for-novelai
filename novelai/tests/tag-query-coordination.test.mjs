@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import http from 'node:http';
-import { createTagQueryCoordinator, tagQueryEvidence } from '../src/tag-query-coordinator.mjs';
+import { createTagQueryCoordinator as createCoordinator, tagQueryEvidence } from '../src/tag-query-coordinator.mjs';
 import { lookupTagDetails, queryTagDetails } from '../src/tag-details.mjs';
 import { lookupTagCooccurrence } from '../src/tag-cooccurrence.mjs';
 
@@ -18,9 +18,22 @@ const json = (value, status = 200, headers = {}) => {
   const text = JSON.stringify(value);
   return new Response(text, { status, headers: { 'content-type': 'application/json', 'content-length': String(Buffer.byteLength(text)), ...headers } });
 };
+// The coordinators each test opens on its cache root, closed before the root is removed: Windows cannot delete an
+// open coordination.sqlite, and a failing after hook would skip the later ones (the mock server, the child processes).
+const opened = new Map();
+function createTagQueryCoordinator(options) {
+  const coordinator = createCoordinator(options);
+  opened.get(options?.root)?.push(coordinator);
+  return coordinator;
+}
 async function root(t, prefix = 'nai-tag-coordinate-') {
   const directory = await mkdtemp(join(tmpdir(), prefix));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  opened.set(directory, []);
+  t.after(async () => {
+    for (const coordinator of opened.get(directory)) await coordinator.close();
+    opened.delete(directory);
+    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
   return directory;
 }
 function endpointFixture(onCall = () => {}) {
@@ -366,6 +379,20 @@ test('an implausibly old reused PID lease recovers only beyond the full operatio
   db.close();
   const response = await coordinator.fetch(target, { method: 'GET' });
   assert.equal(response.status, 200); assert.equal(calls, 2);
+});
+
+test('close releases the coordination database once its requests settle, and a later fetch opens it again', async t => {
+  const cacheRoot = await root(t); let calls = 0;
+  const coordinator = createTagQueryCoordinator({ root: cacheRoot, minIntervalMs: 0, fetchImpl: async () => { calls++; return json([]); } });
+  const pending = coordinator.fetch('https://danbooru.donmai.us/tags.json?search%5Bname%5D=before_close', { method: 'GET' });
+  await coordinator.close();
+  assert.equal((await pending).status, 200, 'a request in flight finishes before the database closes');
+  // Closed: the database files can be removed, also on Windows, where an open database file cannot be deleted.
+  for (const name of await readdir(cacheRoot)) if (name.startsWith('coordination.sqlite')) await rm(join(cacheRoot, name));
+  assert.equal((await coordinator.fetch('https://danbooru.donmai.us/tags.json?search%5Bname%5D=after_close', { method: 'GET' })).status, 200);
+  assert.ok((await readdir(cacheRoot)).includes('coordination.sqlite'), 'the next fetch created the database again');
+  assert.equal(calls, 2);
+  await coordinator.close(); await coordinator.close();
 });
 
 test('overflow reconstruction removes stale compression headers', async t => {
