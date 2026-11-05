@@ -956,6 +956,8 @@ function registerIpc() {
     }
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:")
       return { ok: false };
+    // An update rehearsal build (never released) opens no browser: it runs unattended on someone's computer.
+    if (appUpdater.testBuild) { logInfo(`[update] rehearsal build: not opening ${parsed.host} in the browser`); return { ok: false }; }
     void shell.openExternal(parsed.toString());
     return { ok: true };
   });

@@ -264,15 +264,31 @@ async function openPage(port, timeoutMs = 90_000) {
   return page;
 }
 const progressOf = page => page.evaluate(() => window.naiDesktop.getUpdateProgress());
-/** Settings › About › Check for updates; resolves the row's state once the check has answered. */
+/**
+ * Settings › About › Check for updates; resolves the row's state once THIS check has answered (the main process's
+ * last check is newer than the click) and the window has rendered it.
+ */
 async function checkInAbout(page) {
   await page.route('settings');
   await page.click('[data-testid="settings-nav-about"]');
+  const clickedAt = Date.now() - 1000;
   await page.click('[data-testid="update-check"]');
-  await pollUntil(() => page.evaluate(() => Boolean(document.querySelector('[data-testid="update-result"], [data-testid="update-install"], [data-testid="update-download"]'))), { timeoutMs: 30_000, intervalMs: 200 });
+  const answered = await pollUntil(async () => { const status = await page.evaluate(() => window.naiDesktop.getUpdateStatus()).catch(() => null); return status?.checkedAt && Date.parse(status.checkedAt) >= clickedAt ? status : null; }, { timeoutMs: 30_000, intervalMs: 200 });
+  if (!answered) throw new ToolError('timeout', 'The update check did not answer.');
+  await pollUntil(() => page.evaluate(() => !document.querySelector('[data-testid="update-check"]')?.getAttribute('aria-busy') && !document.querySelector('[data-testid="update-check"] .ui-spinner')).catch(() => false), { timeoutMs: 10_000, intervalMs: 100 });
+  await sleep(500);
   return page.evaluate(() => ({ install: Boolean(document.querySelector('[data-testid="update-install"]')), download: Boolean(document.querySelector('[data-testid="update-download"]')), result: document.querySelector('[data-testid="update-result"]')?.textContent ?? null, note: document.querySelector('[data-testid="update-progress"]')?.textContent ?? null }));
 }
-async function clickInstall(page) { await page.click('[data-testid="update-install"]', { timeoutMs: 20_000 }); }
+/** Update and restart (or Try again), and waits until the main process took it (its phase left what it was). */
+async function clickInstall(page) {
+  const before = await progressOf(page);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await page.click('[data-testid="update-install"]', { timeoutMs: 20_000 });
+    const taken = await pollUntil(async () => { const now = await progressOf(page).catch(() => null); return now && (now.phase !== before.phase || now.version !== before.version || now.error?.code !== before.error?.code) ? now : null; }, { timeoutMs: 5000, intervalMs: 100 });
+    if (taken) return taken;
+  }
+  throw new ToolError('click_not_taken', 'Update and restart was clicked but the update did not start.', { before });
+}
 async function waitPhase(page, phases, timeoutMs = 180_000) {
   const wanted = new Set(phases);
   const value = await pollUntil(async () => { const progress = await progressOf(page).catch(() => null); return progress && wanted.has(progress.phase) ? progress : null; }, { timeoutMs, intervalMs: 250 });
