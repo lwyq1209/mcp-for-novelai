@@ -19,7 +19,8 @@ Paths below are relative to `novelai/client`.
   tools (pass `--adopt` only for a throwaway folder).
 - **Own processes only.** A test client is this checkout's `node_modules/electron` executable started with the marker
   argument `--nai-dev-tools-data=<data root>` (last on its command line). `stop` re-reads each PID's command line
-  right before signalling it, sends SIGTERM (Windows: `taskkill` without `/F`), waits, and never uses
+  right before signalling it, sends SIGTERM (Windows: `taskkill` without `/F`; a process without a window, which
+  `taskkill` cannot ask, is terminated), waits, and never uses
   `pkill`/`killall`. Other Electron processes — the daily client, other checkouts' test clients, helpers — are never
   matched. Several data roots (and several checkouts) can each run one test client at the same time.
 - **No keychain, no real token.** Test clients always run with Chromium's `--use-mock-keychain`: OSCrypt uses an

@@ -118,10 +118,15 @@ export function alive(pid) {
   try { process.kill(pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; }
 }
 
-/** Sends the polite stop request to one verified PID: SIGTERM, or taskkill without /F on Windows. */
+/**
+ * Sends the polite stop request to one verified PID: SIGTERM, or taskkill without /F on Windows (it asks the windows
+ * of the process to close). A Windows process without a window cannot be asked (taskkill refuses it without /F), so it
+ * is terminated instead; it is still this data root's test client, verified right before. Returns how it was stopped.
+ */
 function requestStop(pid) {
-  if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(pid)], { stdio: 'ignore', windowsHide: true });
-  else process.kill(pid, 'SIGTERM');
+  if (process.platform !== 'win32') { process.kill(pid, 'SIGTERM'); return 'signalled'; }
+  try { execFileSync('taskkill', ['/PID', String(pid)], { stdio: 'ignore', windowsHide: true }); return 'signalled'; }
+  catch { process.kill(pid); return 'terminated'; }
 }
 
 /**
@@ -135,10 +140,10 @@ export async function stopClients(dataRoot, { timeoutMs = 20_000, force = false 
   const result = { stopped: [], skipped: [], stillRunning: [], forced: [] };
   for (const pid of candidates) {
     if (!isOurClient(pid, dataRoot)) { result.skipped.push({ pid, reason: alive(pid) ? 'not this data root\'s test client (left alone)' : 'not running' }); continue; }
-    requestStop(pid);
+    const how = requestStop(pid);
     const started = Date.now();
     while (alive(pid) && Date.now() - started < timeoutMs) await sleep(150);
-    if (!alive(pid)) { result.stopped.push({ pid, ms: Date.now() - started }); continue; }
+    if (!alive(pid)) { result.stopped.push({ pid, ms: Date.now() - started, ...(how === 'terminated' ? { terminated: 'no window to close' } : {}) }); continue; }
     if (force && isOurClient(pid, dataRoot)) {
       process.kill(pid, 'SIGKILL');
       await sleep(500);

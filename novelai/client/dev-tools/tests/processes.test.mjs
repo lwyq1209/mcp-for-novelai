@@ -67,7 +67,8 @@ test('stop signals only the verified process of that data root; another data roo
 });
 
 test('findDataRootProcesses: the main process, its helpers and an app run with NOVELAI_DATA_DIR count; MCP servers (run as Node) and other data roots do not (review rework)', () => {
-  const root = '/tmp/oqr/data';
+  // A data root is compared resolved (on Windows /tmp/oqr/data is <drive>:\tmp\oqr\data).
+  const root = path.resolve('/tmp/oqr/data');
   const helper = EXE.replace('Contents/MacOS/Electron', 'Contents/Frameworks/Electron Helper (GPU).app/Contents/MacOS/Electron Helper (GPU)');
   const rows = [
     { pid: 11, command: `${EXE} /w/client --use-mock-keychain ${DATA_MARKER_SWITCH}=${root} NOVELAI_DATA_DIR=${root} HOME=/u` },
@@ -80,7 +81,7 @@ test('findDataRootProcesses: the main process, its helpers and an app run with N
     { pid: process.pid, command: `${EXE} ${DATA_MARKER_SWITCH}=${root}` },
   ];
   assert.deepEqual(findDataRootProcesses(root, rows, EXE).map(row => [row.pid, row.kind, row.via]), [[11, 'main', 'marker'], [12, 'helper', 'profile'], [13, 'main', 'environment']]);
-  assert.deepEqual(findDataRootProcesses('/tmp/oqr/elsewhere', rows, EXE), []);
+  assert.deepEqual(findDataRootProcesses(path.resolve('/tmp/oqr/elsewhere'), rows, EXE), []);
 });
 
 test('start refuses while any process of the data root runs (a stand-in helper with its profile there)', async t => {
