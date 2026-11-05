@@ -63,9 +63,11 @@ log "the app has quit"
 if [ ! -f "$state/helper-state" ] || [ ! -f "$(dirname "$state")/pending.json" ]; then exit 1; fi
 
 close_inherited() {
+  # Only numbers this shell can name in a redirection (dash: 0-9; a bad one would end the shell).
   for l_fd in /proc/self/fd/*; do
     l_fd=${"${"}l_fd##*/}
-    case "$l_fd" in ''|*[!0-9]*|0|1|2) ;; *) eval "exec $l_fd>&-" 2>/dev/null ;; esac
+    case "$l_fd" in ''|*[!0-9]*|0|1|2) continue ;; esac
+    if [ -n "${"${"}BASH_VERSION:-}" ] || [ "$l_fd" -le 9 ]; then eval "exec $l_fd>&-" 2>/dev/null; fi
   done
 }
 
