@@ -295,7 +295,7 @@ function helperPids(dataRoot) {
 function installedVersion(installed) {
   if (process.platform === 'darwin') return run('/usr/bin/plutil', ['-extract', 'CFBundleShortVersionString', 'raw', '-o', '-', path.join(installed.target, 'Contents', 'Info.plist')]).trim();
   if (process.platform === 'win32') {
-    const read = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `[Console]::Out.Write([System.Diagnostics.FileVersionInfo]::GetVersionInfo('${installed.executable.replace(/'/g, "''")}').ProductVersion)`], { encoding: 'utf8' });
+    const read = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `[Console]::Out.Write([System.Diagnostics.FileVersionInfo]::GetVersionInfo('${installed.executable.replace(/'/g, "''")}').FileVersion)`], { encoding: 'utf8' });
     return String(read.stdout ?? '').replace(/^\uFEFF/, '').trim() || `(unreadable: ${String(read.stderr ?? '').trim().slice(0, 200)})`;
   }
   const asar = path.join(installed.target, 'resources', 'app.asar');
@@ -427,6 +427,15 @@ async function scenario(name, context, index) {
       result.helperLog = fs.existsSync(updates) ? fs.readdirSync(updates).flatMap(id => { try { return fs.readFileSync(path.join(updates, id, 'helper.log'), 'utf8').split('\n').slice(-25); } catch { return []; } }) : [];
       result.appLog = fs.readFileSync(path.join(dataRoot, 'logs', 'app.log'), 'utf8').split('\n').filter(line => /\[update\]|ERROR|WARN/.test(line)).slice(-25);
       result.processes = appProcesses(dataRoot, parent);
+      if (process.platform !== 'win32') {
+        const marker = `${DATA_MARKER_SWITCH}=${dataRoot}`;
+        result.processTable = run('ps', ['-axww', '-o', 'pid=,ppid=,stat=,command=']).split('\n').filter(line => line.includes(marker) || line.includes(`${path.join(dataRoot, 'updates')}`)).map(line => line.trim().slice(0, 400));
+        if (process.platform === 'linux') {
+          result.listening = spawnSync('ss', ['-ltnp'], { encoding: 'utf8' }).stdout?.split('\n').filter(line => line.includes(`:${port}`)) ?? [];
+          result.cmdlines = result.processes.map(pid => { try { return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean); } catch { return null; } });
+        }
+      }
+      result.devtools = await fetch(`http://127.0.0.1:${port}/json/list`).then(response => response.text()).then(text => text.slice(0, 1000)).catch(error => `unreachable: ${error.cause?.code ?? error.message}`);
     } catch { /* best effort */ }
     if (error.code === 'user_back' || error.code === 'front_detected') result.interrupted = error.code;
   } finally {
@@ -496,7 +505,7 @@ async function rehearse(options) {
     }
   }
   return { ok: results.every(result => result.ok), results: results.map(result => ({ scenario: result.scenario, ok: result.ok, interrupted: result.interrupted, error: result.error?.message, failed: Object.entries(result.checks).filter(([, value]) => !value.ok).map(([key, value]) => ({ check: key, value: value.value })), frontHits: result.frontWatch?.hits,
-    ...(result.ok ? {} : { helperStates: result.helperStates, helperLog: result.helperLog, appLog: result.appLog }) })) };
+    ...(result.ok ? {} : { helperStates: result.helperStates, helperLog: result.helperLog, appLog: result.appLog, processTable: result.processTable, listening: result.listening, cmdlines: result.cmdlines, devtools: result.devtools }) })) };
 }
 
 async function prepare(options) {

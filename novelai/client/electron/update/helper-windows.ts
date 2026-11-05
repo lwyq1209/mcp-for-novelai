@@ -82,10 +82,13 @@ try {
 } catch { Write-Log ('the installer could not run: ' + $_.Exception.Message) }
 Write-Log ('installer exit code ' + $code)
 $exePath = Join-Path $InstallDir $Exe
+# electron-builder writes the app version into the FileVersion string (with a build number appended when the build
+# had one); ProductVersion holds only the numeric x.y.z.n form.
 $installed = $null
-if (Test-Path -LiteralPath $exePath -PathType Leaf) { $installed = (Get-Item -LiteralPath $exePath).VersionInfo.ProductVersion }
+if (Test-Path -LiteralPath $exePath -PathType Leaf) { $installed = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($exePath).FileVersion }
 Write-Log ('installed version ' + $installed)
-if ($code -ne 0 -or $installed -ne $To) {
+$sameVersion = $installed -and (($installed -eq $To) -or $installed.StartsWith($To + '.'))
+if ($code -ne 0 -or -not $sameVersion) {
   Set-Mark 'failed:installer_failed'
   if (-not (Start-App ('--update-rolled-back=' + $To))) { Write-Log 'no app could be started' }
   exit 1
