@@ -185,6 +185,10 @@ function child(code, env, timeoutMs = 5000) {
 const childEnv = extra => { const env = { ...process.env, ...extra }; delete env.NODE_TEST_CONTEXT; return env; };
 
 test('P3-3: FIFOs in inboxes are refused promptly instead of blocking the server', async t => {
+  // Windows has no FIFOs in the file system: its named pipes live under \\.\pipe\, never in a folder (Git for Windows'
+  // mkfifo only emulates one for MSYS programs). The win32 openNoFollow refuses every entry that is not a regular file
+  // (tests/platform-fs.test.mjs).
+  if (process.platform === 'win32') return t.skip('no FIFOs on Windows: a named pipe cannot be created in an inbox folder');
   const base = await tempBase(t, 'novelai-business-p33-');
   const dirs = { materialInbox: join(base, 'library-inbox'), studyInbox: join(base, 'study-inbox'), materialExports: join(base, 'library-exports'), studyExports: join(base, 'study-exports') };
   await mkdir(dirs.materialInbox); await mkdir(dirs.studyInbox);
@@ -457,6 +461,26 @@ nodeTest('p3 C: a path continues across a space only into real path text; URLs, 
   // Adversarial inputs stay linear (CPU time of this process, so other busy processes do not count).
   const started = process.cpuUsage();
   for (const input of ['/a/b' + ' x/'.repeat(50000) + '!', '/a/b' + ' 1/2'.repeat(50000), '/a/b' + ' ab/cd'.repeat(40000), '/a/b' + ' https://x/'.repeat(20000)]) scrubText(input, roots);
+  const used = process.cpuUsage(started);
+  assert.ok((used.user + used.system) / 1000 < 2000);
+});
+
+nodeTest('Windows project paths in messages read project-relative with "/", like the paths the tools return', async () => {
+  const { withoutRoot } = await import('../src/business-guards.mjs');
+  const root = 'D:\\work\\comic';
+  const cases = {
+    "open 'D:\\work\\comic\\novelai\\library-inbox\\entry.json' failed": "open 'novelai/library-inbox/entry.json' failed",
+    'open "D:\\work\\comic\\novelai\\study-inbox\\原图 (1).png" failed': 'open "novelai/study-inbox/原图 (1).png" failed',
+    'wrote D:\\work\\comic\\novelai\\library-exports\\a.json, then D:\\work\\comic\\novelai\\b.json': 'wrote novelai/library-exports/a.json, then novelai/b.json',
+    'outside D:\\work\\comics\\x.json stays': 'outside D:\\work\\comics\\x.json stays',
+    'C:\\other\\x.json and D:\\work\\comic stay': 'C:\\other\\x.json and D:\\work\\comic stay',
+  };
+  for (const [input, expected] of Object.entries(cases)) assert.equal(withoutRoot(input, root, '\\'), expected, input);
+  // The POSIX form is the plain prefix removal it always was.
+  assert.equal(withoutRoot("open '/u/comic/novelai/a b/c.json' and /u/comic/d", '/u/comic', '/'), "open 'novelai/a b/c.json' and d");
+  // Linear on adversarial input.
+  const started = process.cpuUsage();
+  withoutRoot(`${root}\\`.repeat(50000) + 'x'.repeat(100000), root, '\\');
   const used = process.cpuUsage(started);
   assert.ok((used.user + used.system) / 1000 < 2000);
 });

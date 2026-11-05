@@ -308,8 +308,29 @@ const redactQuoted = (match, quote, name, separator) => `${quote}${name}${quote}
 export function scrubText(text, roots = projectRoots()) {
   if (typeof text !== 'string') return text;
   let value = text.replace(URL_QUERY, '$1?[redacted]').replace(QUOTED_KEY_VALUE, redactQuoted).replace(KEY_VALUE, '$1$2[redacted]').replace(BEARER, '$1$2[redacted]').replace(JWT, '[redacted]');
-  for (const root of roots) value = value.split(root + sep).join('');
+  for (const root of roots) value = withoutRoot(value, root);
   return value.replace(QUOTED_PATH, match => `${match[0]}<path>${match.at(-1)}`).replace(ABSOLUTE_PATH, '$1<path>');
+}
+
+const ENDS_UNQUOTED_PATH = new RegExp(`[${PATH_END}]`);
+/**
+ * `text` with every `<root><separator>` prefix removed, so paths inside the project read project-relative. With the
+ * Windows separator the rest of each such path (up to its closing quote when quoted, else up to the first character
+ * that ends an unquoted path) is written with "/", the same form as every project-relative path the tools return
+ * (novelai/library-inbox/x.json, never novelai\library-inbox\x.json).
+ */
+export function withoutRoot(text, root, separator = sep) {
+  const prefix = root + separator;
+  if (separator === '/') return text.split(prefix).join('');
+  let output = '', index = 0;
+  for (let at = text.indexOf(prefix); at >= 0; at = text.indexOf(prefix, index)) {
+    const quote = /['"`]/.test(text[at - 1] ?? '') ? text[at - 1] : null;
+    let end = at + prefix.length;
+    while (end < text.length && (quote ? text[end] !== quote && text[end] !== '\n' : !ENDS_UNQUOTED_PATH.test(text[end]))) end++;
+    output += text.slice(index, at) + text.slice(at + prefix.length, end).split(separator).join('/');
+    index = end;
+  }
+  return output + text.slice(index);
 }
 
 /**
