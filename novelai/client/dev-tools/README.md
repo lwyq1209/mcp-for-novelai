@@ -31,6 +31,8 @@ Paths below are relative to `novelai/client`.
   clearly fake token (`fake-dev-tools-…`) encrypted for that mock keychain (macOS). Without `--fake-novelai` the
   data root gets the official endpoints and **no token**, so a fake token never reaches NovelAI.
 - **No real generation.** Point test clients at the fake service; it binds `127.0.0.1` only.
+- **No real update key or certificate.** The update rehearsal makes throwaway ones; its builds use their own bundle
+  identifier and product name and are installed only inside the work folder.
 
 ## test-client — start / stop / status
 
@@ -217,6 +219,36 @@ Runs `dist-mcp/novelai-mcp.mjs` with this checkout's Electron as Node (`ELECTRON
 client a call answers `unavailable`, `details.autostart: "off"`); start the test client with `test-client.mjs`.
 Library: `connectMcp({ data, project, clientName })` → `{ tools(), call(name, args), close() }` from
 `lib/mcp-client.mjs`.
+
+## update-rehearsal — a real in-app update between two rehearsal builds
+
+```sh
+node dev-tools/update-rehearsal.mjs prepare  --work ../../.tmp/self-update/rehearsal.noindex [--from 0.1.3-test] [--to 0.1.4-test]
+node dev-tools/update-rehearsal.mjs rehearse --work ../../.tmp/self-update/rehearsal.noindex [--scenarios success,tamper,…] [--resume] [--keep] [--idle-gate|--no-idle-gate]
+node dev-tools/update-rehearsal.mjs serve    --work ../../.tmp/self-update/rehearsal.noindex [--port 0]   # the fake GitHub alone
+node dev-tools/update-rehearsal.mjs clean    --work ../../.tmp/self-update/rehearsal.noindex
+```
+
+`prepare` makes a throwaway Ed25519 update key (`.github/scripts/update-signature.mjs keygen`) and on macOS a throwaway
+self-signed code signing certificate (OpenSSL), then two packaged **rehearsal builds** of this checkout: `npm run build`
+with `NAI_UPDATE_TEST_BUILD=1` (only such a build reads `NAI_UPDATE_TEST_FEED`, `NAI_UPDATE_TEST_PUBLIC_KEY`,
+`NAI_UPDATE_TEST_MAC_CERT_SHA256`; the marker is removed from `dist-electron/` afterwards) and electron-builder for this
+platform with the version, bundle identifier `io.github.lwyq1209.mcp-for-novelai.test`, product name "MCP for NovelAI
+Test" and, on macOS, `LSUIElement` (never in front, no Dock icon), signed with the throwaway certificate through the
+same afterPack hook as a release. electron-builder's unpacked app is removed (and unregistered) at once; only the zip,
+setup or tar.gz stays.
+
+`rehearse` runs scenarios (`success`, `bad-signature`, `tamper`, `downgrade` (older, same, replayed manifest),
+`interrupt` (cut-off downloads, then a resumed retry that completes), `cancel`, `not-writable`, `kill-waiting`,
+`kill-launched`): each installs the older build afresh into `<work>/install-<n>/` (never `/Applications`) with a fresh,
+seeded data root `<work>/data-<n>/`, starts the fake GitHub (`lib/fake-release-server.mjs`: the latest-release API,
+GitHub's download redirect, Range requests, faults) with the scenario's fault, starts the app as the helper would
+(macOS `open -n -g` with the rehearsal variables, `--use-mock-keychain` and the dev-tools data marker), clicks Settings ›
+About › Check for updates and **Update and restart** through DevTools and checks the outcome (versions, the helper's
+states, leftovers, the data's row counts). The installed test apps are removed and unregistered from LaunchServices after
+every scenario. On macOS outside CI it starts a scenario only while the screen is locked or the user has been idle for
+120 s, stops it when the user comes back (and runs it again later; `--resume` skips scenarios already passed), and
+watches the front app during each (a test app in front stops everything). Results: `<work>/results.jsonl`.
 
 ## Examples
 

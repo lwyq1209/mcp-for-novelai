@@ -27,6 +27,8 @@
  *   logs/     default log folder
  *   image-inputs/  pasted and prepared source images (the only folder restored workbench
  *             inputs are admitted from)
+ *   updates/  the in-app update (electron/update/): downloads/ (the downloaded release file), <id>/ (one update's
+ *             helper script, its log and states), pending.json (an update handed to the helper); never in a backup
  *   output/   default image output folder of an isolated run (NOVELAI_DATA_DIR naming another folder
  *             than the default data root, isCustomDataRoot); otherwise the default is <Pictures>/MCP for NovelAI
  *   workspace/novelai/{library,study}-{inbox,exports}       inbox and export folders used

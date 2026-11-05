@@ -22,6 +22,9 @@ Examples of what matters most here:
 - the local bridge between the MCP server and the app (`127.0.0.1`, a per-run secret in `runtime/bridge.json`);
 - the MCP server's file access (inbox and export folders only, plain file names, no symbolic links);
 - anything that could make the app generate, and spend the user's balance, without an explicit `enqueue_recipes`, or
-  generate one intent twice under one request key.
+  generate one intent twice under one request key;
+- the in-app update: anything that installs code not signed with the update key (`SHA256SUMS.txt.sig`), a downgrade,
+  a file or redirect outside the release's GitHub download addresses, or a way to change what an official build trusts
+  (see [docs/updates.md](docs/updates.md#threat-model)).
 
 Prompts, metadata and other content are passed through as written by design; that alone is not a vulnerability.

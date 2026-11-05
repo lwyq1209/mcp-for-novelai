@@ -15,6 +15,7 @@ what to do next. This page explains the codes and situations people ask about mo
 - [Files in the inboxes](#files-in-the-inboxes)
 - [Opening the app the first time](#opening-the-app-the-first-time)
 - [Linux: the app does not start](#linux-the-app-does-not-start)
+- [Updates](#updates)
 - [Logs](#logs)
 
 ## The agent cannot reach the app (`unavailable`)
@@ -161,7 +162,8 @@ access › Advanced shows where the inboxes are now.
 
 ## Opening the app the first time
 
-- **macOS: "Apple could not verify …" / the app does not open.** Builds are ad-hoc signed and not notarized. Open the
+- **macOS: "Apple could not verify …" / the app does not open.** Builds are signed with the project's self-signed
+  certificate and not notarized. Open the
   app once, then go to **System Settings › Privacy & Security**, scroll to Security and click **Open Anyway** (it is
   offered for about an hour after the attempt), then confirm with your password. Control-click › Open no longer skips
   this check on current macOS.
@@ -195,6 +197,22 @@ sudo chmod 4755 chrome-sandbox
 
 Do this again after replacing the folder with a new version. Starting the app with `--no-sandbox` also works but turns
 Chromium's sandbox off; avoid it.
+
+## Updates
+
+- **"The update could not be verified"**: the release's signature, checksum, version or (macOS) code signature did not
+  match; nothing was installed. Try again later or use **Download**. A repeated failure on a correct network means a
+  release file was changed after signing: report it (see SECURITY.md).
+- **"Update after the queue"**: the queue has batches generating or waiting. Wait, or pause them on the queue page
+  (paused batches are kept).
+- **Only Download is offered**: the app cannot replace itself where it is (the reasons are listed in
+  [Updates](updates.md#when-the-app-cannot-update-itself)).
+- **"The update to x.y.z did not complete"**: the helper changed nothing or put the old version back; the reason is
+  shown, and `updates/<id>/helper.log` in the data folder has the details. macOS "did not allow moving the app": see
+  [App Management](updates.md#macos-signing-the-keychain-and-app-management).
+- **The app is gone after a power cut during an update** (macOS, Linux): the old version is in the hidden folder
+  `.mcp-for-novelai-update-…/old` next to where the app was; rename it back (for example to `MCP for NovelAI.app`), or
+  install the release by hand.
 
 ## Logs
 

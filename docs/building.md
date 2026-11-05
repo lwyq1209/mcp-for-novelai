@@ -131,8 +131,8 @@ temp folder are replaced for the run, so tests never read or write your real dat
 `novelai/client/dev-tools/` holds reusable tools for working on the app without your own data, a real token or paid
 generation: an isolated, windowed test client (`test-client.mjs`, started in the background by default), a scriptable
 driver for its window (`ui.mjs`), a local stand-in for the NovelAI API with fault injection (`fake-novelai.mjs`), a
-sample library generator (`seed-library.mjs`) and an MCP caller for a test data folder (`mcp.mjs`). They refuse real
-data folders. Usage, safety rules and examples: [`novelai/client/dev-tools/README.md`](../novelai/client/dev-tools/README.md).
+sample library generator (`seed-library.mjs`), an MCP caller for a test data folder (`mcp.mjs`) and the update
+rehearsal (`update-rehearsal.mjs`, with a fake GitHub release). They refuse real data folders. Usage, safety rules and examples: [`novelai/client/dev-tools/README.md`](../novelai/client/dev-tools/README.md).
 
 ## Packaging and releases
 
@@ -146,16 +146,27 @@ Each script builds the client, runs `notices:check` and then electron-builder, w
 (`--publish never`). The files go to `novelai/client/release/`: `MCP-for-NovelAI-<version>-mac-<arch>.{dmg,zip}`,
 `MCP-for-NovelAI-<version>-win-x64-setup.exe`, `MCP-for-NovelAI-<version>-linux-x64.tar.gz`. sharp's native
 packages are those npm installed for the machine that builds, so build each platform and architecture on its own
-system. macOS builds are ad-hoc signed (`identity: "-"`); nothing else is signed.
-`node .github/scripts/packaged-app-check.mjs` checks an output without opening a window: the file names, the
-resources, that sharp loads from the packaged `app.asar`, the packaged MCP server's tools and, on macOS, the signature.
+system. macOS apps are signed by electron-builder's afterPack hook (`novelai/client/scripts/mac-sign.mjs`): ad-hoc by
+default, with a certificate when `NAI_MAC_SIGNING=certificate` and `MAC_CSC_LINK` (a .p12 file or its base64) and
+`MAC_CSC_KEY_PASSWORD` are set (the release workflow does that with the project's fixed certificate; missing values fail
+the build). Nothing else is signed. `node .github/scripts/packaged-app-check.mjs` checks an output without opening a
+window: the file names, the resources, that sharp loads from the packaged `app.asar`, the packaged MCP server's tools,
+that no update rehearsal marker is packaged and, on macOS, the signature (the release certificate's SHA-256 and the
+designated requirement by default; `--mac-certificate adhoc` for a local ad-hoc build).
 
 Releases are built by `.github/workflows/release.yml` on GitHub-hosted runners (macOS arm64 and Intel, Windows x64,
 Linux x64) for a `v<version>` tag, after the CI tests. It runs the same scripts and the check, builds
 `third-party-sources-<version>.tar.gz` (`.github/scripts/third-party-sources.mjs`: the source archives of the
 libraries in sharp's libvips, checked against the vendored license files), writes `SHA256SUMS.txt`, and after a
-maintainer's approval creates a draft GitHub release with the `CHANGELOG.md` entry of that version as its notes. A
-maintainer publishes the draft by hand.
+maintainer's approval signs it for the in-app update (`SHA256SUMS.txt.sig`, with the secret `UPDATE_SIGNING_KEY` of the
+environment `release`: `.github/scripts/update-signature.mjs release`) and creates a draft GitHub release with the
+`CHANGELOG.md` entry of that version as its notes. A maintainer publishes the draft by hand. The in-app update, the
+signature format and the threat model: [Updates](updates.md).
+
+The update can be rehearsed without any real key: `node novelai/client/dev-tools/update-rehearsal.mjs prepare` and
+`rehearse` (two rehearsal builds, a fake GitHub, a real update; see the dev-tools README), and on CI with
+`gh workflow run ci.yml --ref <branch> -f update-rehearsal=true` (all three platforms, plus the release signing step and
+the macOS release build signed with a throwaway certificate).
 
 ## Third-party notices
 

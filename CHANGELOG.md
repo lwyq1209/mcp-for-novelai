@@ -2,6 +2,38 @@
 
 All notable changes to MCP for NovelAI are recorded here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.1.3
+
+### Added
+
+- **Update and restart**: when a newer version exists, the top bar and Settings › About & updates offer to install it.
+  The app downloads the release's `SHA256SUMS.txt` and its new Ed25519 signature `SHA256SUMS.txt.sig`, checks them with
+  the key built into the app, downloads its platform's file (macOS the zip of its architecture, Windows the setup,
+  Linux the tar.gz) only from the release's GitHub download address and GitHub's download hosts, through the app's proxy
+  setting, and checks its SHA-256. Anything that does not verify — another signature, a changed file, an older or the
+  same version, a manifest of another release — stops the update; nothing is installed. The download shows its progress,
+  can be cancelled and continues where it stopped.
+- macOS: the new version must also pass `codesign --verify --deep --strict` and carry the running app's certificate. A
+  helper started by the app swaps the bundles after the app quit, starts the new version and puts the old one back if it
+  does not start. Windows: the checked installer runs silently into the same per-user installation. Linux: the extracted
+  folder is replaced the same way as on macOS. The app keeps its path, so agent configurations stay valid.
+- The update waits while the queue has batches generating or waiting (manual ones too): **Update after the queue**.
+  The app quits normally before it installs; it is never killed.
+- The first start after an update says **Updated to x.y.z** with a link to its release notes, or why the update did not
+  complete; what the update left (the old version, the download) is removed.
+- Releases carry `SHA256SUMS.txt.sig`; [docs/updates.md](docs/updates.md) shows how to check it and describes the
+  threat model.
+- `dev-tools/update-rehearsal.mjs` and a fake GitHub release (`dev-tools/lib/fake-release-server.mjs`): a real update
+  between two rehearsal builds with throwaway keys; the CI workflow runs it on all three platforms on request.
+
+### Changed
+
+- macOS builds are signed with the project's fixed self-signed certificate instead of ad-hoc, so the Keychain's
+  **Always Allow** for the app survives updates. After installing 0.1.3 the Keychain asks one last time. Gatekeeper
+  treats the app as before (not notarized): the first manual install still needs **Open Anyway** and the `xattr`
+  command; an in-app update needs neither.
+- Updating from 0.1.2 to 0.1.3 is still done by hand: 0.1.2 does not have the in-app update.
+
 ## 0.1.2 - 2026-11-05
 
 ### Fixed

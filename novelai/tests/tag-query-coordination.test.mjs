@@ -320,7 +320,7 @@ test('coordinator strips caller representation state and reconstructs bodyless r
   const headers = new Headers(observed.headers);
   assert.equal(observed.credentials, 'omit'); assert.equal(observed.redirect, 'error');
   assert.equal(headers.has('authorization'), false); assert.equal(headers.has('cookie'), false); assert.equal(headers.has('range'), false);
-  assert.equal(headers.get('accept'), 'application/json'); assert.equal(headers.get('user-agent'), 'MCP-for-NovelAI/0.1.2 (public tag evidence)');
+  assert.equal(headers.get('accept'), 'application/json'); assert.equal(headers.get('user-agent'), 'MCP-for-NovelAI/0.1.3 (public tag evidence)');
   assert.equal(response.status, 204); assert.equal(await response.text(), ''); assert.equal(response.headers.get('content-encoding'), null);
   assert.equal(response.headers.get('set-cookie'), null); assert.equal(response.headers.get('x-private'), null);
 });

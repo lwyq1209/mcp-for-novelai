@@ -62,12 +62,13 @@
 | Linux，x64 | `MCP-for-NovelAI-<version>-linux-x64.tar.gz` |
 
 每个发布还附有 `SHA256SUMS.txt`，列出每个文件的 SHA-256 校验值：用 `shasum -a 256 <文件>`（macOS）、`sha256sum <文件>`
-（Linux）或 `Get-FileHash <文件>`（Windows PowerShell）算出下载文件的值，和其中对应的一行比对。随包图像库的源码也在
-发布里（见[致谢与许可](#致谢与许可)）。
+（Linux）或 `Get-FileHash <文件>`（Windows PowerShell）算出下载文件的值，和其中对应的一行比对。`SHA256SUMS.txt.sig`
+是它的签名，应用内更新会验证它（自己验证的方法见 [docs/updates.md](docs/updates.md#checking-a-release-yourself)，英文）。
+随包图像库的源码也在发布里（见[致谢与许可](#致谢与许可)）。
 
 **macOS**：不确定自己的 Mac 是哪种？苹果菜单 ›「**关于本机**」：写着「芯片 Apple M…」的是 Apple 芯片，写着「处理器
-Intel…」的是 Intel。（同一个应用也有 `.zip` 版。）打开磁盘映像，把应用拖进「应用程序」。应用是 ad-hoc 签名、没有经过
-公证，所以第一次会被系统拦下：先打开一次，再到「**系统设置 › 隐私与安全性**」，向下找到「安全性」，点「**仍要打开**」
+Intel…」的是 Intel。（同一个应用也有 `.zip` 版。）打开磁盘映像，把应用拖进「应用程序」。应用用本项目自己的（自签名）证书签名，但没有经过
+苹果公证，所以第一次会被系统拦下：先打开一次，再到「**系统设置 › 隐私与安全性**」，向下找到「安全性」，点「**仍要打开**」
 （尝试打开后约一小时内有这个按钮），输入登录密码确认。当前的 macOS（macOS 15 起）已经不能再用「按住 Control 点按 ›
 打开」绕过这一步。请从「应用程序」运行：直接在磁盘映像或下载文件夹里运行时，路径每次启动都会变，Agent 的配置会失效。
 
@@ -215,7 +216,9 @@ NOVELAI_DATA_DIR = "<data folder>"
     token 只发给 `*.novelai.net` 的地址；别的地址会被拒绝，除非你在「设置 › 账号与网络 › 自定义 API 地址」里允许。
   - Danbooru：你或 Agent 查询、搜索、保存 Danbooru 标签时访问 `danbooru.donmai.us`（包括 MCP 服务的 `tag_details`）；
     标签的示例图只在你点开（或拿来做封面）时从 `cdn.donmai.us` 读取。
-  - GitHub：`api.github.com`，检查有没有新版本（见[更新](#更新)）。下载链接在浏览器里打开。
+  - GitHub：`api.github.com`，检查有没有新版本；点「更新并重启」时，从 `github.com` 和 GitHub 的下载服务器
+    （`release-assets.githubusercontent.com`、`objects.githubusercontent.com`）下载那个版本的文件（见[更新](#更新)）。
+    「前往下载」在浏览器里打开发布页。
   - `raw.githubusercontent.com`：只在你运行可选的中文标签词库安装脚本（`novelai/scripts/install-tag-dictionary.mjs`）时。
   - 你设置的代理（「设置 › 账号与网络 › 代理」；默认跟随系统代理）。
 - MCP 服务只在 `127.0.0.1` 上和应用通信，凭应用写在数据文件夹里的密钥连接。应用没开时，MCP 服务可能会启动它
@@ -226,12 +229,25 @@ NOVELAI_DATA_DIR = "<data folder>"
 ## 更新
 
 安装版应用启动几秒后检查一次 [GitHub 最新发布](https://github.com/lwyq1209/mcp-for-novelai/releases/latest)，之后每
-6 小时一次。它只提示有新版本，点「前往下载」才打开发布页；从不自动下载或安装。在「**设置 › 关于与更新 › 自动检查更新**」
-里可以关掉；同一页的「检查更新」随时可用。从源码构建的应用不会自动检查。
+6 小时一次，有新版本时在顶栏和「**设置 › 关于与更新**」里显示。在那里可以关掉自动检查（「**自动检查更新**」）；「检查
+更新」随时可用。从源码构建的应用不会自动检查。
+
+- **「更新并重启」**：下载新版本，用应用内置的公钥核对发布里签了名的校验和清单（`SHA256SUMS.txt.sig`，Ed25519；macOS
+  还核对代码签名与证书），在原位置替换已安装的应用并重新打开。任何一项核对不过都不会安装（提示「无法验证更新」）。
+  下载显示进度，可以取消，中断后接着下载。队列里有正在生成或等待的批次时，应用会等（显示「**队列结束后更新**」；
+  想马上更新就先在队列页暂停它们），然后正常退出；素材库、队列、设置和图片都不变，Agent 的配置也继续有效。新版本
+  打不开时会自动换回旧版本。更新后第一次启动会显示「**已更新到 x.y.z**」和更新内容的链接。
+- **「前往下载」**：和以前一样打开发布页。应用不能替换自己时只有这一项：macOS 上直接从「下载」或磁盘映像里运行、
+  所在文件夹不可写、Windows 上为所有用户安装、Linux 文件夹里的 `chrome-sandbox` 由 root 设置过。
+- **从 0.1.2 升到 0.1.3 这一次要手动下载安装**（0.1.2 还没有这个功能）。macOS 上钥匙串会再问最后一次应用的 Safe Storage
+  密钥：从 0.1.3 起应用用固定的证书签名，点「**始终允许**」之后，以后的更新都不会再问。
+
+工作原理、自己验证发布的方法、macOS 的「App 管理」和威胁模型见 [docs/updates.md](docs/updates.md)（英文）。
 
 ## 文档
 
 - [MCP 工具参考](docs/mcp-tools.md)：每个工具、requestKey、队列、保留期、项目
+- [更新](docs/updates.md)：应用内更新、验证发布、威胁模型
 - [排障](docs/troubleshooting.md)：错误码与处理办法
 - [构建与开发](docs/building.md)：从源码运行、测试、开发工具
 - [更新记录](CHANGELOG.md) · [参与贡献](CONTRIBUTING.md) · [安全](SECURITY.md)

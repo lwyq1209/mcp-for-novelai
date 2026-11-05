@@ -63,12 +63,15 @@ Download the file for your system from the [latest release](https://github.com/l
 | Linux, x64 | `MCP-for-NovelAI-<version>-linux-x64.tar.gz` |
 
 Each release also has `SHA256SUMS.txt`, the SHA-256 checksum of every file: compare the line of your download with the
-output of `shasum -a 256 <file>` (macOS), `sha256sum <file>` (Linux) or `Get-FileHash <file>` (Windows PowerShell). The
-source code of the bundled image libraries is there too (see [Credits and license](#credits-and-license)).
+output of `shasum -a 256 <file>` (macOS), `sha256sum <file>` (Linux) or `Get-FileHash <file>` (Windows PowerShell).
+`SHA256SUMS.txt.sig` is its signature, which the in-app update checks ([docs/updates.md](docs/updates.md#checking-a-release-yourself)
+shows how to check it yourself). The source code of the bundled image libraries is there too (see
+[Credits and license](#credits-and-license)).
 
 **macOS** — not sure which Mac you have? Apple menu › **About This Mac**: "Chip: Apple M…" is Apple silicon,
 "Processor: Intel…" is Intel. (The same app also comes as a `.zip`.) Open the disk image and drag the app to
-**Applications**. The app is ad-hoc signed but not notarized, so macOS refuses it the first time: open it once, then go
+**Applications**. The app is signed with the project's own (self-signed) certificate but not notarized by Apple, so macOS
+refuses it the first time: open it once, then go
 to **System Settings › Privacy & Security**, scroll to **Security** and click **Open Anyway** (offered for about an hour
 after the attempt), and confirm with your password. Control-click › Open no longer skips this check on current macOS
 (since macOS 15). Run the app from Applications: run from the disk image or a downloads folder, its path changes on
@@ -233,8 +236,9 @@ inbox folders are.
     unless you allow them under Custom API address in Settings › Account & network.
   - Danbooru — `danbooru.donmai.us` when you or an agent look up, search or save Danbooru tags (also the MCP server's
     `tag_details`), and `cdn.donmai.us` for a tag's sample images, only when you open them (or use one as a cover).
-  - GitHub — `api.github.com` to check for a new release (see [Updates](#updates)). Download links open in your
-    browser.
+  - GitHub — `api.github.com` to check for a new release; with **Update and restart**, `github.com` and GitHub's
+    download hosts (`release-assets.githubusercontent.com`, `objects.githubusercontent.com`) for that release's files
+    (see [Updates](#updates)). **Download** opens the release page in your browser.
   - `raw.githubusercontent.com` only when you run the optional Chinese tag dictionary installer
     (`novelai/scripts/install-tag-dictionary.mjs`).
   - Your proxy, if you set one (Settings › Account & network › Proxy; it follows the system proxy by default).
@@ -247,14 +251,32 @@ inbox folders are.
 ## Updates
 
 An installed app checks the [latest GitHub release](https://github.com/lwyq1209/mcp-for-novelai/releases/latest) a few
-seconds after it starts and then every 6 hours. It only tells you that a newer version exists and opens its release
-page when you click **Download**; it never downloads or installs anything. Turn it off in **Settings › About & updates ›
-Check for updates automatically**; **Check for updates** there works any time. A build from source does not check on
-its own.
+seconds after it starts and then every 6 hours, and shows a newer version in the top bar and in **Settings › About &
+updates**. Turn the checks off there (**Check for updates automatically**); **Check for updates** works any time. A
+build from source does not check on its own.
+
+- **Update and restart** downloads the new version, checks it against the release's signed checksum list
+  (`SHA256SUMS.txt.sig`, Ed25519, with the key built into the app; on macOS also its code signature and certificate),
+  replaces the installed app in the same place and opens it again. Nothing that fails a check is installed ("The update
+  could not be verified"). The download shows its progress, can be cancelled and continues where it stopped. The app
+  waits while the queue has batches generating or waiting (**Update after the queue**; pause them on the queue page to
+  update now) and quits the normal way; your library, queue, settings and images stay as they are, and agent
+  configurations stay valid. If the new version does not start, the old one is put back. The first start afterwards
+  says **Updated to x.y.z**, with a link to what changed.
+- **Download** opens the release page, as before. It is the only choice where the app cannot replace itself: macOS run
+  from Downloads or the disk image, a folder you cannot write to, Windows installed for all users, a Linux folder whose
+  `chrome-sandbox` root set up.
+- **From 0.1.2 to 0.1.3 you update by hand** (0.1.2 cannot do this yet). On macOS the Keychain then asks once more
+  for the app's Safe Storage key: from 0.1.3 the app is signed with a fixed certificate, so **Always Allow** stays valid
+  across later updates.
+
+How it works, how to verify a release yourself, App Management on macOS and the threat model:
+[docs/updates.md](docs/updates.md).
 
 ## Documentation
 
 - [MCP tools reference](docs/mcp-tools.md) — every tool, request keys, the queue, retention, projects
+- [Updates](docs/updates.md) — the in-app update, verifying a release, the threat model
 - [Troubleshooting](docs/troubleshooting.md) — error codes and what to do
 - [Building and development](docs/building.md) — from source, tests, dev tools
 - [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
