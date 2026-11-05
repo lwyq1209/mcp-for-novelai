@@ -233,6 +233,19 @@ Library: `connectMcp({ data, project, clientName })` → `{ tools(), call(name, 
   — browsing: wheel-scroll to the middle of the library, open the image there, press → N times in the drawer (time per
   step, whether the grid follows), close it with Esc (where the focus and the scroll position end up), then time each
   filter (set, then back to 全部) until the count and the tiles stop changing. Measures only; nothing is written.
+- `node dev-tools/examples/image-fit.mjs [--out <folder under .tmp>] [--window 1440x900,1280x720] [--keep]` — large
+  image views show the whole image: a new library with full-size marked images of 832×1216, 1216×832, 1024×1024,
+  1664×2432 and 64×64 (and three Style preset images), then at each window size every view is measured through
+  DevTools, `img.getBoundingClientRect()` against its container with the drawn picture worked out from `object-fit`:
+  library detail (its ← → and full-screen buttons, the image as the drag source), library full screen (a click on
+  the image keeps it open, a click beside it closes it), library tiles, tag cards and a tag's cover, canvas stage and
+  full screen, the image-metadata reader, the generation preview (injected into the stage: nothing is generated),
+  the Inpaint stage and its mask canvas, and Style preset images and their full screen. A contained picture must lie
+  inside its container and the window, keep its aspect ratio and fill the container in at least one direction (or
+  show at its own size when it is smaller); a cropped cover must fill its box exactly. Exit code 1 and a list of
+  failures with their numbers when a check fails; `<out>/report.json` and screenshots in `<out>/shots`. The OS keeps
+  a window inside the screen's work area, so the report names the window size actually measured.
+
 The library grid is virtual (only the rows near the view are rendered, `src/library/VirtualGrid.tsx`): a tile scrolled
 past is no longer in the DOM. Scroll the library's scroll container `.lib-scroll` (e.g. `ui.mjs scroll '.lib-scroll'`,
 or wheel events over its middle), not a tile, which may leave the DOM after the first step; find tiles again after each
