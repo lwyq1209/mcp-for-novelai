@@ -63,7 +63,10 @@ active, it hides at once and logs `[dev-tools] … became the active app; it was
 5 s after the client is ready (so `start` takes 5 s longer), and `ui.mjs` / `mcp.mjs` watch during every command; a
 test client in front fails that run with `front_detected` (its times and pid in the error; `start` also stops the
 client). The start result carries `frontWatch: {hits: 0, samples, maxGapMs, from, to}`.
-`--foreground` shows it the ordinary way (the result says `background: true|false`). `--no-token` writes no token and no cached account (a user who has not connected NovelAI yet; with `--fake-novelai`
+`--foreground` shows it the ordinary way (the result says `background: true|false`). `--agent-start` starts it the way an
+agent's MCP server starts the app (`--started-by-agent=dev-tools`): its window then waits for the user (not shown on
+macOS and Linux, minimized on Windows) and its page is not throttled meanwhile, so the canvas tools can be checked
+against a window nobody sees (the result says `agentStart: true`). `--no-token` writes no token and no cached account (a user who has not connected NovelAI yet; with `--fake-novelai`
 the endpoints still point at the fake service, so a token typed into the window is verified there). `--first-run`
 leaves `hasOnboarded` false, so the app opens its first-run guide. `--port <n>|auto` opens DevTools on 127.0.0.1 (Chromium binds the debug port to loopback).
 `--build` runs `npm run build` first. `--project <dir>` sets `NOVELAI_PROJECT_ROOT`. The window is kept "visible"

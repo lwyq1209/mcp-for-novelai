@@ -7,8 +7,9 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
 ### Added
 
 - Agents open the app themselves: when it is not running, the MCP server starts it in the background and sends the
-  call once it is ready (at most about 30 seconds). The app never takes the focus — its first window is shown
-  without activating it, and its Dock or taskbar icon shows as usual. Only a call that certainly reached no app
+  call once it is ready (at most about 30 seconds). The app never takes the focus and keeps its window out of the
+  way: on macOS only its Dock icon appears (click it to show the window), on Windows it is minimized in the taskbar,
+  on Linux it runs in the background until you open it again. Only a call that certainly reached no app
   starts anything; a call whose outcome may be unknown is never sent again. One start per minute per server, one
   server per data folder at a time. `NOVELAI_MCP_AUTOSTART=0` turns it off. macOS starts the app through
   LaunchServices, Windows outside the agent's process tree (WMI), Linux as a detached process. A server run from

@@ -55,9 +55,12 @@ The server starts the app itself, so an agent never has to ask the user to open 
    tool and the app's window is still loading (`workspace_not_ready`, which the app answers before it runs
    anything), it sends it again every half second within the same 30 seconds.
 
-The app starts in the background and never takes the focus: its first window is shown without activating it
-(`showInactive`), and a second start by an agent never brings the running window forward; its Dock or taskbar icon
-shows as usual. macOS: LaunchServices (`open -n -g -a <app> --env NOVELAI_DATA_DIR=…`); Windows: `Win32_Process.Create`
+The app starts in the background, never takes the focus and keeps its window out of the way until the user opens it:
+on macOS the window is not shown — only the Dock icon appears, and clicking it shows the window; on Windows the window
+appears minimized in the taskbar without being activated, and its button restores it; on Linux the window is not shown
+and the app has no taskbar entry until the user opens the app again. Opening the app again shows the window on every
+platform; a second start by an agent never brings it forward. The window still loads, so the canvas tools work while
+it waits (its page is not throttled in the background meanwhile). macOS: LaunchServices (`open -n -g -a <app> --env NOVELAI_DATA_DIR=…`); Windows: `Win32_Process.Create`
 (WMI), outside the agent's process tree and job, so closing the agent's terminal does not close the app (if WMI fails,
 a detached process, and the server logs that); Linux: a detached process. The app gets the server's
 `NOVELAI_DATA_DIR` (or none, for the default data folder) and records in Settings › MCP access which agent started it.

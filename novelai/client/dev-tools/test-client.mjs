@@ -2,7 +2,7 @@
 // Isolated, windowed test client of THIS checkout.
 //   node dev-tools/test-client.mjs start --data <dir> [--port <cdp>|auto] [--fake-novelai <url>] [--locale zh-CN|en-US]
 //                                        [--size 1440x900] [--build] [--project <dir>] [--adopt] [--timeout <s>] [--quiet]
-//                                        [--no-token] [--first-run] [--foreground]
+//                                        [--no-token] [--first-run] [--foreground] [--agent-start]
 //   node dev-tools/test-client.mjs stop --data <dir> [--timeout <s>] [--force]
 //   node dev-tools/test-client.mjs status [--data <dir>]
 //   node dev-tools/test-client.mjs --help
@@ -19,7 +19,9 @@ import { canPrewriteToken, writeTestSettings } from './lib/settings.mjs';
 import { backgroundElectronExecutable } from './lib/background-app.mjs';
 import { FRONT_WATCH_AFTER_READY_MS, frontDetectedError, startFrontWatch } from './lib/front-watch.mjs';
 
-const START_OPTIONS = ['data', 'port', 'fake-novelai', 'locale', 'size', 'build', 'project', 'adopt', 'timeout', 'anlas', 'allow-occlusion', 'quiet', 'no-token', 'first-run', 'foreground'];
+const START_OPTIONS = ['data', 'port', 'fake-novelai', 'locale', 'size', 'build', 'project', 'adopt', 'timeout', 'anlas', 'allow-occlusion', 'quiet', 'no-token', 'first-run', 'foreground', 'agent-start'];
+/** --agent-start: the switch an agent's MCP server starts the app with (the window then waits hidden or minimized). */
+export const AGENT_START_SWITCH = '--started-by-agent=dev-tools';
 /** The client's switch for a window that appears without activating the app (electron/window-show.ts). */
 export const BACKGROUND_WINDOW_ENV = 'NAI_DEV_TOOLS_BACKGROUND';
 
@@ -136,7 +138,8 @@ export async function startClient(options) {
   // covered by other windows stays "visible", so DevTools input (wheel scrolling in particular) does not stall and
   // timers keep running. --allow-occlusion keeps Chromium's normal behaviour. The data marker goes last.
   const visibility = options['allow-occlusion'] ? [] : ['--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding'];
-  const args = [clientDir, '--use-mock-keychain', ...visibility, ...(port ? [`--remote-debugging-port=${port}`] : []), `${DATA_MARKER_SWITCH}=${dataRoot}`];
+  // --agent-start: started as an agent's MCP server starts it (electron/window-show.ts: its window is not shown on macOS).
+  const args = [clientDir, '--use-mock-keychain', ...visibility, ...(port ? [`--remote-debugging-port=${port}`] : []), ...(options['agent-start'] === true ? [AGENT_START_SWITCH] : []), `${DATA_MARKER_SWITCH}=${dataRoot}`];
   // The front-app watcher (its own process, 50 ms) runs from before the launch until 5 s after the client is ready.
   const watch = foreground ? null : await startFrontWatch({ dataRoot });
   const watched = async work => {
@@ -172,7 +175,7 @@ export async function startClient(options) {
       throw new ToolError('bridge_timeout', `The bridge did not appear within ${timeoutMs / 1000}s; the client is left running (stop it with: test-client stop --data ${dataRoot}).`, detail);
     }
     const bridgeMs = Date.now() - started;
-    const result = { ok: true, pid, dataRoot, port, cdp: port ? `http://127.0.0.1:${port}` : null, background: !foreground, fakeNovelai: fake ?? null, bridgeReadyMs: bridgeMs, logFile, settings: { endpoint: settings.endpoint, fakeTokenWritten: settings.tokenWritten, noToken: settings.noToken, firstRun: settings.firstRun, ...(fakeHealth ? { fakeNovelaiHealth: fakeHealth } : {}) } };
+    const result = { ok: true, pid, dataRoot, port, cdp: port ? `http://127.0.0.1:${port}` : null, background: !foreground, agentStart: options['agent-start'] === true, fakeNovelai: fake ?? null, bridgeReadyMs: bridgeMs, logFile, settings: { endpoint: settings.endpoint, fakeTokenWritten: settings.tokenWritten, noToken: settings.noToken, firstRun: settings.firstRun, ...(fakeHealth ? { fakeNovelaiHealth: fakeHealth } : {}) } };
     if (port) {
       const version = await pollUntil(() => cdpVersion(port), { timeoutMs: 20_000, intervalMs: 200 });
       if (!version) throw new ToolError('cdp_unavailable', `The DevTools endpoint on 127.0.0.1:${port} did not answer.`, { pid });
@@ -219,12 +222,12 @@ export function clientStatus(options) {
 
 async function main(argv) {
   if (helpRequested(argv)) return printUsage(import.meta.url);
-  const { positional, options } = parseArgs(argv, { booleans: ['build', 'adopt', 'force', 'allow-occlusion', 'quiet', 'no-token', 'first-run', 'foreground'] });
+  const { positional, options } = parseArgs(argv, { booleans: ['build', 'adopt', 'force', 'allow-occlusion', 'quiet', 'no-token', 'first-run', 'foreground', 'agent-start'] });
   const [command] = positional;
   if (command === 'start') return startClient(options);
   if (command === 'stop') return stopClient(options);
   if (command === 'status') return clientStatus(options);
-  throw new ToolError('usage', 'Usage: test-client.mjs start --data <dir> [--port <n>|auto] [--fake-novelai <url>] [--locale zh-CN|en-US] [--size WxH] [--build] [--quiet] [--no-token] [--first-run] [--foreground] | stop --data <dir> [--force] | status [--data <dir>] (test-client.mjs --help)');
+  throw new ToolError('usage', 'Usage: test-client.mjs start --data <dir> [--port <n>|auto] [--fake-novelai <url>] [--locale zh-CN|en-US] [--size WxH] [--build] [--quiet] [--no-token] [--first-run] [--foreground] [--agent-start] | stop --data <dir> [--force] | status [--data <dir>] (test-client.mjs --help)');
 }
 
 if (isMain(import.meta.url)) await runCli(main);

@@ -105,9 +105,11 @@ in its own executable, the bundled MCP server file and its data folder. The serv
 as Node (`ELECTRON_RUN_AS_NODE=1`), so you do not need Node.js. Then ask your agent to "list the NovelAI queue".
 
 **The agent opens the app itself.** When the app is not running, the first call that needs it makes the MCP server
-start the app in the background — it does not take the focus: the app you are using stays active and keeps your
-keyboard, the new window is shown without being activated, and its Dock or taskbar icon shows as usual — and the call goes on once the app is ready (at most about 30 seconds). Only a
-call that certainly reached no app does this; a call whose outcome may be unknown is never sent again. To turn it off,
+start the app in the background, and the call goes on once the app is ready (at most about 30 seconds). The app does
+not show its window or take the focus: on **macOS** only its Dock icon appears — click it to show the window; on
+**Windows** it appears minimized in the taskbar — click its button; on **Linux** it runs in the background without a
+taskbar entry — open the app again (for example from the application menu) to see its window. Only a call that
+certainly reached no app does this; a call whose outcome may be unknown is never sent again. To turn it off,
 add `NOVELAI_MCP_AUTOSTART=0` to the `env` of the agent's configuration: the agent then gets `unavailable` and asks you
 to open the app (it still waits for an app that is already starting). A server you run from source with your own Node
 never starts the app. On macOS the app starts through LaunchServices in the background; on Windows outside the agent's

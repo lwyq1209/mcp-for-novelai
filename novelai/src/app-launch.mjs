@@ -15,7 +15,8 @@
  *   environment plus NOVELAI_DATA_DIR (when the server has it), like an app opened from the Finder, and is not a
  *   child of this server. An `open` without --env is refused when a data folder must be passed.
  * - Windows: Win32_Process.Create (src/win32-process.mjs), outside the agent's process tree and job objects, with the
- *   first window shown without activation (SW_SHOWNOACTIVATE); when WMI fails definitely, a detached spawn instead
+ *   startup show state SW_SHOWNOACTIVATE (the same as the app's own first show: it then minimizes its window into the
+ *   taskbar without activating it, electron/window-show.ts); when WMI fails definitely, a detached spawn instead
  *   (logged: closing the agent's terminal may then close the app too).
  * - Linux: a detached spawn (own session, no stdio, unref'd).
  * On Windows and Linux the app gets this server's environment without ELECTRON_RUN_AS_NODE, the development and test

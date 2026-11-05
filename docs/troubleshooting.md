@@ -48,8 +48,9 @@ Also:
   again: the write may or may not have happened. For enqueues, use `lookup_enqueue` with the same request key.
 - `invalid_connection` means `bridge.json` exists but is not a valid local connection file. Restart the app; it writes a
   new one.
-- The app started by an agent does not take the focus: the app you are using stays active, the new window is shown
-  without being activated, and its Dock or taskbar icon shows as usual — click it to bring the window forward. Settings › MCP access lists which agent started it and when.
+- The app started by an agent keeps its window out of the way: on macOS only its Dock icon appears (click it to show
+  the window), on Windows it is minimized in the taskbar (click its button), on Linux it runs in the background without
+  a taskbar entry (open the app again to see the window). Settings › MCP access lists which agent started it and when.
 
 ## `host_outdated`
 

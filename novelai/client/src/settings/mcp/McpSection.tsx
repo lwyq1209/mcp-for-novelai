@@ -121,7 +121,7 @@ function Advanced({ info }: { info: McpAccessInfo }) {
         </div>
         <div className="mc-adv-block" data-testid="mcp-autostart">
           <b>{t('mcp.autostart')}</b>
-          <p>{t('mcp.autostartHint', { env: 'NOVELAI_MCP_AUTOSTART' })}</p>
+          <p>{t('mcp.autostartHint', { env: 'NOVELAI_MCP_AUTOSTART', where: t(info.platform === 'win32' ? 'mcp.autostartWhere.win32' : info.platform === 'linux' ? 'mcp.autostartWhere.linux' : 'mcp.autostartWhere.darwin') })}</p>
         </div>
         <div className="mc-adv-block">
           <b>{t('mcp.source')}</b>
