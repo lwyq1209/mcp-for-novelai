@@ -33,7 +33,8 @@ export async function connectMcp({ data, project, clientName = 'dev-tools', clie
   const missing = missingBuildOutputs(['mcpBundle']);
   if (missing.length) throw new ToolError('not_built', `The MCP bundle is missing (${missing.join(', ')}). Run: npm --prefix novelai/client run build.`);
   const { Client, StdioClientTransport } = await sdk();
-  const env = { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ELECTRON_RUN_AS_NODE: '1', [dataPaths.DATA_DIR_ENV]: dataRoot };
+  // A dev-tools server never starts an app by itself (src/app-autostart.mjs): start the test client with test-client.mjs.
+  const env = { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ELECTRON_RUN_AS_NODE: '1', [dataPaths.DATA_DIR_ENV]: dataRoot, NOVELAI_MCP_AUTOSTART: '0' };
   for (const key of ['SystemRoot', 'TEMP', 'TMP', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA']) if (process.env[key]) env[key] = process.env[key];
   if (project !== undefined) env[dataPaths.PROJECT_ROOT_ENV] = path.resolve(String(project));
   const transport = new StdioClientTransport({ command: electronExecutable(), args: [buildOutputs.mcpBundle], env, stderr });

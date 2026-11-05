@@ -63,7 +63,7 @@ async function host() {
 }
 
 async function connect(root: string, clientInfo: { name: string; version: string }) {
-  const env = { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', TMPDIR: os.tmpdir(), NOVELAI_DATA_DIR: root, NOVELAI_PROJECT_ROOT: path.join(root, 'project'), ...(process.env.NAI_MCP_ELECTRON ? { ELECTRON_RUN_AS_NODE: '1' } : {}) };
+  const env = { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', TMPDIR: os.tmpdir(), NOVELAI_DATA_DIR: root, NOVELAI_PROJECT_ROOT: path.join(root, 'project'), NOVELAI_MCP_AUTOSTART: '0', ...(process.env.NAI_MCP_ELECTRON ? { ELECTRON_RUN_AS_NODE: '1' } : {}) };
   const transport = new StdioClientTransport({ command: process.env.NAI_MCP_ELECTRON ?? process.execPath, args: [ENTRY], env, stderr: 'pipe' });
   const client = new Client(clientInfo);
   await client.connect(transport);

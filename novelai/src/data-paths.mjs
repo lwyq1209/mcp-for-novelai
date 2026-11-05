@@ -8,5 +8,5 @@ import dataPaths from '../client/shared/runtime/data-paths.cjs';
 
 export const {
   APP_DATA_DIR_NAME, DATA_DIR_ENV, PROJECT_ROOT_ENV, PROJECT_FOLDERS, PROJECT_ROOT_SOURCES,
-  appDataDirectory, resolveDataRoot, dataPathsFor, resolveDataPaths, resolveProjectRoot, projectDirectories,
+  appDataDirectory, resolveDataRoot, dataPathsFor, resolveDataPaths, resolveProjectRoot, projectDirectories, isTestProcess,
 } = dataPaths;

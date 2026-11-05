@@ -590,7 +590,7 @@ test('source stays a whitelist: one guarded bridge, fixed host methods per tool,
 
 // The module graph of the entry point.
 const SERVER_MODULES = ['client/shared/runtime/data-paths.cjs', 'contracts/generated/library-contracts.json', 'contracts/validate.mjs',
-  'src/asset-library-categories.mjs', 'src/asset-library-response.mjs', 'src/bridge-client.mjs', 'src/business-guards.mjs', 'src/recipe-queue.mjs', 'src/data-paths.mjs', 'src/history-cover.mjs', 'src/history-export.mjs', 'src/material-tools.mjs',
+  'src/app-autostart.mjs', 'src/app-launch.mjs', 'src/win32-process.mjs', 'src/asset-library-categories.mjs', 'src/asset-library-response.mjs', 'src/bridge-client.mjs', 'src/business-guards.mjs', 'src/recipe-queue.mjs', 'src/data-paths.mjs', 'src/history-cover.mjs', 'src/history-export.mjs', 'src/material-tools.mjs',
   'src/mcp-canvas-tools.mjs', 'src/mcp-core-tools.mjs', 'src/mcp-registry.mjs', 'src/mcp.mjs', 'src/platform-fs.mjs', 'src/queue-control.mjs', 'src/recipe-masks.mjs', 'src/recipe-sources.mjs', 'src/recipe-tool-schemas.mjs',
   'src/study-tools.mjs', 'src/tag-cooccurrence.mjs', 'src/tag-details.mjs', 'src/tag-query-coordinator.mjs', 'src/version.mjs'];
 for (const [entry, expected] of [['src/mcp.mjs', SERVER_MODULES]]) {
@@ -617,7 +617,7 @@ for (const [entry, name] of [['src/mcp.mjs', 'novelai']]) {
     const runtimeDir = await mkdtemp(join(tmpdir(), 'novelai-business-stdio-'));
     t.after(() => rm(runtimeDir, { recursive: true, force: true }));
     const transport = new StdioClientTransport({ command: process.execPath, args: [join(root, entry)], cwd: resolve(root, '..'), stderr: 'pipe',
-      env: { PATH: process.env.PATH ?? '', NOVELAI_DATA_DIR: runtimeDir, NOVELAI_TAG_QUERY_CACHE_DIR: join(runtimeDir, 'tag-cache') } });
+      env: { PATH: process.env.PATH ?? '', NOVELAI_DATA_DIR: runtimeDir, NOVELAI_TAG_QUERY_CACHE_DIR: join(runtimeDir, 'tag-cache'), NOVELAI_MCP_AUTOSTART: '0' } });
     const client = new Client({ name: 'stdio-test', version: '1' });
     await client.connect(transport);
     t.after(() => client.close());

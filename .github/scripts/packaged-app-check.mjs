@@ -88,10 +88,11 @@ function appFromArtifact(platform, arch, release, artifacts, scratch) {
   return { app: path.join(release, arch === 'x64' ? 'win-unpacked' : `win-${arch}-unpacked`), from: 'win-unpacked' };
 }
 
-/** Node-mode environment of the packaged executable: no inherited NOVELAI_/NAI_ switches, a throwaway data root. */
+/** Node-mode environment of the packaged executable: no inherited NOVELAI_/NAI_ switches, a throwaway data root, and
+ * no automatic start of the app (the MCP server would otherwise start the packaged app for the unavailable call). */
 function nodeModeEnv(data, project) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(NOVELAI_|NAI_|ELECTRON_)/i.test(key)));
-  return { ...env, ELECTRON_RUN_AS_NODE: '1', NOVELAI_DATA_DIR: data, NOVELAI_PROJECT_ROOT: project };
+  return { ...env, ELECTRON_RUN_AS_NODE: '1', NOVELAI_DATA_DIR: data, NOVELAI_PROJECT_ROOT: project, NOVELAI_MCP_AUTOSTART: '0' };
 }
 
 const SHARP_PROBE = `

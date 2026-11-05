@@ -122,7 +122,7 @@ try {
 
   phase = 'MCP read and native image';
   mcp = new Client({ name: 'novelai-live-acceptance', version: '0.1.0' });
-  await mcp.connect(new StdioClientTransport({ command: process.execPath, args: [resolve(root, 'src/mcp.mjs')], cwd: root, env: { NOVELAI_DATA_DIR: dataDir }, stderr: 'pipe' }));
+  await mcp.connect(new StdioClientTransport({ command: process.execPath, args: [resolve(root, 'src/mcp.mjs')], cwd: root, env: { NOVELAI_DATA_DIR: dataDir, NOVELAI_MCP_AUTOSTART: '0' }, stderr: 'pipe' }));
   const call = async (name, args, expectedError) => {
     report.mcpCalls.push(name);
     const result = await mcp.callTool({ name, arguments: args });

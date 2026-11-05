@@ -72,7 +72,7 @@ test('without NOVELAI_DATA_DIR the data root is mcp-for-novelai in the platform 
 test('the stdio server started from source finds the client through the same data root', async t => {
   const data = await temp(t, 'nai-data-root-stdio-');
   const seen = await fakeBridge(t, data);
-  const transport = new StdioClientTransport({ command: process.execPath, args: [join(root, 'src', 'mcp.mjs')], cwd: tmpdir(), stderr: 'pipe', env: { PATH: process.env.PATH ?? '', NOVELAI_DATA_DIR: data } });
+  const transport = new StdioClientTransport({ command: process.execPath, args: [join(root, 'src', 'mcp.mjs')], cwd: tmpdir(), stderr: 'pipe', env: { PATH: process.env.PATH ?? '', NOVELAI_DATA_DIR: data, NOVELAI_MCP_AUTOSTART: '0' } });
   const client = new Client({ name: 'data-root', version: '1' });
   await client.connect(transport);
   t.after(() => client.close());
