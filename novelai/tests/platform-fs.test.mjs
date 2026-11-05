@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { readFile, mkdtemp, writeFile, symlink, rm, mkdir, open, unlink, lstat, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createPlatformFs, syncDirectory, openNoFollow, renameReplace } from '../src/platform-fs.mjs';
+import { constants } from 'node:fs';
+import { createPlatformFs, syncDirectory, openNoFollow, renameReplace, createExclusive } from '../src/platform-fs.mjs';
 
 const vectors = JSON.parse(await readFile(new URL('./fixtures/platform-fs-vectors.json', import.meta.url), 'utf8'));
 const win32 = process.platform === 'win32';
@@ -44,6 +45,43 @@ test('renameReplace vectors: bounded win32 retry only for EPERM/EBUSY/EACCES', a
     const fake = fakeIo(vector); const result = await outcome(() => fake.fs.renameReplace('a', 'b'));
     assert.equal(result, vector.expect, JSON.stringify(vector)); assert.equal(fake.renames, vector.renames, JSON.stringify(vector)); assert.deepEqual(fake.sleeps, vector.sleeps, JSON.stringify(vector));
   }
+});
+
+test('createExclusive: POSIX passes the caller flags through; win32 refuses any entry at the name and a link swapped in after the create', async () => {
+  const coded = code => Object.assign(new Error(code), { code });
+  const fileStat = (ino, type = 'file') => ({ isSymbolicLink: () => type === 'symlink', isFile: () => type === 'file', dev: 1n, ino });
+  const run = async (platform, entries, opened = fileStat(7n)) => {
+    const calls = [], queue = [...entries];
+    const handle = { stat: async () => { calls.push('fstat'); return opened; }, close: async () => { calls.push('close'); } };
+    const io = {
+      open: async (file, flags, mode) => { calls.push(`open:${file}:${flags}:${mode}`); return handle; },
+      lstat: async file => { calls.push(`lstat:${file}`); const next = queue.shift(); if (next === 'missing') throw coded('ENOENT'); return next; },
+    };
+    let result;
+    try { result = await createPlatformFs({ platform, io }).createExclusive('f', 1234, 0o600); } catch (error) { result = error.code; }
+    return { result: result === handle ? 'created' : result, calls };
+  };
+  assert.deepEqual(await run('linux', []), { result: 'created', calls: ['open:f:1234:384'] });
+  assert.deepEqual(await run('darwin', []), { result: 'created', calls: ['open:f:1234:384'] });
+  const create = `open:f:${constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL}:384`;
+  assert.deepEqual(await run('win32', ['missing', fileStat(7n)]), { result: 'created', calls: ['lstat:f', create, 'fstat', 'lstat:f'] });
+  for (const existing of [fileStat(3n), fileStat(3n, 'symlink'), fileStat(3n, 'directory')])
+    assert.deepEqual(await run('win32', [existing]), { result: 'EEXIST', calls: ['lstat:f'] }, 'an existing entry, a (dangling) link or a folder is never created through');
+  assert.deepEqual(await run('win32', ['missing', fileStat(9n, 'symlink')]), { result: 'ELOOP', calls: ['lstat:f', create, 'fstat', 'lstat:f', 'close'] }, 'a link swapped in before the create');
+  assert.deepEqual(await run('win32', ['missing', fileStat(8n)]), { result: 'ELOOP', calls: ['lstat:f', create, 'fstat', 'lstat:f', 'close'] }, 'the name is another file than the one opened');
+});
+
+test('win32: createExclusive never creates through a dangling symlink and creates a new file', { skip: !win32 && 'win32 only' }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'platform-fs-')); const link = join(dir, 'link.png'), outside = join(dir, 'outside.png'), fresh = join(dir, 'fresh.png');
+  try {
+    await symlink(outside, link, 'file');
+    await assert.rejects(createExclusive(link, 0, 0o600), { code: 'EEXIST' });
+    await assert.rejects(lstat(outside), { code: 'ENOENT' }, 'nothing was created at the link target');
+    const handle = await createExclusive(fresh, 0, 0o600);
+    try { await handle.writeFile('new'); } finally { await handle.close(); }
+    assert.equal(await readFile(fresh, 'utf8'), 'new');
+    await assert.rejects(createExclusive(fresh, 0, 0o600), { code: 'EEXIST' });
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
 test('win32: a symlink is refused and a regular file opens', { skip: !win32 && 'win32 only' }, async () => {

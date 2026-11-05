@@ -15,12 +15,13 @@
  * already at that name is never followed or replaced.
  */
 import { constants } from 'node:fs';
-import { lstat, mkdir, open, realpath, unlink } from 'node:fs/promises';
+import { lstat, mkdir, realpath, unlink } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { BridgeError } from './bridge-client.mjs';
 import { normalizeAssetLibraryRequest } from './asset-library-categories.mjs';
 import { assetLibraryHostRequest, assetLibraryResponse } from './asset-library-response.mjs';
 import { historyCoverFileName } from './history-cover.mjs';
+import { createExclusive as createFile } from './platform-fs.mjs';
 
 export const HISTORY_EXPORT_KEYS = Object.freeze(['action', 'kind', 'id', 'revision', 'assetId']);
 /** How many numbered names are tried after the plain one before the export is refused. */
@@ -63,8 +64,9 @@ async function createExclusive(directory, fileName, bytes) {
   for (let attempt = 0; attempt < HISTORY_EXPORT_NAME_ATTEMPTS; attempt++) {
     const target = resolve(base, numbered(fileName, attempt));
     let handle;
-    // O_EXCL: an existing file, directory or symlink (also a dangling one) at this name refuses the create.
-    try { handle = await open(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600); }
+    // O_EXCL: an existing file, directory or symlink (also a dangling one) at this name refuses the create (on win32,
+    // where O_EXCL alone follows a dangling symlink, platform-fs createExclusive checks the name before and after).
+    try { handle = await createFile(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600); }
     catch (error) { if (error?.code === 'EEXIST') continue; throw error; }
     try { await handle.writeFile(bytes); await handle.sync(); }
     catch (error) { await handle.close().catch(() => {}); await unlink(target).catch(() => {}); throw error; }
