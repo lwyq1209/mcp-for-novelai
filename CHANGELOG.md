@@ -2,7 +2,7 @@
 
 All notable changes to MCP for NovelAI are recorded here. Versions follow [Semantic Versioning](https://semver.org).
 
-## 0.1.2
+## 0.1.2 - 2026-11-05
 
 ### Fixed
 
