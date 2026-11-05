@@ -78,7 +78,7 @@ export const SETTINGS_STRINGS = {
   'set.net.scope': ['走代理的请求', 'Requests through the proxy'],
   'set.net.scopeHint': ['关掉的那项直连。', 'A request that is off connects directly.'],
   'set.net.forNai': ['NovelAI（验证、出图、放大等）', 'NovelAI (verifying, generating, upscaling and more)'],
-  'set.net.forUpdate': ['新版本检查（GitHub）', 'New-version check (GitHub)'],
+  'set.net.forUpdate': ['应用更新（GitHub：检查与下载）', 'App updates (GitHub: check and download)'],
   'set.net.endpoint': ['自定义 API 地址', 'Custom API address'],
   'set.net.endpointHint': ['一般不需要改。', 'Rarely needed.'],
   'set.net.apiBase': ['账号接口', 'Account API'],

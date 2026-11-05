@@ -58,7 +58,7 @@ All of it runs in the app's main process; the window only shows the state.
    The file goes to `updates/downloads/` in the data folder as `<name>.part` (an interrupted download continues with an
    HTTP Range request; up to 3 automatic tries, then **Try again**), at most 1 GiB, and its SHA-256 must be the one in
    the signed manifest, or it is deleted and nothing is installed. Every request uses the app's proxy setting (Settings ›
-   Account & network › Proxy, the "app updates" category), like the update check.
+   Account & network › Proxy, **App updates (GitHub: check and download)**), like the update check.
 4. **Staged and checked next to the app.**
    - macOS: the zip is extracted with `ditto` into `.mcp-for-novelai-update-<random>/` in the folder of the app (the
      same volume). It must hold exactly one `.app` with this app's bundle identifier and the release's version, pass
