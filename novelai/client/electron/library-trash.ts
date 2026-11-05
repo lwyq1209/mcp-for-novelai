@@ -96,7 +96,9 @@ async function sameFile(a: string, b: string) {
   const [left, right] = [await lstatOrNull(a), await lstatOrNull(b)];
   return !!left && !!right && left.isFile() && right.isFile() && left.size === right.size && await digestFile(a) === await digestFile(b);
 }
-async function syncFile(file: string) { const handle = await fs.open(file, 'r'); try { await handle.sync(); } finally { await handle.close(); } }
+// Windows flushes a file (FlushFileBuffers) only through a handle with write access (read-only it is EPERM), so there
+// the file is opened for writing; POSIX flushes through a read-only handle, as always.
+async function syncFile(file: string) { const handle = await fs.open(file, process.platform === 'win32' ? 'r+' : 'r'); try { await handle.sync(); } finally { await handle.close(); } }
 
 /** The cover file name set_cover_from_history gives a tag cover made from one history original (novelai/src/history-cover.mjs). */
 export function historyCoverNamePattern(historyId: string) {
