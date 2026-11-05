@@ -19,7 +19,8 @@
  *   (logged: closing the agent's terminal may then close the app too).
  * - Linux: a detached spawn (own session, no stdio, unref'd).
  * On Windows and Linux the app gets this server's environment without ELECTRON_RUN_AS_NODE, the development and test
- * switches and the calling agent's session markers; NOVELAI_DATA_DIR stays exactly as the server has it.
+ * switches and the calling agent's session markers; NOVELAI_DATA_DIR names the server's own data folder (resolved like
+ * data-paths.cjs does, so a relative value means the same folder), or stays absent.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -116,7 +117,9 @@ const nonBlank = value => typeof value === 'string' && value.trim() ? value : nu
  */
 export async function launchApp(app, { client = null, env = process.env, spawnImpl = spawn, runSync = spawnSync, outsideJob = createOutsideJobAsync, log = () => {}, exists = existsSync } = {}) {
   const agentArgument = startedByAgentArgument(client);
-  const dataDir = nonBlank(env[DATA_DIR_ENV]);
+  // The data folder this server uses (as data-paths.cjs resolves it), so a relative value names the same folder for
+  // the app, which starts in another working directory.
+  const dataDir = nonBlank(env[DATA_DIR_ENV]) ? pathFor(app.platform).resolve(env[DATA_DIR_ENV].trim()) : null;
   if (app.platform === 'darwin') {
     if (dataDir && !openSupportsEnv({ run: runSync })) return { ok: false, reason: 'This macOS `open` cannot pass the data folder (no --env option); the app was not started.' };
     const args = macOpenArguments(app, { dataDir, agentArgument });
@@ -137,6 +140,7 @@ export async function launchApp(app, { client = null, env = process.env, spawnIm
     });
   }
   const childEnv = appEnvironment(env, app.platform);
+  if (dataDir) for (const key of Object.keys(childEnv)) if (key === DATA_DIR_ENV || (app.platform === 'win32' && key.toUpperCase() === DATA_DIR_ENV)) childEnv[key] = dataDir;
   const cwd = pathFor(app.platform).dirname(app.executable);
   const args = [...app.args, agentArgument];
   if (app.platform === 'win32') {

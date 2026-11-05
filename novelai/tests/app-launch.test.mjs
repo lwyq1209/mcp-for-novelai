@@ -135,6 +135,10 @@ test('Linux launch: a detached spawn without stdio, unref\'d; a spawn error is a
   assert.deepEqual(spawns[0].args, ['/repo/novelai/client', '--started-by-agent']);
   assert.equal(spawns[0].options.detached, true); assert.equal(spawns[0].options.stdio, 'ignore'); assert.equal(child.unrefed, true);
   assert.deepEqual(spawns[0].options.env, { PATH: '/bin' });
+  // A relative data folder names the server's folder for the app too (its working directory differs).
+  const relative = [];
+  await launchApp(app, { env: { NOVELAI_DATA_DIR: ' rel/data ' }, spawnImpl: (command, args, options) => { relative.push(options.env); return fakeChild(); } });
+  assert.equal(relative[0].NOVELAI_DATA_DIR, join(process.cwd(), 'rel', 'data'));
   assert.deepEqual(await launchApp(app, { env: {}, spawnImpl: () => fakeChild({ spawnError: Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }) }) }), { ok: false, reason: 'the app could not be started (spawn ENOENT)' });
 });
 
