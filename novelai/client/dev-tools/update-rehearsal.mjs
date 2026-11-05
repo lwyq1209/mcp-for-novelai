@@ -332,7 +332,12 @@ async function scenario(name, context, index) {
         server.setFaults({ latestTag: tag });
         const row = await checkInAbout(page);
         if (expected === 'current') { check(`${label}: no install button`, row, !row.install); const started = await page.evaluate(() => window.naiDesktop.startUpdate()); check(`${label}: start says no update`, started.error, started.error?.code === 'no_update'); }
-        else { await clickInstall(page); const failed = await waitPhase(page, ['failed']); check(`${label}: refused`, failed.error, failed.error?.code === 'verify_failed' && failed.error?.reason === 'version_mismatch'); }
+        else {
+          await clickInstall(page);
+          // The failure of this attempt (the version it tried), not the earlier "no newer version".
+          const failed = await pollUntil(async () => { const progress = await progressOf(page).catch(() => null); return progress?.phase === 'failed' && progress.version === tag.slice(1) ? progress : null; }, { timeoutMs: 120_000, intervalMs: 250 });
+          check(`${label}: refused`, failed?.error ?? null, failed?.error?.code === 'verify_failed' && failed?.error?.reason === 'version_mismatch');
+        }
         guard.check();
       }
       check('nothing staged', stagingLeft(parent), stagingLeft(parent).length === 0);
