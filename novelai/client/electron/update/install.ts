@@ -87,7 +87,8 @@ export async function installSupport(input: { platform: NodeJS.Platform; execPat
   if (platform === "win32") {
     const programFiles = [input.env.ProgramFiles, input.env["ProgramFiles(x86)"], input.env.ProgramW6432].filter((value): value is string => typeof value === "string" && value.length > 0);
     if (programFiles.some(folder => located.target.toLowerCase().startsWith(`${folder.toLowerCase().replace(/\\+$/, "")}\\`))) return "per_machine";
-    try { await deps.fs.lstat(p.join(located.target, "Uninstall MCP for NovelAI.exe")); } catch { return "not_installed"; }
+    // The NSIS installer leaves "Uninstall <product name>.exe" next to "<product name>.exe".
+    try { await deps.fs.lstat(p.join(located.target, `Uninstall ${p.basename(located.executable, ".exe")}.exe`)); } catch { return "not_installed"; }
     if (!(await writable(deps, located.target))) return "not_writable";
     return null;
   }

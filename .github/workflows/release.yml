@@ -7,13 +7,25 @@
 #
 # Release files: MCP-for-NovelAI-<version>-mac-arm64.{dmg,zip}, …-mac-x64.{dmg,zip}, …-win-x64-setup.exe (NSIS),
 # …-linux-x64.tar.gz, third-party-sources-<version>.tar.gz (source code of the libraries in the bundled libvips, some of
-# them LGPL; .github/scripts/third-party-sources.mjs) and SHA256SUMS.txt.
+# them LGPL; .github/scripts/third-party-sources.mjs), SHA256SUMS.txt and SHA256SUMS.txt.sig.
+#
+# The in-app update (novelai/client/electron/update/) trusts a release only through SHA256SUMS.txt.sig: the Ed25519
+# signature (base64 of the raw 64 bytes) over the exact bytes of SHA256SUMS.txt, made in the last job with the secret
+# UPDATE_SIGNING_KEY of the environment "release" (.github/scripts/update-signature.mjs). SHA256SUMS.txt is the update
+# manifest: the app takes its platform's file by the fixed names above (macOS the zip of its architecture, Windows the
+# setup, Linux the tar.gz) and checks that every MCP-for-NovelAI file in it carries the tag's version.
+#
+# macOS builds are signed with the project's fixed self-signed certificate (repository secrets MAC_CSC_LINK, the base64
+# .p12, and MAC_CSC_KEY_PASSWORD) by electron-builder's afterPack hook (novelai/client/scripts/mac-sign.mjs; electron-
+# builder itself does not sign with an untrusted certificate), so the designated requirement is the same in every
+# version; the build fails when the secrets are missing (never an ad-hoc fallback), and packaged-app-check.mjs checks
+# the certificate's SHA-256, the requirement and that the dmg and the zip hold the same signature.
 #
 # electron-builder never publishes (--publish never, build.publish null). The draft release is created by the last job,
 # which runs in the protected environment "release" (required reviewers, deployments limited to v* tags: configure it in
 # the repository settings BEFORE the first tag push, or GitHub creates it unprotected). A maintainer checks the draft and
-# publishes it by hand. Nothing here needs a secret; Windows signing (SignPath) runs only once its secret and variables
-# exist. Actions are pinned to a full commit SHA (the version is in the comment).
+# publishes it by hand. Windows signing (SignPath) runs only once its secret and variables exist. Actions are pinned to
+# a full commit SHA (the version is in the comment).
 name: Release
 
 on:
@@ -176,13 +188,30 @@ jobs:
         working-directory: novelai/client
         run: node node_modules/electron/install.js
 
-      # build (renderer, main process, MCP bundle), notices:check, then electron-builder --publish never.
+      # The macOS signing certificate must be there: without it the build stops instead of signing ad-hoc.
+      - name: The macOS code signing certificate is configured
+        if: startsWith(matrix.name, 'mac-')
+        env:
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+        run: |
+          if [ -z "$MAC_CSC_LINK" ] || [ -z "$MAC_CSC_KEY_PASSWORD" ]; then
+            echo "::error::The repository secrets MAC_CSC_LINK and MAC_CSC_KEY_PASSWORD are needed to sign the macOS app."
+            exit 1
+          fi
+
+      # build (renderer, main process, MCP bundle), notices:check, then electron-builder --publish never. On macOS the
+      # afterPack hook signs the app with the certificate (NAI_MAC_SIGNING=certificate) before the dmg and the zip are
+      # made; the other platforms never see the certificate secrets.
       - name: Package (electron-builder)
         working-directory: novelai/client
         env:
           MATRIX_SCRIPT: ${{ matrix.script }}
           MATRIX_ARCH: ${{ matrix.arch }}
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          NAI_MAC_SIGNING: ${{ startsWith(matrix.name, 'mac-') && 'certificate' || '' }}
+          MAC_CSC_LINK: ${{ startsWith(matrix.name, 'mac-') && secrets.MAC_CSC_LINK || '' }}
+          MAC_CSC_KEY_PASSWORD: ${{ startsWith(matrix.name, 'mac-') && secrets.MAC_CSC_KEY_PASSWORD || '' }}
         run: npm run "$MATRIX_SCRIPT" -- "--$MATRIX_ARCH"
 
       - name: Check the packaged app and stage its installers
@@ -302,6 +331,23 @@ jobs:
         working-directory: files
         run: sha256sum --check --strict SHA256SUMS.txt
 
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      # The update signature: SHA256SUMS.txt.sig (base64 of the raw Ed25519 signature over SHA256SUMS.txt). Fails when
+      # the secret is missing, when the key is not the one whose public half is built into the app
+      # (electron/update/source.ts), and when OpenSSL does not verify the result (the check docs/updates.md gives users).
+      # The CI update rehearsal runs the same command with a throwaway key (ci.yml, update-rehearsal-signing).
+      - name: Sign SHA256SUMS.txt for the in-app update
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          node .github/scripts/update-signature.mjs release --dir files | tee "$RUNNER_TEMP/signature.json"
+          { echo '```json'; cat "$RUNNER_TEMP/signature.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Release notes from CHANGELOG.md
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
@@ -328,7 +374,8 @@ jobs:
           - Linux: `-linux-x64.tar.gz`; extract it to a folder that stays where it is and run `mcp-for-novelai` in it.
           - `third-party-sources-<version>.tar.gz`: the source code of the libraries in the bundled libvips, some of them
             under the LGPL (see THIRD_PARTY_NOTICES.md).
-          - `SHA256SUMS.txt`: the SHA-256 checksum of every file of this release.
+          - `SHA256SUMS.txt`: the SHA-256 checksum of every file of this release; `SHA256SUMS.txt.sig`: its Ed25519
+            signature, which the in-app update checks (docs/updates.md shows how to check it yourself).
           FILES
 
       - name: Create or update the draft release

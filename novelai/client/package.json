@@ -131,7 +131,7 @@
     "mac": {
       "icon": "build/icon.icns",
       "category": "public.app-category.graphics-design",
-      "identity": "-",
+      "identity": null,
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
       "extraResources": [
@@ -152,7 +152,8 @@
         "tar.gz"
       ]
     },
-    "npmRebuild": false
+    "npmRebuild": false,
+    "afterPack": "scripts/mac-sign-hook.cjs"
   },
   "allowScripts": {
     "electron@42.11.0": true,

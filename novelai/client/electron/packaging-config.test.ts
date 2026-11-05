@@ -29,10 +29,26 @@ describe("packaging configuration", () => {
     expect(manifest.scripts["dist:linux"]).toContain("electron-builder --linux tar.gz ");
   });
 
-  it("builds macOS per architecture (the arch comes from the command line), ad-hoc signed without a Gatekeeper assessment", () => {
+  it("builds macOS per architecture (the arch comes from the command line), signed by its own afterPack hook without a Gatekeeper assessment", () => {
     expect(build.mac.target).toEqual(["dmg", "zip"]);
     expect(build.mac).not.toHaveProperty("x64ArchFiles");
-    expect(build.mac).toMatchObject({ identity: "-", hardenedRuntime: false, gatekeeperAssess: false });
+    // electron-builder signs nothing itself (it only uses trusted identities); scripts/mac-sign-hook.cjs signs the app
+    // before the dmg and the zip are made: with the release certificate (NAI_MAC_SIGNING=certificate) or ad-hoc.
+    expect(build.mac).toMatchObject({ identity: null, hardenedRuntime: false, gatekeeperAssess: false });
+    expect(build.afterPack).toBe("scripts/mac-sign-hook.cjs");
+    const hook = readFileSync("scripts/mac-sign-hook.cjs", "utf8");
+    expect(hook).toMatch(/electronPlatformName !== 'darwin'/);
+    const signer = readFileSync("scripts/mac-sign.mjs", "utf8");
+    // Certificate signing never falls back to ad-hoc when its secrets are missing.
+    expect(signer).toMatch(/NAI_MAC_SIGNING !== 'certificate'\) return \{ mode: 'adhoc' \}/);
+    expect(signer).toMatch(/needs MAC_CSC_LINK and MAC_CSC_KEY_PASSWORD/);
+    expect(signer).toMatch(/certificate leaf = H/);
+  });
+
+  it("writes the update rehearsal marker only for NAI_UPDATE_TEST_BUILD=1 builds", () => {
+    const script = readFileSync("scripts/build-electron.mjs", "utf8");
+    expect(script).toMatch(/if \(process\.env\.NAI_UPDATE_TEST_BUILD === '1'\) \{\n  await writeFile\(path\.join\(client, 'dist-electron', 'update-test-mode\.json'\)/);
+    expect(script.match(/writeFile\(path\.join\(client, 'dist-electron', 'update-test-mode\.json'\)/g)?.length).toBe(1);
   });
 
   it("keeps the app in app.asar but unpacks sharp's native addon and libvips (Linux ships libvips-cpp.so.<version>, which smart unpacking misses)", () => {

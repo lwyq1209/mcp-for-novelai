@@ -4,6 +4,7 @@
 // executable only runs as Node (ELECTRON_RUN_AS_NODE=1) with a throwaway NOVELAI_DATA_DIR.
 //
 //   node .github/scripts/packaged-app-check.mjs [--release <dir>] [--arch x64|arm64] [--app <unpacked app>] [--json <file>] [--stage <dir>] [--summary <file>]
+//                                              [--mac-certificate <sha256>] [--app-id <id>] [--product-name <name>] [--update-test-build]
 //
 // --release  electron-builder output folder (default novelai/client/release)
 // --arch     architecture of this build (default: the running Node's)
@@ -12,6 +13,12 @@
 //            Windows: win-unpacked (the folder the NSIS installer installs)
 // --stage    when every check passes, copy the expected artifacts (and only those) into this folder
 // --summary  append a short Markdown summary to this file (the workflow passes $GITHUB_STEP_SUMMARY)
+// --mac-certificate  the SHA-256 of the certificate the macOS app must be signed with (default: the release certificate,
+//            MAC_RELEASE_CERTIFICATE_SHA256; the CI rehearsal passes its throwaway certificate's; `adhoc` for a local
+//            ad-hoc build)
+// --app-id, --product-name  the bundle identifier and product name to expect (default: package.json build.appId and
+//            productName; update rehearsal builds use their own)
+// --update-test-build  expect the update rehearsal marker in app.asar (default: it must be absent)
 //
 // Checks:
 //  1. artifacts: exactly the expected installer files for this platform and architecture, named with the
@@ -25,10 +32,16 @@
 //  4. the packaged MCP bundle answers over stdio with the same tools as the source server (novelai/src/mcp.mjs,
 //     started with the Node running this script), reports the client as unavailable, and writes nothing to its
 //     data folder;
-//  5. macOS: the app has a valid ad-hoc signature (codesign --verify --deep --strict; Signature=adhoc), in the zip
-//     and in the dmg (attached read-only with -nobrowse to a scratch mount point, then detached).
+//  5. macOS: the app is signed with the release certificate: codesign --verify --deep --strict passes, the SHA-256 of
+//     its leaf certificate is MAC_RELEASE_CERTIFICATE_SHA256 and its designated requirement is identifier "<app id>"
+//     and certificate leaf = H"<SHA-1 of that certificate>" (stable across versions, so the Keychain keeps "Always
+//     Allow"), in the zip and in the dmg (attached read-only with -nobrowse to a scratch mount point, then detached),
+//     and both are the same signature (CDHash);
+//  6. app.asar has no update rehearsal marker (dist-electron/update-test-mode.json): a release build ignores every
+//     NAI_UPDATE_TEST_* variable (novelai/client/electron/update/source.ts).
 // Exit status 0 only when every check passes; the JSON report goes to stdout (and --json <file>).
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -37,17 +50,25 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const client = path.join(repo, 'novelai', 'client');
-const PRODUCT = 'MCP for NovelAI';
+let PRODUCT = 'MCP for NovelAI';
 const PREFIX = 'MCP-for-NovelAI';
+/** SHA-256 of the self-signed certificate (CN "MCP for NovelAI (self-signed)", O lwyq1209) that signs the macOS releases;
+ * the app has the same value built in (electron/update/source.ts OFFICIAL_MAC_CERT_SHA256). */
+export const MAC_RELEASE_CERTIFICATE_SHA256 = '4001b2f773a1f258cac351597a518c9924d294e167d298297c64cd409ee67524';
+export const UPDATE_TEST_MARKER = 'dist-electron/update-test-mode.json';
 
 function parseArgs(argv) {
-  const options = { release: path.join(client, 'release'), arch: process.arch, app: null, json: null, stage: null, summary: null };
+  const config = JSON.parse(readFileSync(path.join(client, 'package.json'), 'utf8')).build;
+  const options = { release: path.join(client, 'release'), arch: process.arch, app: null, json: null, stage: null, summary: null, 'mac-certificate': MAC_RELEASE_CERTIFICATE_SHA256, 'app-id': config.appId, 'product-name': config.productName, 'update-test-build': false };
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index], value = argv[index + 1];
-    if (!['--release', '--arch', '--app', '--json', '--stage', '--summary'].includes(flag) || value === undefined) throw new Error(`usage: packaged-app-check.mjs [--release <dir>] [--arch x64|arm64] [--app <unpacked app>] [--json <file>] [--stage <dir>] [--summary <file>] (got ${flag})`);
-    options[flag.slice(2)] = flag === '--arch' ? value : path.resolve(value);
+    if (flag === '--update-test-build') { options['update-test-build'] = true; continue; }
+    if (!['--release', '--arch', '--app', '--json', '--stage', '--summary', '--mac-certificate', '--app-id', '--product-name'].includes(flag) || value === undefined) throw new Error(`usage: packaged-app-check.mjs [--release <dir>] [--arch x64|arm64] [--app <unpacked app>] [--json <file>] [--stage <dir>] [--summary <file>] [--mac-certificate <sha256>|adhoc] [--app-id <id>] [--product-name <name>] [--update-test-build] (got ${flag})`);
+    options[flag.slice(2)] = ['--arch', '--mac-certificate', '--app-id', '--product-name'].includes(flag) ? value : path.resolve(value);
     index += 1;
   }
+  if (options['mac-certificate'] !== 'adhoc') options['mac-certificate'] = options['mac-certificate'].replace(/:/g, '').toLowerCase();
+  if (options['mac-certificate'] !== 'adhoc' && !/^[0-9a-f]{64}$/.test(options['mac-certificate'])) throw new Error('--mac-certificate must be a SHA-256 (64 hex digits) or adhoc');
   if (!['x64', 'arm64'].includes(options.arch)) throw new Error(`unsupported arch ${options.arch}`);
   return options;
 }
@@ -126,6 +147,7 @@ async function listTools(command, args, env) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  PRODUCT = options['product-name'];
   const platform = process.platform;
   const version = JSON.parse(readFileSync(path.join(client, 'package.json'), 'utf8')).version;
   const report = { platform, arch: options.arch, version, checks: {} };
@@ -184,14 +206,16 @@ async function main() {
       fail('mcp', error instanceof Error ? error.stack : String(error));
     }
 
-    // 5. macOS ad-hoc signature
+    // 5. macOS signature: the release certificate, its designated requirement, the same in the zip and the dmg
     if (platform === 'darwin') {
-      const verify = run('codesign', ['--verify', '--deep', '--strict', source.app]);
-      const display = run('codesign', ['-dv', source.app]);
-      const details = `${display.stdout}${display.stderr}`;
-      report.checks.signature = { ok: verify.status === 0 && /Signature=adhoc/.test(details), verify: verify.status === 0 ? 'valid' : verify.stderr.trim(), details: details.split('\n').filter(line => /^(Identifier|Format|CodeDirectory|Signature|TeamIdentifier)=/.test(line)) };
-      if (!options.app) report.checks.dmg = dmgCheck(path.join(options.release, artifactsFor(platform, options.arch, version)[0]), path.join(scratch, 'dmg'));
+      report.checks.signature = signatureCheck(source.app, options, path.join(scratch, 'cert-zip'));
+      if (!options.app) report.checks.dmg = dmgCheck(path.join(options.release, artifactsFor(platform, options.arch, version)[0]), path.join(scratch, 'dmg'), options, report.checks.signature.cdhash, path.join(scratch, 'cert-dmg'));
     }
+
+    // 6. update rehearsal marker
+    const asarFiles = asarFileList(required['app.asar']);
+    const marker = asarFiles.includes(UPDATE_TEST_MARKER);
+    report.checks.updateSource = { ok: marker === options['update-test-build'], rehearsalMarker: marker, expected: options['update-test-build'] ? 'present (update rehearsal build)' : 'absent (release build)' };
   } catch (error) {
     fail('run', error instanceof Error ? error.stack : String(error));
   } finally {
@@ -210,18 +234,55 @@ async function main() {
   process.exitCode = report.ok ? 0 : 1;
 }
 
-/** The dmg holds the same signed app: attach it read-only without Finder, verify the signature, detach. */
-function dmgCheck(dmg, mountpoint) {
+/**
+ * The signature of a macOS app: valid (deep, strict); with a certificate, its leaf's SHA-256 is the expected one and
+ * the designated requirement names the app id and that certificate's leaf (SHA-1); `adhoc` expects an ad-hoc signature.
+ */
+export function signatureCheck(app, options, scratch) {
+  const verify = run('codesign', ['--verify', '--deep', '--strict', app]);
+  const display = run('codesign', ['-dvvv', app]);
+  const details = `${display.stdout}${display.stderr}`;
+  const requirement = run('codesign', ['-d', '-r-', app]);
+  const designated = /designated => (.*)/.exec(`${requirement.stdout}${requirement.stderr}`)?.[1]?.trim() ?? null;
+  const cdhash = /^CDHash=([0-9a-f]+)/m.exec(details)?.[1] ?? null;
+  const base = { verify: verify.status === 0 ? 'valid' : verify.stderr.trim(), designated, cdhash, details: details.split('\n').filter(line => /^(Identifier|Format|Signature|TeamIdentifier|Authority)=/.test(line)) };
+  if (options['mac-certificate'] === 'adhoc') return { ok: verify.status === 0 && /Signature=adhoc/.test(details), expected: 'adhoc', ...base };
+  mkdirSync(scratch, { recursive: true });
+  run('codesign', ['-d', `--extract-certificates=${path.join(scratch, 'c')}`, app]);
+  let sha256 = null, sha1 = null;
+  try {
+    const der = readFileSync(path.join(scratch, 'c0'));
+    sha256 = createHash('sha256').update(der).digest('hex');
+    sha1 = createHash('sha1').update(der).digest('hex');
+  } catch { /* ad-hoc: no certificate */ }
+  const expectedRequirement = sha1 ? `identifier "${options['app-id']}" and certificate leaf = H"${sha1}"` : null;
+  return { ok: verify.status === 0 && !/Signature=adhoc/.test(details) && sha256 === options['mac-certificate'] && designated === expectedRequirement,
+    expected: options['mac-certificate'], certificateSha256: sha256, expectedRequirement, ...base };
+}
+
+/** The file names in an app.asar (its JSON header), with / separators. */
+export function asarFileList(asar) {
+  const bytes = readFileSync(asar);
+  const size = bytes.readUInt32LE(12);
+  const header = JSON.parse(bytes.subarray(16, 16 + size).toString('utf8'));
+  const names = [];
+  const walk = (node, prefix) => { for (const [name, child] of Object.entries(node.files ?? {})) { const full = prefix ? `${prefix}/${name}` : name; if (child.files) walk(child, full); else names.push(full); } };
+  walk(header, '');
+  return names;
+}
+
+/** The dmg holds the same signed app: attach it read-only without Finder, check its signature and CDHash, detach. */
+function dmgCheck(dmg, mountpoint, options, zipCdhash, scratch) {
   mkdirSync(mountpoint);
   const attach = run('hdiutil', ['attach', dmg, '-readonly', '-nobrowse', '-noautoopen', '-mountpoint', mountpoint]);
   if (attach.status !== 0) return { ok: false, problem: `hdiutil attach failed: ${attach.stderr.trim()}` };
   try {
     const app = path.join(mountpoint, `${PRODUCT}.app`);
-    const verify = run('codesign', ['--verify', '--deep', '--strict', app]);
-    const display = run('codesign', ['-dv', app]);
+    const signature = signatureCheck(app, options, scratch);
     const bundle = existsSync(path.join(app, 'Contents', 'Resources', 'mcp', 'novelai-mcp.mjs'));
     const applications = existsSync(path.join(mountpoint, 'Applications'));
-    return { ok: verify.status === 0 && /Signature=adhoc/.test(`${display.stderr}`) && bundle && applications, verify: verify.status === 0 ? 'valid' : verify.stderr.trim(), mcpBundle: bundle, applicationsLink: applications };
+    const sameAsZip = Boolean(signature.cdhash) && signature.cdhash === zipCdhash;
+    return { ok: signature.ok && bundle && applications && sameAsZip, signature, sameSignatureAsZip: sameAsZip, mcpBundle: bundle, applicationsLink: applications };
   } finally {
     const detach = run('hdiutil', ['detach', mountpoint]);
     if (detach.status !== 0) run('hdiutil', ['detach', mountpoint, '-force']);

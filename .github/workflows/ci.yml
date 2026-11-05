@@ -1,5 +1,13 @@
 # Tests, contract and notice checks and the client build on Linux, macOS and Windows; the release workflow runs it
 # first (workflow_call). Needs no secrets. Actions are pinned to a full commit SHA (the version is in the comment).
+#
+# A manual run can add the update rehearsal (workflow_dispatch input update-rehearsal): with THROWAWAY keys only — an
+# Ed25519 update key and, on macOS, a self-signed certificate made in the job — it runs the release workflow's signing
+# step (update-signature.mjs release) and the macOS release build signed through the afterPack hook with its
+# packaged-app check, and on every platform installs a packaged rehearsal build, updates it to a second one from a
+# fake GitHub (dev-tools/update-rehearsal.mjs: Windows through the real NSIS installer, silently; Linux by replacing the
+# extracted folder; macOS by replacing the .app bundle) and checks the failure cases. It never publishes anything and
+# never runs on pushes, pull requests or the release workflow's call.
 name: CI
 
 on:
@@ -7,6 +15,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      update-rehearsal:
+        description: Also run the update rehearsal (packaged builds with throwaway keys on all three platforms)
+        type: boolean
+        default: false
   workflow_call:
 
 permissions:
@@ -122,3 +135,117 @@ jobs:
             cat "$RUNNER_TEMP/status.txt"
             exit 1
           fi
+
+  update-rehearsal:
+    name: update rehearsal (${{ matrix.os }})
+    # Only a manual run that asks for it (inputs of workflow_dispatch; a workflow_call from the release workflow has none).
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.update-rehearsal }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            scenarios: success,tamper,bad-signature,downgrade,interrupt,cancel,not-writable,kill-launched,kill-waiting
+          - os: windows-2025
+            scenarios: success,tamper,bad-signature,downgrade,interrupt,cancel
+          - os: macos-15
+            scenarios: success,tamper,bad-signature,downgrade,interrupt,cancel,not-writable,kill-launched,kill-waiting
+    env:
+      CI: 'true'
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            novelai/package-lock.json
+            novelai/client/package-lock.json
+
+      - name: Temporary files on the runner's local disk (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+
+      - name: Install the dependencies
+        shell: bash
+        run: |
+          npm ci --prefix novelai
+          npm ci --prefix novelai/client
+          node novelai/client/node_modules/electron/install.js
+
+      # The release workflow's signing step, with a throwaway key (the real UPDATE_SIGNING_KEY exists only in the
+      # protected environment "release").
+      - name: Release signing step with a throwaway key
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          dir="$RUNNER_TEMP/signing"; mkdir -p "$dir/files"
+          printf '%s  MCP-for-NovelAI-9.9.9-linux-x64.tar.gz\n' "$(printf x | sha256sum | cut -d' ' -f1)" > "$dir/files/SHA256SUMS.txt"
+          public=$(node .github/scripts/update-signature.mjs keygen --out "$dir/key.pem" | node -e 'process.stdin.on("data",d=>process.stdout.write(JSON.parse(d).publicKey))')
+          UPDATE_SIGNING_KEY="$(cat "$dir/key.pem")" node .github/scripts/update-signature.mjs release --dir "$dir/files" --expect-public-key "$public"
+          # Without the key, and with a key that is not the app's, the step fails.
+          if node .github/scripts/update-signature.mjs release --dir "$dir/files"; then echo "::error::signed without a key"; exit 1; fi
+          if UPDATE_SIGNING_KEY="$(cat "$dir/key.pem")" node .github/scripts/update-signature.mjs release --dir "$dir/files"; then echo "::error::signed with a key that is not the app's"; exit 1; fi
+          rm -rf "$dir"
+
+      # The release build of macOS (the same command and hook as release.yml) signed with a throwaway self-signed
+      # certificate, and the packaged-app check against that certificate's SHA-256.
+      - name: macOS release build signed with a throwaway certificate
+        if: runner.os == 'macOS'
+        shell: bash
+        working-directory: novelai/client
+        run: |
+          dir="$RUNNER_TEMP/certificate"; mkdir -p "$dir"
+          printf '[req]\ndistinguished_name = dn\nx509_extensions = ext\nprompt = no\n[dn]\nCN = MCP for NovelAI CI rehearsal (self-signed)\n[ext]\nbasicConstraints = critical,CA:false\nkeyUsage = critical,digitalSignature\nextendedKeyUsage = critical,codeSigning\n' > "$dir/cert.cnf"
+          /usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -keyout "$dir/key.pem" -out "$dir/cert.pem" -days 2 -config "$dir/cert.cnf"
+          /usr/bin/openssl pkcs12 -export -inkey "$dir/key.pem" -in "$dir/cert.pem" -out "$dir/cert.p12" -passout pass:rehearsal
+          fingerprint=$(/usr/bin/openssl x509 -in "$dir/cert.pem" -noout -fingerprint -sha256 | cut -d= -f2)
+          NAI_MAC_SIGNING=certificate MAC_CSC_LINK="$(base64 < "$dir/cert.p12")" MAC_CSC_KEY_PASSWORD=rehearsal CSC_IDENTITY_AUTO_DISCOVERY=false npm run dist:mac -- --arm64
+          node ../../.github/scripts/packaged-app-check.mjs --arch arm64 --mac-certificate "$fingerprint" --json "$RUNNER_TEMP/packaged-app-check.json" --summary "$GITHUB_STEP_SUMMARY" > /dev/null || { cat "$RUNNER_TEMP/packaged-app-check.json"; exit 1; }
+          # Missing secrets stop the build (no ad-hoc fallback).
+          if NAI_MAC_SIGNING=certificate CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac zip --arm64 --publish never -c.directories.output="$dir/unsigned" > "$dir/missing.log" 2>&1; then echo "::error::built without the certificate"; exit 1; fi
+          grep -q 'needs MAC_CSC_LINK and MAC_CSC_KEY_PASSWORD' "$dir/missing.log"
+          rm -rf "$dir" release
+
+      - name: Rehearsal builds (two versions, throwaway update key)
+        shell: bash
+        run: node novelai/client/dev-tools/update-rehearsal.mjs prepare --work "$GITHUB_WORKSPACE/.tmp/update-rehearsal"
+
+      - name: Allow Electron's sandbox (Linux)
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: Update rehearsal
+        shell: bash
+        env:
+          SCENARIOS: ${{ matrix.scenarios }}
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then launcher=(xvfb-run -a); else launcher=(); fi
+          "${launcher[@]}" node novelai/client/dev-tools/update-rehearsal.mjs rehearse --work "$GITHUB_WORKSPACE/.tmp/update-rehearsal" --scenarios "$SCENARIOS" --no-idle-gate > "$RUNNER_TEMP/rehearsal.json" || status=$?
+          cat "$RUNNER_TEMP/rehearsal.json"
+          { echo '```json'; cat "$RUNNER_TEMP/rehearsal.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit "${status:-0}"
+
+      - name: Rehearsal records
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: update-rehearsal-${{ matrix.os }}
+          path: |
+            .tmp/update-rehearsal/results.jsonl
+            .tmp/update-rehearsal/builds/*/electron-builder.log
+            .tmp/update-rehearsal/data-*/logs/
+            .tmp/update-rehearsal/data-*/updates/*/helper.log
+            .tmp/update-rehearsal/data-*/updates/*/helper-state
+          if-no-files-found: warn
+          retention-days: 7

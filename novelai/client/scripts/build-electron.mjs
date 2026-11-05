@@ -11,10 +11,14 @@
 //     in scripts/bundles.mjs; THIRD_PARTY_NOTICES.md lists what they contain). electron-builder ships
 //     it as resources/mcp/novelai-mcp.mjs; it runs with the app's own Electron as Node:
 //     ELECTRON_RUN_AS_NODE=1 <app executable> <resources>/mcp/novelai-mcp.mjs
+//  5. only with NAI_UPDATE_TEST_BUILD=1 (update rehearsals: dev-tools/update-rehearsal.mjs and the CI rehearsal job):
+//     writes dist-electron/update-test-mode.json, which makes the app read its update source, key and certificate from
+//     NAI_UPDATE_TEST_* variables (electron/update/source.ts). Release builds never set it, and
+//     .github/scripts/packaged-app-check.mjs fails a package that contains the file.
 // The MCP sources and their dependencies come from the parent novelai/ package, so its
 // dependencies must be installed too (npm --prefix novelai install).
 import { spawnSync } from 'node:child_process';
-import { rm, stat } from 'node:fs/promises';
+import { rm, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,6 +41,10 @@ try {
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);
   process.exit(1);
+}
+if (process.env.NAI_UPDATE_TEST_BUILD === '1') {
+  await writeFile(path.join(client, 'dist-electron', 'update-test-mode.json'), `${JSON.stringify({ updateTestBuild: true, note: 'Update rehearsal build: reads NAI_UPDATE_TEST_* (electron/update/source.ts). Never released.' }, null, 2)}\n`);
+  console.log('Update rehearsal build: dist-electron/update-test-mode.json written (never release this build).');
 }
 const size = (await stat(path.join(client, 'dist-mcp', 'novelai-mcp.mjs'))).size;
 console.log(`MCP bundle: dist-mcp/novelai-mcp.mjs (${(size / 1024).toFixed(0)} KiB); tag modules: dist-electron/vendor/tag-details.cjs`);
