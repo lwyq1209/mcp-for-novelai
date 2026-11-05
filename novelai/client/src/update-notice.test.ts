@@ -1,6 +1,7 @@
 // The renderer side of the new-version notice: the store follows the main process's published results, "Later"
 // and "Skip this version" hide the banner, and a manual check returns its result without a failure touching the
-// banner. The banner itself offers exactly Download (release page), Later and Skip this version.
+// banner. The banner offers Update and restart (the main process's self-update), Download (release page), Later and
+// Skip this version, and the store follows the self-update's progress and the notice after an update.
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "./store";
@@ -73,17 +74,43 @@ describe("new-version notice in the renderer", () => {
     expect(useAppStore.getState().updateInfo).toEqual(available);
   });
 
-  it("offers Download, Later and Skip this version, and never downloads or installs in the app", () => {
+  it("offers Update and restart (the main process installs), Download, Later and Skip this version", () => {
     const app = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
     // Step 4b1: the notice is the top bar's 新版本 pill and its menu (src/shell/TopBar.tsx).
     const pill = readFileSync(new URL("./shell/TopBar.tsx", import.meta.url), "utf8");
     expect(pill).toContain("window.naiDesktop.openExternal(updateInfo.releaseUrl)");
-    for (const key of ["top.updateDownload", "top.updateLater", "top.updateIgnore"]) expect(pill).toContain(`t('${key}')`);
+    for (const key of ["top.updateDownload", "top.updateLater", "top.updateIgnore", "top.updateInstall", "top.updateWaitQueue", "top.updateCancel"]) expect(pill).toContain(`'${key}'`);
     expect(pill).toContain("dismissUpdate()");
     expect(pill).toContain("ignoreUpdate(updateInfo.latestVersion!)");
-    expect(pill).not.toMatch(/downloadUpdate|installUpdate/);
+    // The window only asks the main process (startUpdate / cancelUpdate); it downloads and installs nothing itself.
+    expect(pill).toContain("useAppStore.getState().startUpdate()");
+    expect(pill).not.toMatch(/downloadUpdate|installUpdate|fetch\(|axios/);
     expect(app).not.toMatch(/downloadUpdate|installUpdate|update-install-overlay/);
     const preload = readFileSync(new URL("../electron/preload.ts", import.meta.url), "utf8");
-    expect(preload).not.toMatch(/downloadUpdate|installUpdate/);
+    expect(preload).toContain('startUpdate: (): Promise<UpdateProgressInfo> => ipcRenderer.invoke("app:updateStart")');
+    expect(preload).toContain('cancelUpdate: (): Promise<UpdateProgressInfo> => ipcRenderer.invoke("app:updateCancel")');
+  });
+
+  it("follows the self-update's progress and the notice of the first start after an update", async () => {
+    let publishProgress: ((progress: unknown) => void) | undefined;
+    const notice = { kind: "updated", from: "0.1.2", to: "0.1.3", releaseUrl: "https://github.com/lwyq1209/mcp-for-novelai/releases/tag/v0.1.3" };
+    const desktop = naiDesktop({
+      onUpdateProgress: vi.fn((callback: (progress: unknown) => void) => { publishProgress = callback; return vi.fn(); }),
+      getUpdateProgress: vi.fn().mockResolvedValue({ phase: "idle", install: { supported: true } }),
+      getUpdateNotice: vi.fn().mockResolvedValue(notice),
+      startUpdate: vi.fn().mockResolvedValue({ phase: "downloading", version: "0.2.0", received: 0, total: null, install: { supported: true } }),
+      cancelUpdate: vi.fn().mockResolvedValue({ phase: "idle", install: { supported: true } }),
+    });
+    vi.stubGlobal("window", { naiDesktop: desktop.api });
+    await useAppStore.getState().load();
+    await waitUntil(() => expect(useAppStore.getState().updateNotice).toEqual(notice));
+    expect(useAppStore.getState().updateProgress).toEqual({ phase: "idle", install: { supported: true } });
+    publishProgress?.({ phase: "downloading", version: "0.2.0", received: 10, total: 100, install: { supported: true } });
+    expect(useAppStore.getState().updateProgress).toMatchObject({ phase: "downloading", received: 10 });
+    await expect(useAppStore.getState().startUpdate()).resolves.toMatchObject({ phase: "downloading" });
+    await useAppStore.getState().cancelUpdate();
+    expect(useAppStore.getState().updateProgress?.phase).toBe("idle");
+    useAppStore.getState().dismissUpdateNotice();
+    expect(useAppStore.getState().updateNotice).toBeNull();
   });
 });

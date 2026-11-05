@@ -37,7 +37,7 @@ const SETTINGS: AppSettings = {
 };
 
 const initial = useAppStore.getState();
-afterEach(() => useAppStore.setState({ settings: initial.settings, account: initial.account, updateInfo: initial.updateInfo }));
+afterEach(() => useAppStore.setState({ settings: initial.settings, account: initial.account, updateInfo: initial.updateInfo, updateProgress: initial.updateProgress, updateNotice: initial.updateNotice }));
 const setup = (language: 'zh-CN' | 'en-US', patch: Partial<AppSettings> = {}, state: Record<string, unknown> = {}) =>
   useAppStore.setState({ settings: { ...SETTINGS, language, ...patch }, account: { hasToken: true, tierName: 'Opus', tierLevel: 3, anlasBalance: 8240, opusUsage: { percent: 73, isNegative: false, timeUntilNextPercent: 6042 } }, ...state } as never);
 const page = (section: SettingsSection) => renderToStaticMarkup(<SettingsPage section={section} active />);
@@ -229,6 +229,36 @@ describe('settings sections render (SSR, both languages)', () => {
     const en = page('about');
     expect(en).toContain('Check for updates automatically');
     expect(en).not.toContain('is available');
+  });
+
+  it('about & updates: Update and restart, its progress, the queue wait, a verification failure, the first start after an update', () => {
+    const available = { status: 'available' as const, hasUpdate: true, currentVersion: '0.1.0', latestVersion: '0.2.0', releaseUrl: 'https://github.com/x/releases/tag/v0.2.0' };
+    setup('zh-CN', {}, { updateInfo: available, updateProgress: { phase: 'idle', install: { supported: true } } });
+    let zh = page('about');
+    for (const text of ['更新并重启', '前往下载', '验证它的签名']) expect(zh, text).toContain(text);
+    setup('zh-CN', {}, { updateInfo: available, updateProgress: { phase: 'downloading', version: '0.2.0', received: 1024 * 1024, total: 4 * 1024 * 1024, install: { supported: true } } });
+    zh = page('about');
+    expect(zh).toContain('role="progressbar"');
+    expect(zh).toContain('正在下载');
+    expect(zh).toContain('data-testid="update-cancel"');
+    setup('zh-CN', {}, { updateInfo: available, updateProgress: { phase: 'ready', version: '0.2.0', queueBusy: true, install: { supported: true } } });
+    zh = page('about');
+    expect(zh).toContain('队列结束后更新');
+    expect(zh).toContain('先在队列页暂停它们');
+    setup('zh-CN', {}, { updateInfo: available, updateProgress: { phase: 'failed', version: '0.2.0', error: { code: 'verify_failed', message: 'x', retryable: false, reason: 'signature_invalid' }, install: { supported: true } } });
+    zh = page('about');
+    expect(zh).toContain('无法验证更新，已停止，什么都没有安装');
+    expect(zh).toContain('签名与应用内置的更新公钥不符');
+    expect(zh).not.toContain('data-testid="update-install"');
+    setup('en-US', {}, { updateInfo: available, updateProgress: { phase: 'idle', install: { supported: false, reason: 'translocated' } } });
+    const en = page('about');
+    expect(en).toContain('This copy cannot update itself');
+    expect(en).toContain('Move it to Applications first');
+    expect(en).not.toContain('data-testid="update-install"');
+    setup('en-US', {}, { updateInfo: null, updateNotice: { kind: 'updated', from: '0.1.2', to: '0.1.3', releaseUrl: 'https://github.com/lwyq1209/mcp-for-novelai/releases/tag/v0.1.3' } });
+    const after = page('about');
+    expect(after).toContain('Updated from 0.1.2 to 0.1.3');
+    expect(after).toContain('What’s new (CHANGELOG)');
   });
 
   it('the MCP section is still the MCP section', () => {
