@@ -71,6 +71,15 @@ Intel…」的是 Intel。（同一个应用也有 `.zip` 版。）打开磁盘�
 （尝试打开后约一小时内有这个按钮），输入登录密码确认。当前的 macOS（macOS 15 起）已经不能再用「按住 Control 点按 ›
 打开」绕过这一步。请从「应用程序」运行：直接在磁盘映像或下载文件夹里运行时，路径每次启动都会变，Agent 的配置会失效。
 
+「仍要打开」只对双击启动应用生效：Agent 直接运行应用里的 MCP 服务时，macOS 仍会以「Apple 无法验证……」拦下。安装后
+（以及每次装了新版本后）在「终端」里运行一次：
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/MCP for NovelAI.app"
+```
+
+它去掉 macOS 给下载文件加的隔离标记，相当于告诉系统你信任这个应用。
+
 **Windows**：运行 `setup` 安装程序。安装程序暂未签名，SmartScreen 可能提示「Windows 已保护你的电脑」：点「**更多信息**」，
 再点「**仍要运行**」。
 
@@ -96,7 +105,8 @@ Windows 上也可以双击 `novelai\scripts\start-client.cmd`）。详见[构建
 
 打开「**设置 › MCP 接入**」（或首次引导的第 2 步），选择你的 Agent，复制页面给出的内容：应用会填好它自己的可执行文件、
 随包附带的 MCP 服务文件和数据文件夹。MCP 服务用应用自带的可执行文件以 Node 方式运行（`ELECTRON_RUN_AS_NODE=1`），
-不需要另装 Node.js。接好后，在 Agent 里说一句「列出 NovelAI 队列」试试。
+不需要另装 Node.js。接好后，在 Agent 里说一句「列出 NovelAI 队列」试试。**macOS** 上请先运行一次[安装](#安装)里的
+`xattr` 命令：不运行的话，即使点过「仍要打开」，macOS 也会以「Apple 无法验证……」拦下 Agent 的 MCP 服务。
 
 **Agent 会自己打开应用。** 应用没开时，第一次需要它的调用会让 MCP 服务在后台启动应用，等应用就绪（最多约 30 秒）后继续这次
 调用。应用不显示窗口、不抢前台：**macOS** 上只出现 Dock 图标，点它才显示窗口；**Windows** 上最小化在任务栏，点任务栏按钮才

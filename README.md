@@ -74,6 +74,17 @@ after the attempt), and confirm with your password. Control-click › Open no lo
 (since macOS 15). Run the app from Applications: run from the disk image or a downloads folder, its path changes on
 every launch and agent configurations break.
 
+**Open Anyway** only covers starting the app with a double-click: an agent runs the MCP server inside the app
+directly, and macOS still blocks that with "Apple could not verify …". Run this once in Terminal after installing
+(and again after installing a new version):
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/MCP for NovelAI.app"
+```
+
+It removes the quarantine mark macOS puts on downloaded files, which is the same as telling macOS that you trust this
+app.
+
 **Windows** — run the `setup` installer. The installer is not code-signed yet, so SmartScreen may show "Windows
 protected your PC": click **More info**, then **Run anyway**.
 
@@ -103,6 +114,8 @@ separate data folder; on Windows you can double-click `novelai\scripts\start-cli
 Open **Settings › MCP access** (or step 2 of the first-run guide), pick your agent and copy what it shows: the app fills
 in its own executable, the bundled MCP server file and its data folder. The server runs with the app's own executable
 as Node (`ELECTRON_RUN_AS_NODE=1`), so you do not need Node.js. Then ask your agent to "list the NovelAI queue".
+On **macOS**, run the `xattr` command from [Install](#install) once first: without it macOS blocks the agent's MCP
+server with "Apple could not verify …", even after **Open Anyway**.
 
 **The agent opens the app itself.** When the app is not running, the first call that needs it makes the MCP server
 start the app in the background, and the call goes on once the app is ready (at most about 30 seconds). The app does

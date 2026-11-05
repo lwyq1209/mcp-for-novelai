@@ -165,6 +165,17 @@ access › Advanced shows where the inboxes are now.
   app once, then go to **System Settings › Privacy & Security**, scroll to Security and click **Open Anyway** (it is
   offered for about an hour after the attempt), then confirm with your password. Control-click › Open no longer skips
   this check on current macOS.
+- **macOS: the app opens, but the agent's MCP server is blocked with "Apple could not verify …"** (the agent says
+  the server failed to start or could not connect). **Open Anyway** only covers starting the app with a double-click;
+  the agent runs the MCP server inside the app directly, and Gatekeeper still checks that. Run once in Terminal (and
+  again after installing a new version), then restart the agent or reconnect its MCP server:
+
+  ```sh
+  xattr -dr com.apple.quarantine "/Applications/MCP for NovelAI.app"
+  ```
+
+  It removes the quarantine mark macOS puts on downloaded files, which is the same as telling macOS that you trust
+  this app.
 - **Windows: "Windows protected your PC" (SmartScreen).** Builds are not code-signed yet. Click **More info**, then
   **Run anyway**.
 - **The app opens the existing window instead of a second one.** Only one app runs per data folder; starting it again
