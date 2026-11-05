@@ -70,3 +70,27 @@ it('shows known clients by name, unknown ones as sent and a missing name as Agen
   expect(batchSourceLabel({ kind: 'manual', persistent: false }, 'Manual')).toBe('Manual');
   expect(batchSourceLabel({ kind: 'agent', client: { name: 'claude-code', version: '2' } }, 'Manual')).toBe('Claude Code');
 });
+
+it('records the starts of the app by an agent (newest first, within their limit) and reads them back; older files have none', async () => {
+  const dir = await runtime(), time = clock();
+  const activity = createAgentActivity({ runtimeDir: dir, now: time.now, writeDelayMs: 0 });
+  expect((await activity.read()).appStarts).toBeUndefined();
+  activity.recordAppStart({ name: 'claude-code' });
+  time.tick(); activity.recordAppStart(null);
+  time.tick(); activity.recordAppStart({ name: 'bad\nname' });
+  const read = await activity.read();
+  expect(read.appStarts).toEqual([
+    { at: '2026-11-03T10:00:02.000Z', client: null },
+    { at: '2026-11-03T10:00:01.000Z', client: null },
+    { at: '2026-11-03T10:00:00.000Z', client: { name: 'claude-code', version: null } },
+  ]);
+  expect(read.recent).toEqual([]); expect(read.clients).toEqual([]);
+  await activity.flush();
+  expect(await createAgentActivity({ runtimeDir: dir, writeDelayMs: 0 }).read()).toEqual(read);
+  for (let index = 0; index < AGENT_ACTIVITY_LIMITS.appStarts + 3; index++) { time.tick(); activity.recordAppStart({ name: 'pi' }); }
+  expect((await activity.read()).appStarts).toHaveLength(AGENT_ACTIVITY_LIMITS.appStarts);
+  await activity.flush();
+  expect(parseAgentActivity({ schemaVersion: 1, recent: [], clients: [], appStarts: [{ at: 'yesterday', client: null }, { at: '2026-11-03T10:00:00.000Z', client: { name: 'x' } }] }))
+    .toEqual({ recent: [], clients: [], appStarts: [{ at: '2026-11-03T10:00:00.000Z', client: { name: 'x', version: null } }] });
+  expect(parseAgentActivity({ schemaVersion: 1, recent: [], clients: [] })).toEqual({ recent: [], clients: [] });
+});

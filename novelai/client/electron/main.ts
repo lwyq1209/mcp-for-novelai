@@ -85,7 +85,7 @@ import {
   saveReferencePreset,
 } from "./ipc/reference-presets";
 import { hostText, setInterfaceLanguageSource } from "./host-language";
-import { hideWhenActivated, prepareBackgroundApp, revealOnSecondInstance, showMainWindow } from "./window-show";
+import { agentStartOf, hideWhenActivated, prepareBackgroundApp, revealOnSecondInstance, showMainWindow } from "./window-show";
 import {
   copyStylePromptPreviewImages,
   importStylePromptPresetImages,
@@ -213,8 +213,13 @@ const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 prepareBackgroundApp(app);
 // Should it become active anyway, it hides at once and logs it (window-show.ts).
 hideWhenActivated(app);
-// A second launch brings the running window to the front, except for a background test client (window-show.ts).
-app.on("second-instance", () => revealOnSecondInstance(mainWindow));
+// Started by an agent's MCP server (window-show.ts): the first window appears without taking the focus; otherwise this
+// start is like any other (recovered queue batches stay paused until resumed, batch-service.ts).
+const agentStart = agentStartOf(process.argv);
+let firstWindowInactive = agentStart !== null;
+// A second launch brings the running window to the front, except a second launch by an agent and a background test
+// client (window-show.ts).
+app.on("second-instance", (_event, argv) => revealOnSecondInstance(mainWindow, process.env, argv));
 
 /**
  * Right-click context menu for text fields: 剪切 / 复制 / 粘贴 / 全选. Electron
@@ -290,8 +295,9 @@ function createWindow() {
   // Windows only: the session is ending (log-off / shut-down) and before-quit may not run.
   mainWindow.on("session-end", closeBridgeNow);
   mainWindow.once("ready-to-show", () => {
-    // A background dev-tools test client appears without taking the focus (window-show.ts); otherwise show() as before.
-    if (!uiCapturePath && mainWindow) showMainWindow(mainWindow);
+    // An app an agent started, and a background dev-tools test client, appear without taking the focus (window-show.ts);
+    // otherwise show() as before. Only the first window: one the Dock icon reopens later shows normally.
+    if (!uiCapturePath && mainWindow) { showMainWindow(mainWindow, process.env, { inactive: firstWindowInactive }); firstWindowInactive = false; }
   });
 
   if (uiCapturePath) {
@@ -952,6 +958,8 @@ app.whenReady().then(async () => {
   registerWorkbenchSync(() => mainWindow, dataPaths.imageInputs);
   agentActivity = createAgentActivity({ runtimeDir: dataPaths.runtime,
     onChange: activity => { if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send("novelai:agent:activity", activity); } });
+  // Settings › MCP access shows which agent started the app, and when.
+  if (agentStart) { agentActivity.recordAppStart(agentStart.client); console.info(`[agent] started in the background by an agent's MCP server${agentStart.client ? ` (${agentStart.client.name})` : ''}`); }
   startupStep = "bridge";
   workspaceBridge = await startWorkspaceBridge(() => mainWindow, dataPaths.runtime, queueMethods, (method, caller) => agentActivity?.record(method, caller));
   startupStep = "startup";

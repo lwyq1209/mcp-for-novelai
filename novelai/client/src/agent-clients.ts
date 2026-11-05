@@ -8,7 +8,10 @@ import type { BatchSource } from "./workspace/batch-types";
 export interface AgentClient { name: string; version: string | null }
 export interface AgentCall { at: string; client: AgentClient | null; tool: string | null; method: string }
 export interface AgentClientSummary { client: AgentClient | null; firstSeenAt: string; lastSeenAt: string; lastTool: string | null; calls: number }
-export interface AgentActivity { recent: AgentCall[]; clients: AgentClientSummary[] }
+/** One start of the app by an agent's MCP server (the app was not running; novelai/src/app-autostart.mjs). */
+export interface AgentAppStart { at: string; client: AgentClient | null }
+/** appStarts: newest first; absent in files written before 0.1.1. */
+export interface AgentActivity { recent: AgentCall[]; clients: AgentClientSummary[]; appStarts?: AgentAppStart[] }
 
 /**
  * Display names by clientInfo.name (case-sensitive, as sent). verified: read in the client's own source or bundled
@@ -23,6 +26,8 @@ export const AGENT_CLIENT_NAMES: Readonly<Record<string, { label: string; eviden
   "codex-mcp-client": { label: "Codex", evidence: "verified" },
   "cursor-vscode": { label: "Cursor", evidence: "reported" },
   pi: { label: "Pi", evidence: "verified" },
+  // DeepSeek Harness (deepseek-ai/deepseek-harness packages/mcp/mcp-client/src/connection.ts).
+  "dsh-mcp-client": { label: "DeepSeek Harness", evidence: "verified" },
   "Visual Studio Code": { label: "VS Code", evidence: "verified" },
   "Visual Studio Code - Insiders": { label: "VS Code Insiders", evidence: "verified" },
   "gemini-cli-mcp-client": { label: "Gemini CLI", evidence: "verified" },

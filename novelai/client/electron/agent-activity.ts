@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { renameReplace } from './platform-fs';
 import type { BridgeCaller } from './bridge-server';
-import type { AgentActivity, AgentCall, AgentClient, AgentClientSummary } from '../src/agent-clients';
+import type { AgentActivity, AgentAppStart, AgentCall, AgentClient, AgentClientSummary } from '../src/agent-clients';
 import { plainClientText } from '../src/agent-clients';
 
 /**
@@ -11,11 +11,13 @@ import { plainClientText } from '../src/agent-clients';
  * initialize clientInfo name and version, the MCP tool, the host method and the time are kept — never arguments,
  * results or errors. One tool call that makes several host calls is one row (the MCP server sends one callId per tool
  * call). Kept in <data root>/runtime/agent-activity.json: the newest RECENT_LIMIT calls and one summary per client
- * (CLIENT_LIMIT clients, most recently seen first). A missing, unreadable or malformed file starts empty.
+ * (CLIENT_LIMIT clients, most recently seen first), and the newest starts of the app by an agent's MCP server
+ * (appStarts: when and which client; written only once there is one). A missing, unreadable or malformed file starts
+ * empty.
  */
 export const AGENT_ACTIVITY_FILE = 'agent-activity.json';
-export const AGENT_ACTIVITY_LIMITS = Object.freeze({ recent: 50, clients: 20, fileBytes: 256 * 1024 });
-export type { AgentActivity, AgentCall, AgentClient, AgentClientSummary } from '../src/agent-clients';
+export const AGENT_ACTIVITY_LIMITS = Object.freeze({ recent: 50, clients: 20, appStarts: 10, fileBytes: 256 * 1024 });
+export type { AgentActivity, AgentAppStart, AgentCall, AgentClient, AgentClientSummary } from '../src/agent-clients';
 interface StoredActivity extends AgentActivity { schemaVersion: 1 }
 
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
@@ -43,7 +45,11 @@ export function parseAgentActivity(raw: unknown): AgentActivity {
     const client = clientOf(row?.client), firstSeenAt = time(row?.firstSeenAt), lastSeenAt = time(row?.lastSeenAt), lastTool = row?.lastTool === null ? null : text(row?.lastTool, 80);
     return client !== undefined && firstSeenAt && lastSeenAt && (lastTool !== null || row?.lastTool === null) && Number.isSafeInteger(row?.calls) && row.calls >= 1 ? [{ client, firstSeenAt, lastSeenAt, lastTool, calls: row.calls }] : [];
   }).slice(0, AGENT_ACTIVITY_LIMITS.clients);
-  return { recent, clients };
+  const appStarts = (Array.isArray(value.appStarts) ? value.appStarts : []).flatMap((row: any): AgentAppStart[] => {
+    const at = time(row?.at), client = clientOf(row?.client);
+    return at && client !== undefined ? [{ at, client }] : [];
+  }).slice(0, AGENT_ACTIVITY_LIMITS.appStarts);
+  return { recent, clients, ...(appStarts.length ? { appStarts } : {}) };
 }
 
 export interface AgentActivityOptions {
@@ -105,8 +111,19 @@ export function createAgentActivity(options: AgentActivityOptions) {
     schedule();
     try { options.onChange?.(snapshot()); } catch { /* A closing window never affects the record. */ }
   }
+  function recordAppStart(client: AgentClient | null, at: string) {
+    state.appStarts = [{ at, client: client ? { name: client.name, version: client.version ?? null } : null }, ...(state.appStarts ?? [])].slice(0, AGENT_ACTIVITY_LIMITS.appStarts);
+    schedule();
+    try { options.onChange?.(snapshot()); } catch { /* A closing window never affects the record. */ }
+  }
   return {
     ready,
+    /** Records that an agent's MCP server started this app (electron/window-show.ts agentStartOf), with the client it names. */
+    recordAppStart(client: { name: string; version?: string | null } | null) {
+      const at = now().toISOString();
+      const named = client && clientText(client.name, 100) ? { name: clientText(client.name, 100)!, version: clientText(client.version, 50) } : null;
+      void ready.then(() => recordAppStart(named, at));
+    },
     /** Records one bridge call (after the stored file was read, so nothing is lost). */
     record(method: string, caller: BridgeCaller) { const at = now().toISOString(); void ready.then(() => record(method, caller, at)); },
     async read(): Promise<AgentActivity> { await ready; return snapshot(); },

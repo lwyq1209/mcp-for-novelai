@@ -1,5 +1,10 @@
+import { plainClientText } from '../src/agent-clients';
+
 /**
- * How the main window first appears. Normally show() (it comes to the front, as it always did). A dev-tools test client
+ * How the main window first appears. Normally show() (it comes to the front, as it always did). An app that an agent's
+ * MCP server started (novelai/src/app-launch.mjs: STARTED_BY_AGENT_ARG on its command line, macOS through LaunchServices
+ * in the background) shows its first window with showInactive(): it appears without activating the app or taking the
+ * focus, with its ordinary Dock or taskbar icon; a later window (the Dock icon reopening it) shows normally. A dev-tools test client
  * started in the background (dev-tools/test-client.mjs, the default since step 4c1; --foreground turns it off) sets
  * NAI_DEV_TOOLS_BACKGROUND=1: the window is shown without activating the app or taking the focus (showInactive), so a
  * test run never pulls the window in front of what the user is doing; on macOS it also runs as an accessory app from
@@ -35,19 +40,41 @@ export function hideWhenActivated(app: { on(event: 'did-become-active', listener
   return true;
 }
 
-export function showMainWindow(win: { show(): void; showInactive(): void }, env: NodeJS.ProcessEnv = process.env) {
-  if (backgroundWindowRequested(env)) win.showInactive();
+/** The switch an agent's MCP server puts on the command line of the app it starts (novelai/src/app-launch.mjs). */
+export const STARTED_BY_AGENT_ARG = '--started-by-agent';
+
+/**
+ * Whether this command line is a start by an agent's MCP server: null for any other start; {client} otherwise, with
+ * the client the switch names (`--started-by-agent=<URI-encoded clientInfo name>`, plain text), or null without one.
+ */
+export function agentStartOf(argv: readonly string[] = process.argv): { client: { name: string } | null } | null {
+  for (const arg of argv) {
+    if (typeof arg !== 'string') continue;
+    if (arg === STARTED_BY_AGENT_ARG) return { client: null };
+    if (!arg.startsWith(`${STARTED_BY_AGENT_ARG}=`)) continue;
+    let name: string | null = null;
+    try { name = plainClientText(decodeURIComponent(arg.slice(STARTED_BY_AGENT_ARG.length + 1)), 100); } catch { name = null; }
+    return { client: name ? { name } : null };
+  }
+  return null;
+}
+
+/** `inactive`: the first window of an app an agent started (agentStartOf). */
+export function showMainWindow(win: { show(): void; showInactive(): void }, env: NodeJS.ProcessEnv = process.env, { inactive = false }: { inactive?: boolean } = {}) {
+  if (inactive || backgroundWindowRequested(env)) win.showInactive();
   else win.show();
 }
 
 /**
- * A second launch of the app on the same data root (Electron's second-instance event). Normally the running window comes
- * to the front (restore, show, focus), as it always did. A test client started in the background never does: a test
- * that starts another instance by mistake, or while the previous one is still exiting, must not pull the window in
- * front of what the user is doing (review rework of the queue retention task, 2026-11).
+ * A second launch of the app on the same data root (Electron's second-instance event, `argv` its command line). Normally
+ * the running window comes to the front (restore, show, focus), as it always did. Never for a second launch by an
+ * agent's MCP server (agentStartOf: two agents starting the app at once, or one starting it while it is still coming
+ * up), and never for a test client started in the background: a test that starts another instance by mistake, or while
+ * the previous one is still exiting, must not pull the window in front of what the user is doing (review rework of the
+ * queue retention task, 2026-11).
  */
-export function revealOnSecondInstance(win: { isMinimized(): boolean; restore(): void; show(): void; focus(): void } | null, env: NodeJS.ProcessEnv = process.env) {
-  if (!win || backgroundWindowRequested(env)) return;
+export function revealOnSecondInstance(win: { isMinimized(): boolean; restore(): void; show(): void; focus(): void } | null, env: NodeJS.ProcessEnv = process.env, argv: readonly string[] = []) {
+  if (!win || backgroundWindowRequested(env) || agentStartOf(argv)) return;
   if (win.isMinimized()) win.restore();
   win.show();
   win.focus();

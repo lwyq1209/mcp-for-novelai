@@ -1245,6 +1245,18 @@ describe('frozen-queue state writes (queue retention rework: what is written at 
     expect(restored.generation.submit).not.toHaveBeenCalled();
   });
 
+  it('a start of the app (also one by an agent\'s MCP server) never submits a recovered batch: it stays paused until an explicit resume', async () => {
+    const h = await queueSetup({ isBusy: () => true });
+    const batch = await h.service.enqueue(queued({ count: 2 })); await h.service.dispose();
+    expect(h.generation.submit).not.toHaveBeenCalled();
+    // The next start: nothing else is generating, so a queued batch would run at once.
+    const restored = setup({ runtimeDir: h.runtimeDir, isBusy: () => false }); await restored.service.ready; cleanups.push(restored.service.dispose);
+    expect(restored.read(batch)).toMatchObject({ status: 'paused', error: { code: 'recovered_paused' } });
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect(restored.generation.submit).not.toHaveBeenCalled();
+    expect(restored.read(batch).status).toBe('paused');
+  });
+
   it('a crash after an image settled, before the next one is marked, keeps the settled image and resumes only the rest', async () => {
     let busy = false;
     const h = await recordingSetup({ stateFlushMs: 60_000, isBusy: () => busy });
