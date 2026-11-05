@@ -1,8 +1,9 @@
-import { open, realpath, lstat, mkdir, writeFile, rename, unlink } from 'node:fs/promises';
+import { realpath, lstat, mkdir, writeFile, rename, unlink } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { createBridgeClient } from './bridge-client.mjs';
+import { openNoFollow } from './platform-fs.mjs';
 import { materialToolResponse } from './material-tools.mjs';
 import { projectDirectories, resolveProjectRoot } from './data-paths.mjs';
 import { validateMaterialRequest } from '../contracts/validate.mjs';
@@ -19,7 +20,8 @@ const object = value => value && typeof value === 'object' && !Array.isArray(val
 async function readInput(directory, name, maxBytes) {
   if (!directName(name)) throw new Error('Use a direct filename inside novelai/study-inbox.');
   if ((await lstat(directory)).isSymbolicLink()) throw new Error('Study inbox cannot be a symlink.');
-  const base = await realpath(directory), handle = await open(resolve(base, name), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  // win32 has neither O_NOFOLLOW nor O_NONBLOCK (both undefined there): openNoFollow refuses links and non-regular files itself.
+  const base = await realpath(directory), handle = await openNoFollow(resolve(base, name), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size < 1 || stat.size > maxBytes) throw new Error('Study input is empty, unsupported or exceeds its byte limit.');

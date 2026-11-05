@@ -1,4 +1,4 @@
-import { open, realpath, lstat, mkdir, writeFile, rename } from 'node:fs/promises';
+import { realpath, lstat, mkdir, writeFile, rename } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -30,7 +30,8 @@ async function readInput(file, directory, limit = 1024 * 1024) {
   const base = await realpath(directory);
   if ((await lstat(directory)).isSymbolicLink()) throw new Error('Library inbox cannot be a symlink.');
   const target = resolve(base, file);
-  const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+  // win32 has no O_NOFOLLOW (the flag is undefined there): openNoFollow refuses links and non-regular files itself.
+  const handle = await openNoFollow(target, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size > limit) throw new Error('Library input exceeds the supported file limit.');
