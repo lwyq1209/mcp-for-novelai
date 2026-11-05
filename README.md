@@ -102,8 +102,16 @@ separate data folder; on Windows you can double-click `novelai\scripts\start-cli
 
 Open **Settings › MCP access** (or step 2 of the first-run guide), pick your agent and copy what it shows: the app fills
 in its own executable, the bundled MCP server file and its data folder. The server runs with the app's own executable
-as Node (`ELECTRON_RUN_AS_NODE=1`), so you do not need Node.js. **Agents can use the app only while it is running.**
-Then ask your agent to "list the NovelAI queue".
+as Node (`ELECTRON_RUN_AS_NODE=1`), so you do not need Node.js. Then ask your agent to "list the NovelAI queue".
+
+**The agent opens the app itself.** When the app is not running, the first call that needs it makes the MCP server
+start the app in the background — it does not take the focus; its window appears behind what you are doing and its
+Dock or taskbar icon shows as usual — and the call goes on once the app is ready (at most about 30 seconds). Only a
+call that certainly reached no app does this; a call whose outcome may be unknown is never sent again. To turn it off,
+add `NOVELAI_MCP_AUTOSTART=0` to the `env` of the agent's configuration: the agent then gets `unavailable` and asks you
+to open the app (it still waits for an app that is already starting). A server you run from source with your own Node
+never starts the app. On macOS the app starts through LaunchServices in the background; on Windows outside the agent's
+process tree (WMI), so closing the agent's terminal does not close it; on Linux as a detached process.
 
 The shapes below show what the page generates; `<app>`, `<server>` and `<data folder>` stand for the paths the page
 fills in.
@@ -159,6 +167,28 @@ NOVELAI_DATA_DIR = "<data folder>"
 }
 ```
 
+**DeepSeek Harness** (dsh) — following its documentation (DSH MCP Integration and Configuration;
+[`@deepseek-ai/dsh-mcp-client`](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/mcp/mcp-client/README.md)):
+add this row to `~/.dsh/cordis.patch.yml` (every profile; for one profile `~/.dsh/profiles/<profile>/cordis.patch.yml`
+— not `cordis.yml`, which dsh rewrites empty on every start), then restart dsh. If the file already has an `- insert:`
+list, add only the `novelai` row to it. `toolCallTimeoutMs` is set because dsh's default of 60 seconds is too short
+for a large enqueue.
+
+```yaml
+- insert:
+    - id: mcp-novelai
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: novelai
+        transport: stdio
+        command: "<app>"
+        args: ["<server>"]
+        env:
+          ELECTRON_RUN_AS_NODE: "1"
+          NOVELAI_DATA_DIR: "<data folder>"
+        toolCallTimeoutMs: 1560000
+```
+
 **Other clients** configured with `mcpServers` (for example Claude Desktop's `claude_desktop_config.json`): merge the
 same entry without `type` and `timeout`, and set the client's tool timeout to 26 minutes (1560 seconds) or more — a
 large enqueue can take minutes.
@@ -193,7 +223,9 @@ inbox folders are.
   - `raw.githubusercontent.com` only when you run the optional Chinese tag dictionary installer
     (`novelai/scripts/install-tag-dictionary.mjs`).
   - Your proxy, if you set one (Settings › Account & network › Proxy; it follows the system proxy by default).
-- The MCP server talks to the app only on `127.0.0.1`, with a secret the app writes into its data folder.
+- The MCP server talks to the app only on `127.0.0.1`, with a secret the app writes into its data folder. When the app
+  is not running, the server may start it (see [Connect an agent](#connect-an-agent); `NOVELAI_MCP_AUTOSTART=0` turns
+  that off).
 - **No telemetry, analytics or crash reporting.** The app records which agent called which tool and when (never the
   arguments) on this computer only, to show it in Settings › MCP access and on the queue page.
 

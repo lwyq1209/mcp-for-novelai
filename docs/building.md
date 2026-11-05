@@ -99,6 +99,13 @@ data folder (`NOVELAI_DATA_DIR` applies). Restart the app afterwards.
   that file on every call, validates every argument before it calls the app, and calls only the fixed host methods of
   each tool. Both sides find the data folder through `shared/runtime/data-paths.cjs` (`NOVELAI_DATA_DIR`, else
   `<appData>/mcp-for-novelai`).
+- When a call certainly reached no app (no `bridge.json`, a refused connection: `src/bridge-client.mjs`
+  `fetchFailureDelivery`), the server starts the app it belongs to (`src/app-autostart.mjs`, `src/app-launch.mjs`) with
+  `--started-by-agent`, waits for its bridge and sends the call once more. From source that is the built client whose
+  `dist-mcp/` bundle runs with that client's development Electron: `electron <client> --started-by-agent` (macOS through
+  `open -n -g -a …/Electron.app`). A server run with your own Node (`node novelai/src/mcp.mjs`) never starts anything.
+  Test processes never start the app (`NODE_TEST_CONTEXT`, `VITEST`, `tests/run-tests.mjs`), and every test, the
+  dev-tools MCP caller and the release check set `NOVELAI_MCP_AUTOSTART=0` for the servers they run.
 - The NovelAI token stays in the main process; it never crosses the bridge or appears in tool results.
 - The library's public schemas are written once in `novelai/contracts/src/library-contracts.mts`;
   `npm --prefix novelai run build:contracts` generates `novelai/contracts/generated/` and

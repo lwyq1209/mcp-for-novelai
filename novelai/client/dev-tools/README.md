@@ -204,8 +204,10 @@ node dev-tools/mcp.mjs call list_queue '{}' --data ../../.tmp/t1 [--project <dir
 ```
 
 Runs `dist-mcp/novelai-mcp.mjs` with this checkout's Electron as Node (`ELECTRON_RUN_AS_NODE=1`) and the data root's
-`NOVELAI_DATA_DIR`. Library: `connectMcp({ data, project, clientName })` → `{ tools(), call(name, args), close() }`
-from `lib/mcp-client.mjs`.
+`NOVELAI_DATA_DIR`, always with `NOVELAI_MCP_AUTOSTART=0`: it never starts an app by itself (without a running test
+client a call answers `unavailable`, `details.autostart: "off"`); start the test client with `test-client.mjs`.
+Library: `connectMcp({ data, project, clientName })` → `{ tools(), call(name, args), close() }` from
+`lib/mcp-client.mjs`.
 
 ## Examples
 

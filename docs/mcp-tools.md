@@ -6,6 +6,7 @@ definitions an agent receives (`tools/list`) and the instructions the server sen
 authoritative text; this page explains them for people.
 
 - [How the server runs](#how-the-server-runs)
+- [When the app is not running](#when-the-app-is-not-running)
 - [Tools at a glance](#tools-at-a-glance)
 - [Library tools](#library-tools)
 - [Recipes and the queue](#recipes-and-the-queue)
@@ -27,13 +28,56 @@ authoritative text; this page explains them for people.
   From a source checkout you can also run `node novelai/src/mcp.mjs` with your own Node.
 - Every configuration that **Settings › MCP access** shows passes the app's data folder as `NOVELAI_DATA_DIR`, so
   the server finds the running app even when the agent starts it with a different environment.
-- The server talks to the running app over a local connection: the app writes `runtime/bridge.json` in its data
-  folder (a `127.0.0.1` address and a per-run secret) and the server reads it on every call. **The app must be
-  running.** When it is not, every tool that needs it answers `unavailable`; start the app and call again. Only
-  `tag_details` works without the app (it asks Danbooru directly).
+- The server talks to the app over a local connection: the app writes `runtime/bridge.json` in its data
+  folder (a `127.0.0.1` address and a per-run secret) and the server reads it on every call. Every tool but
+  `tag_details` (which asks Danbooru directly) works through the app; when it is not running, the server starts it
+  (see [When the app is not running](#when-the-app-is-not-running)).
 - The app records which agent called (the MCP client's own name and version from `initialize`), the tool and the
   time, never the arguments. Settings › MCP access shows the recent connections; the queue shows which agent put
   each batch in.
+
+## When the app is not running
+
+The server starts the app itself, so an agent never has to ask the user to open it:
+
+1. A call fails before it reached any app: there is no `bridge.json`, or the address it names refuses the connection
+   (the app that wrote it is gone). These are the only two failures that start anything. A call that may have
+   reached the app — the connection dropped after the request was sent, the reply was garbled, the call timed out —
+   is reported as it is and **never sent again**; the rules of [Request keys and paid
+   requests](#request-keys-and-paid-requests) stay exactly as they are.
+2. If the app is already starting for this data folder (its single-instance lock names a live process, or another
+   server started it less than a minute ago), the server only waits for it. Otherwise it starts the app it belongs
+   to: the installed app whose executable runs the server, or — from source — the built client whose
+   `dist-mcp/novelai-mcp.mjs` it is, with that client's development Electron. It starts it at most once a minute,
+   and when several agents call at once only one server starts it (a claim file, `runtime/mcp-autostart.json`, with
+   the app's own single-instance lock behind it).
+3. It waits up to 30 seconds for the app's `bridge.json`, then sends the call once more. If the call was a canvas
+   tool and the app's window is still loading (`workspace_not_ready`, which the app answers before it runs
+   anything), it sends it again every half second within the same 30 seconds.
+
+The app starts in the background and never takes the focus: its first window is shown without activating it
+(`showInactive`), and a second start by an agent never brings the running window forward; its Dock or taskbar icon
+shows as usual. macOS: LaunchServices (`open -n -g -a <app> --env NOVELAI_DATA_DIR=…`); Windows: `Win32_Process.Create`
+(WMI), outside the agent's process tree and job, so closing the agent's terminal does not close the app (if WMI fails,
+a detached process, and the server logs that); Linux: a detached process. The app gets the server's
+`NOVELAI_DATA_DIR` (or none, for the default data folder) and records in Settings › MCP access which agent started it.
+Starting the app never generates anything: batches it recovers from its last run wait paused for an explicit resume.
+
+When the server does not start the app, `unavailable` says why in its message and in `details.autostart`:
+
+| `details.autostart` | Meaning |
+| --- | --- |
+| `off` | `NOVELAI_MCP_AUTOSTART=0` (also `false`, `off`, `no`) in the server's environment: ask the user to open the app |
+| `off_in_tests` | A test process (`node --test`, Vitest, `npm test`); tests never start the app |
+| `unsupported` | The server does not run with an app's own executable (for example system Node running `novelai/src/mcp.mjs`) |
+| `recently_started` | This server started the app less than a minute ago and it is not running |
+| `start_failed` | Starting it failed (the message names the reason) |
+| `started_not_ready`, `started_exited` | It was started but was not ready within 30 seconds, or closed again |
+| `starting_not_ready` | It was already starting and was not ready within 30 seconds |
+| `lost` | It became ready, but its connection was gone again before the call reached it |
+
+In every one of these cases nothing was sent. `NOVELAI_MCP_AUTOSTART=0` turns off only the start: a server still
+waits for an app that is already starting.
 
 ## Tools at a glance
 
@@ -330,8 +374,9 @@ are relative to the project root (`pathBase: "project-root"`, with the root name
 
 One tool call can take long: `enqueue_recipes` makes up to 23 calls to the app in a row, each bounded at 65 seconds.
 Allow about **26 minutes (1560 seconds)** per tool call. The configurations in Settings › MCP access already set this
-for Codex (`tool_timeout_sec`, plus `startup_timeout_sec = 30`) and Pi (`timeout`). Claude Code's defaults are long
-enough. Cursor has no setting for it: if Cursor reports a timeout, check the queue page before letting the agent
+for Codex (`tool_timeout_sec`, plus `startup_timeout_sec = 30`), Pi (`timeout`) and DeepSeek Harness
+(`toolCallTimeoutMs: 1560000`; its default is 60 seconds). Claude Code's defaults are long enough. A call that starts
+the app takes up to 30 seconds longer. Cursor has no setting for it: if Cursor reports a timeout, check the queue page before letting the agent
 resend. For other clients, set the tool timeout yourself.
 
 ## Errors

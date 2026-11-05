@@ -2,6 +2,28 @@
 
 All notable changes to MCP for NovelAI are recorded here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.1.1
+
+### Added
+
+- Agents open the app themselves: when it is not running, the MCP server starts it in the background and sends the
+  call once it is ready (at most about 30 seconds). The app never takes the focus — its first window is shown
+  without activating it, and its Dock or taskbar icon shows as usual. Only a call that certainly reached no app
+  starts anything; a call whose outcome may be unknown is never sent again. One start per minute per server, one
+  server per data folder at a time. `NOVELAI_MCP_AUTOSTART=0` turns it off. macOS starts the app through
+  LaunchServices, Windows outside the agent's process tree (WMI), Linux as a detached process. A server run from
+  source with your own Node does not start the app.
+- Settings › MCP access shows which agent started the app and when, and says under Advanced how to turn the automatic
+  start off.
+- DeepSeek Harness (dsh) in Settings › MCP access and the README: a `@deepseek-ai/dsh-mcp-client` row for
+  `cordis.patch.yml` with the 26-minute tool timeout (`toolCallTimeoutMs`).
+
+### Changed
+
+- `unavailable` now says whether anything was sent and, when the server did not start the app, why
+  (`details.autostart`). The server instructions describe the automatic start.
+- The Windows source launcher quotes a command-line argument that ends in a backslash correctly.
+
 ## 0.1.0 - 2026-11-05
 
 First public release. MCP for NovelAI is based on Langbai NovelAI Studio 2.2.8 (MIT License,

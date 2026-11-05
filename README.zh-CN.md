@@ -96,7 +96,14 @@ Windows 上也可以双击 `novelai\scripts\start-client.cmd`）。详见[构建
 
 打开「**设置 › MCP 接入**」（或首次引导的第 2 步），选择你的 Agent，复制页面给出的内容：应用会填好它自己的可执行文件、
 随包附带的 MCP 服务文件和数据文件夹。MCP 服务用应用自带的可执行文件以 Node 方式运行（`ELECTRON_RUN_AS_NODE=1`），
-不需要另装 Node.js。**应用开着时，Agent 才能使用它。** 接好后，在 Agent 里说一句「列出 NovelAI 队列」试试。
+不需要另装 Node.js。接好后，在 Agent 里说一句「列出 NovelAI 队列」试试。
+
+**Agent 会自己打开应用。** 应用没开时，第一次需要它的调用会让 MCP 服务在后台启动应用——不抢前台：窗口出现在你正在用的
+窗口后面，Dock 或任务栏照常出现图标——等应用就绪（最多约 30 秒）后继续这次调用。只有「肯定没送到任何应用」的调用才会
+这样；结果可能未知的调用绝不重发。不想这样：在 Agent 配置的 `env` 里加 `NOVELAI_MCP_AUTOSTART=0`，Agent 就会得到
+`unavailable` 并请你自己打开应用（已经在启动中的应用仍会等它就绪）。用你自己的 Node 从源码运行的服务不会自动打开应用。
+macOS 上经由 LaunchServices 在后台启动；Windows 上在 Agent 的进程树之外启动（WMI），关掉 Agent 的终端不会带走应用；
+Linux 上作为脱离的进程启动。
 
 下面是页面生成内容的格式；`<app>`、`<server>`、`<data folder>` 代表页面填入的路径。
 
@@ -151,6 +158,28 @@ NOVELAI_DATA_DIR = "<data folder>"
 }
 ```
 
+**DeepSeek Harness**（dsh）：按官方文档（DSH 的 MCP Integration 与 Configuration 两页；
+[`@deepseek-ai/dsh-mcp-client`](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/mcp/mcp-client/README.md)），
+把下面这一条加到 `~/.dsh/cordis.patch.yml`（所有 profile 都用；只给一个 profile 用就放
+`~/.dsh/profiles/<profile>/cordis.patch.yml`——不是 `cordis.yml`，dsh 每次启动都会把它重写为空），然后重启 dsh。
+文件里已有 `- insert:` 列表时，只把 `novelai` 这一条加进去。片段设了 `toolCallTimeoutMs`，因为 dsh 默认的 60 秒
+不够入队一大批图用。
+
+```yaml
+- insert:
+    - id: mcp-novelai
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: novelai
+        transport: stdio
+        command: "<app>"
+        args: ["<server>"]
+        env:
+          ELECTRON_RUN_AS_NODE: "1"
+          NOVELAI_DATA_DIR: "<data folder>"
+        toolCallTimeoutMs: 1560000
+```
+
 **其它**按 `mcpServers` 格式配置的客户端（例如 Claude Desktop 的 `claude_desktop_config.json`）：合并同样的一项
 （不带 `type` 和 `timeout`），并把客户端的工具调用超时设到 26 分钟（1560 秒）以上——入队一大批图可能要几分钟。
 
@@ -178,7 +207,8 @@ NOVELAI_DATA_DIR = "<data folder>"
   - GitHub：`api.github.com`，检查有没有新版本（见[更新](#更新)）。下载链接在浏览器里打开。
   - `raw.githubusercontent.com`：只在你运行可选的中文标签词库安装脚本（`novelai/scripts/install-tag-dictionary.mjs`）时。
   - 你设置的代理（「设置 › 账号与网络 › 代理」；默认跟随系统代理）。
-- MCP 服务只在 `127.0.0.1` 上和应用通信，凭应用写在数据文件夹里的密钥连接。
+- MCP 服务只在 `127.0.0.1` 上和应用通信，凭应用写在数据文件夹里的密钥连接。应用没开时，MCP 服务可能会启动它
+  （见[接入 Agent](#接入-agent)；`NOVELAI_MCP_AUTOSTART=0` 可以关掉）。
 - **没有遥测、统计或崩溃上报。** 应用只在本机记录哪个 Agent 在什么时候调用了哪个工具（从不记录参数），用于在
   「设置 › MCP 接入」和队列页显示。
 

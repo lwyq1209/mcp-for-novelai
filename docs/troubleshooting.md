@@ -21,16 +21,35 @@ what to do next. This page explains the codes and situations people ask about mo
 
 `unavailable` means the MCP server found no running app for its data folder, or the connection dropped. The server
 reads `runtime/bridge.json` in the data folder on every call; the app writes it when it starts and removes it when it
-quits.
+quits. When no app is running, the server normally starts it in the background and waits up to 30 seconds (see
+[When the app is not running](mcp-tools.md#when-the-app-is-not-running)); `unavailable` then means it could not, and
+`details.autostart` says why:
 
-- Start the app, then call again. Agents can use the app only while it is running.
+- `off` — automatic start is turned off (`NOVELAI_MCP_AUTOSTART=0` in the agent's configuration). Open the app, then
+  call again; or remove the variable.
+- `unsupported` — the server does not run with an app's own executable, for example `node novelai/src/mcp.mjs` with
+  your own Node. Open the app yourself, or register the server with the configuration from Settings › MCP access.
+- `started_not_ready`, `started_exited`, `start_failed` — the server started the app (or tried to) but it did not
+  come up. Open the app yourself and look at what it shows (a first launch on macOS may need **Open** in the Finder
+  once; see [Opening the app the first time](#opening-the-app-the-first-time)); the app's log is in `logs/` of the data
+  folder.
+- `starting_not_ready` — the app is starting (by you or another agent) and was slow; call again in a moment.
+- `recently_started` — this server started the app less than a minute ago and it closed again; it does not start it
+  again so soon. Open it yourself or call again later.
+- No `details.autostart` — the connection dropped after the request was sent: the call may or may not have reached the
+  app and is never sent again automatically (see the next points).
+
+Also:
+
 - Make sure the agent starts the server with the configuration from **Settings › MCP access** of the app you are
   running: it names the app's data folder as `NOVELAI_DATA_DIR`. A server started for another data folder (another
-  install, a test folder, a build from source with `--data-dir`) looks for a different app.
+  install, a test folder, a build from source with `--data-dir`) looks for (and starts) a different app.
 - After `unavailable` in the middle of a write (an enqueue, a save), read the current state before doing anything
   again: the write may or may not have happened. For enqueues, use `lookup_enqueue` with the same request key.
 - `invalid_connection` means `bridge.json` exists but is not a valid local connection file. Restart the app; it writes a
   new one.
+- The app started by an agent appears behind your windows and does not take the focus; its Dock or taskbar icon shows
+  as usual — click it to bring the window forward. Settings › MCP access lists which agent started it and when.
 
 ## `host_outdated`
 
