@@ -152,7 +152,7 @@ describe('explicit local material covers', () => {
   it('reports damaged cover omissions in export and keeps successful entries on cover import failure', async () => {
     const f = await setup(); await f.set(); const { data } = await f.service.library({ action: 'export' });
     const originalLink = fs.link;
-    vi.spyOn(fs, 'link').mockImplementation(async (from, to) => { if (String(to).includes('/covers/')) throw Object.assign(new Error('cover disk failed'), { code: 'EIO' }); return originalLink(from, to); });
+    vi.spyOn(fs, 'link').mockImplementation(async (from, to) => { if (String(to).includes(`${path.sep}covers${path.sep}`)) throw Object.assign(new Error('cover disk failed'), { code: 'EIO' }); return originalLink(from, to); });
     // The imported copy needs its own image file: remove the existing one so the import publishes it again.
     await fs.unlink(path.join(f.directory, 'covers', `${data.covers[0].cover.sha256}.webp`));
     const imported = await f.service.library({ action: 'import', data });

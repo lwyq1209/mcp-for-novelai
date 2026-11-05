@@ -131,7 +131,8 @@ describe("test isolation (review rework 2)", () => {
       const script = `const p = require(${JSON.stringify(path.resolve("shared/runtime/data-paths.cjs"))}); const r = f => { try { return f(); } catch (e) { return e.code; } };
 console.log(JSON.stringify([r(() => p.resolveDataRoot()), r(() => p.resolveProjectRoot()), r(() => p.defaultOutputDirectory("/x/Pictures")), p.resolveDataRoot({ env: {}, platform: "linux", homedir: "/home/u" })]));`;
       const result = spawnSync(process.execPath, ["-e", script], { env, encoding: "utf8" });
-      expect(JSON.parse(result.stdout.trim())).toEqual(["test_isolation_required", "test_isolation_required", "/x/Pictures/MCP for NovelAI", "/home/u/.config/mcp-for-novelai"]);
+      // The output folder is joined with this platform's separator (\\x\\Pictures\\MCP for NovelAI on Windows).
+      expect(JSON.parse(result.stdout.trim())).toEqual(["test_isolation_required", "test_isolation_required", path.join("/x/Pictures", "MCP for NovelAI"), "/home/u/.config/mcp-for-novelai"]);
       expect(readdirSync(home)).toEqual([]);
     } finally { rmSync(home, { recursive: true, force: true }); }
   });

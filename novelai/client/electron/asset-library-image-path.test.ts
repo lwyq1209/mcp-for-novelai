@@ -34,7 +34,10 @@ it('Root counter: an unhashed symlink/../ locator must not return the normalized
   const f=await setup();
   try {
     const locator=`${f.a}/link/../image.png`;
-    expect(await fs.readFile(locator)).toEqual(f.blue);
+    // The trap on POSIX: the file system reads "link/.." through the link (b/image.png, blue) while a lexical
+    // normalization gives a/image.png (red). Windows path APIs normalize ".." lexically before the file system sees
+    // the path, so there the same locator reads red. It is refused on every platform.
+    expect(await fs.readFile(locator)).toEqual(process.platform==='win32'?f.red:f.blue);
     const request=f.register('path-counter',locator);const revision=f.repo.getRevision();
     let error:any,result:any;try{result=await f.call(request);}catch(e){error=e;}
     const returned=result?.data?Buffer.from(result.data,'base64'):undefined;
