@@ -903,6 +903,17 @@ function legacyImportGuard(library: ReturnType<typeof activeLibrary>): LegacyImp
   const ids = (kind: 'history' | 'artist_favorite' | 'style_preset' | 'positive_preset' | 'prompt_chunk') => library?.trashedIds(kind) ?? new Set<string>();
   return { trashed: { history: ids('history'), artist_favorite: ids('artist_favorite'), style_preset: ids('style_preset'), positive_preset: ids('positive_preset'), prompt_chunk: ids('prompt_chunk') }, inTrash: 0, written: [], folders: [] };
 }
+/**
+ * The first folder `fs.mkdir(folder, { recursive: true })` created, as a plain absolute path, or undefined. On Windows
+ * Node returns it in its long-path form (\\?\C:\…, \\?\UNC\server\share\…), which never equals the folder asked for.
+ */
+export function createdFolderPath(created: string | undefined) {
+  if (!created) return undefined;
+  if (created.startsWith("\\\\?\\UNC\\")) return path.resolve(`\\\\${created.slice(8)}`);
+  if (created.startsWith("\\\\?\\")) return path.resolve(created.slice(4));
+  return path.resolve(created);
+}
+const sameOrInside = (folder: string, top: string) => { const relative = path.relative(top, folder); return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative)); };
 /** Removes files an aborted import wrote and nothing in the library uses, then the folders it created that are empty now. */
 async function removeUnsavedImports(library: ReturnType<typeof activeLibrary>, guard: LegacyImportGuard) {
   if (!library || !guard.written.length) return 0;
@@ -912,10 +923,11 @@ async function removeUnsavedImports(library: ReturnType<typeof activeLibrary>, g
     if (owners.get(file)?.size) continue;
     try { await fs.unlink(file); removed += 1; } catch { /* already gone or not removable; nothing else is touched */ }
   }
+  // Never above the first folder the import created: the output folder and its parents stay, also when empty.
   for (const { top, leaf } of [...guard.folders].reverse()) {
-    for (let folder = leaf; ; folder = path.dirname(folder)) {
+    for (let folder = path.resolve(leaf); sameOrInside(folder, top); folder = path.dirname(folder)) {
       try { await fs.rmdir(folder); } catch { break; /* not empty (something else is there) or gone */ }
-      if (path.resolve(folder) === path.resolve(top) || path.dirname(folder) === folder) break;
+      if (folder === top || path.dirname(folder) === folder) break;
     }
   }
   return removed;
@@ -1013,7 +1025,7 @@ async function restoreHistoryItem(
   const folder = group
     ? path.join(state.outputDir, dateFolder(raw.date), safeFolderName(group.name, "group"))
     : path.join(state.outputDir, dateFolder(raw.date));
-  const createdFolder = await fs.mkdir(folder, { recursive: true });
+  const createdFolder = createdFolderPath(await fs.mkdir(folder, { recursive: true }));
   if (createdFolder) state.guard.folders.push({ top: createdFolder, leaf: folder });
   const destination = await uniqueDestination(folder, asset.reference.originalName);
   await atomicWrite(destination.filePath, asset.bytes);
@@ -1142,7 +1154,7 @@ async function restoreStylePreviews(
     if (digest) hashes.add(digest);
   }
   const directory = stylePromptPreviewDirectory(presetId, app.getPath("userData"));
-  const createdFolder = await fs.mkdir(directory, { recursive: true });
+  const createdFolder = createdFolderPath(await fs.mkdir(directory, { recursive: true }));
   if (createdFolder) guard?.folders.push({ top: createdFolder, leaf: directory });
   for (const raw of incoming) {
     if (previews.length >= 3) break;

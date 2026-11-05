@@ -320,6 +320,27 @@ it.each([
   expect(await fs.readdir(destination.userDataRoot)).not.toContain('style-prompt-previews');
 });
 
+it('an aborted import never removes folders above the ones it created, also when mkdir names them in the Windows long-path form', async () => {
+  await source();
+  const exported = await exportDataBackup({ destination: 'internal', categories: ['imageHistory', 'promptPresets'] });
+  const zip = await JSZip.loadAsync(await fs.readFile(exported.path!));
+  const presets = JSON.parse(await zip.file('data/prompt-presets.json')!.async('string'));
+  presets.stylePromptPresets[0].id = 123;
+  zip.file('data/prompt-presets.json', JSON.stringify(presets));
+  await fs.writeFile(exported.path!, await zip.generateAsync({ type: 'nodebuffer' }));
+  await fixture();
+  // Node on Windows returns the first created folder as \\?\C:\…; here every platform gets that prefix.
+  const mkdir = fs.mkdir.bind(fs);
+  const spy = vi.spyOn(fs, 'mkdir').mockImplementation((async (...args: Parameters<typeof fs.mkdir>) => { const created = await mkdir(...args); return typeof created === 'string' ? `\\\\?\\${created}` : created; }) as typeof fs.mkdir);
+  let restored, created = 0;
+  try { restored = await importDataBackup({ path: exported.path!, categories: ['imageHistory', 'promptPresets'], confirmConfigurationOverwrite: false }); }
+  finally { created = (await Promise.all(spy.mock.results.map(result => result.value))).filter(value => typeof value === 'string').length; spy.mockRestore(); }
+  expect(restored.ok).toBe(false);
+  expect(created, 'the import created folders (and removed them again)').toBeGreaterThan(0);
+  // The output folder (which existed before) is still there, and empty again.
+  expect(await fs.readdir(mock.state.settings.outputDir)).toEqual([]);
+});
+
 it('preflights malformed portable history snapshots before writing any images or rows', async () => {
   await source();
   const exported = await exportDataBackup({ destination: 'internal', categories: ['imageHistory'] });
