@@ -170,6 +170,12 @@ jobs:
         working-directory: novelai/client
         run: npm ci
 
+      # npm ci does not download Electron itself; the macOS build copies LICENSES.chromium.html from
+      # node_modules/electron/dist (mac.extraResources), so fetch the binary and its license files here.
+      - name: Install the Electron binary (its license files)
+        working-directory: novelai/client
+        run: node node_modules/electron/install.js
+
       # build (renderer, main process, MCP bundle), notices:check, then electron-builder --publish never.
       - name: Package (electron-builder)
         working-directory: novelai/client
