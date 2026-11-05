@@ -18,3 +18,18 @@ if (!inherited || inherited !== process.env.NOVELAI_TEST_RUN_DATA_DIR) {
   process.env.NOVELAI_TEST_DATA_DIR_OWNER = owner;
   process.once('exit', () => { if (process.env.NOVELAI_TEST_DATA_DIR_OWNER === owner) rmSync(directory, { recursive: true, force: true }); });
 }
+
+// A test file whose process is still alive well after its last test (an open handle: a child process, a server, a
+// timer) would keep `node --test` waiting forever without naming it. Once every test of this file has finished, an
+// unref'd timer gives the process EXIT_GRACE_MS to end on its own; otherwise it names the open resource types and
+// fails the file, so the leak is a located failure instead of a hung run.
+const EXIT_GRACE_MS = 60_000;
+if (process.env.NODE_TEST_CONTEXT) {
+  const { after } = await import('node:test');
+  after(() => {
+    setTimeout(() => {
+      console.error(`[test hygiene] this test file is still running ${EXIT_GRACE_MS / 1000} s after its last test; open resources: ${process.getActiveResourcesInfo().join(', ') || 'none reported'}. Close them in the test (t.after).`);
+      process.exit(1);
+    }, EXIT_GRACE_MS).unref();
+  });
+}

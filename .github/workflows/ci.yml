@@ -47,44 +47,60 @@ jobs:
         run: npm ci
 
       - name: Install the client dependencies
+        id: dependencies
         working-directory: novelai/client
         run: npm ci
 
+      # The checks below run even when an earlier one failed (once the dependencies are installed), so one run shows
+      # every failing check on every platform; the job still fails if any of them fails.
+
       # Always through npm test (tests/run-tests.mjs), never node --test on single files: run-tests.mjs gives the run a
       # throwaway data root and temp folder, so no test writes into the runner's real app data location.
+      # Every test has a time limit (tests/run-tests.mjs) and a test file that stays alive after its last test fails
+      # naming its open resources (tests/isolate-data-dir.mjs), so a hang is a named failure, not a cancelled job.
       - name: MCP server tests
         working-directory: novelai
+        timeout-minutes: 20
         run: npm test
 
       - name: Contract check
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
         working-directory: novelai
         run: npm run check:contracts
 
       - name: Client typecheck
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
         working-directory: novelai/client
         run: npm run typecheck
 
       - name: Client tests
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
         working-directory: novelai/client
+        timeout-minutes: 20
         run: npm test
 
       - name: Client build (renderer, main process, MCP bundle)
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
         working-directory: novelai/client
         run: npm run build
 
       - name: Third-party notices check
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
         working-directory: novelai/client
         run: npm run notices:check
 
       # After the build, so the tests that need the built client run instead of skipping. The tests that need a real
       # window skip themselves where Electron cannot open one (Linux runners have no display); see the job log.
       - name: Dev-tools tests
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
         working-directory: novelai/client
+        timeout-minutes: 15
         env:
           NODE_DISABLE_COMPILE_CACHE: '1'
         run: npm run test:dev-tools
 
       - name: The checks leave the checkout unchanged
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
         shell: bash
         run: |
           git status --porcelain --untracked-files=all > "$RUNNER_TEMP/status.txt"
