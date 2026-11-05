@@ -2,11 +2,11 @@
 // nothing here starts a real app. What decides a start, how long it waits, what is sent again and what never is.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, rm, symlink, writeFile, utimes } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, rm, symlink, writeFile, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BridgeError, undeliveredError } from '../src/bridge-client.mjs';
-import { AUTOSTART_LIMITS, AUTOSTART_STATES, CLAIM_FILE, STILL_LOADING, appInstanceState, autostartPolicy, createAutostartBridge, createStartClaim } from '../src/app-autostart.mjs';
+import { AUTOSTART_LIMITS, AUTOSTART_STATES, CANVAS_RETRY_METHODS, CLAIM_FILE, CLOCK_SLACK_MS, STILL_LOADING, appInstanceState, autostartPolicy, createAutostartBridge, createStartClaim } from '../src/app-autostart.mjs';
 
 const noBridge = () => undeliveredError('no_bridge', 'unavailable', 'no app');
 const refused = fingerprint => undeliveredError('refused', 'unavailable', 'gone', undefined, fingerprint);
@@ -236,24 +236,61 @@ test('appInstanceState reads the data root\'s single-instance lock: a live pid i
   assert.equal(await appInstanceState(odd, { platform: 'darwin' }), 'absent');
 });
 
-test('start claims: one server per data root takes it; a fresh claim of another server holds, an old one expires', async t => {
-  const runtimeDir = join(await mkdtemp(join(tmpdir(), 'nai-claim-')), 'runtime');
-  t.after(() => rm(join(runtimeDir, '..'), { recursive: true, force: true }));
+test('start claims: exactly one of two servers gets the claim, also past an expired claim (500 races each, real files)', async t => {
+  const base = await mkdtemp(join(tmpdir(), 'nai-claim-')), runtimeDir = join(base, 'runtime');
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const isAlive = pid => pid !== 99999;
+  const races = async seed => {
+    let both = 0, none = 0;
+    for (let i = 0; i < 500; i++) {
+      await rm(runtimeDir, { recursive: true, force: true });
+      await seed();
+      const a = createStartClaim(runtimeDir, { pid: 1001, isAlive }), b = createStartClaim(runtimeDir, { pid: 1002, isAlive });
+      const [ra, rb] = await Promise.all([a.claim(), b.claim()]);
+      if (ra && rb) both++; if (!ra && !rb) none++;
+    }
+    return { both, none };
+  };
+  const writeClaim = async body => { await mkdir(runtimeDir, { recursive: true }); await writeFile(join(runtimeDir, CLAIM_FILE), JSON.stringify(body)); };
+  assert.deepEqual(await races(async () => {}), { both: 0, none: 0 }, 'no claim file');
+  assert.deepEqual(await races(() => writeClaim({ pid: 1, nonce: 'x', at: Date.now() - 120_000 })), { both: 0, none: 0 }, 'an expired claim of a live server');
+  assert.deepEqual(await races(() => writeClaim({ pid: 99999, nonce: 'y', at: Date.now() })), { both: 0, none: 0 }, 'a fresh claim of a server that is gone');
+  assert.deepEqual(await races(() => writeClaim({ pid: 3, nonce: 'z', at: Date.now() + 3_600_000 })), { both: 0, none: 0 }, 'a claim from the future (the clock was set back)');
+  // The review's probe file: an older format with an old mtime.
+  assert.deepEqual(await races(async () => { await writeClaim({ pid: 1, startedAt: 'old' }); const old = new Date(Date.now() - 120_000); await utimes(join(runtimeDir, CLAIM_FILE), old, old); }), { both: 0, none: 0 }, 'a legacy expired claim');
+  assert.deepEqual((await readdir(runtimeDir)).sort(), [CLAIM_FILE], 'no temporary or set-aside files are left');
+});
+
+test('start claims: a live server\'s recent claim holds others back; its release lets them in; nobody releases another\'s claim', async t => {
+  const base = await mkdtemp(join(tmpdir(), 'nai-claim-hold-')), runtimeDir = join(base, 'runtime');
+  t.after(() => rm(base, { recursive: true, force: true }));
   let now = Date.now();
-  const a = createStartClaim(runtimeDir, { pid: 101, now: () => now }), b = createStartClaim(runtimeDir, { pid: 202, now: () => now });
+  const a = createStartClaim(runtimeDir, { pid: 101, now: () => now, isAlive: () => true }), b = createStartClaim(runtimeDir, { pid: 202, now: () => now, isAlive: () => true });
   assert.equal(await a.fresh(), false);
-  const [forA, forB] = await Promise.all([a.claim(), b.claim()]);
-  assert.deepEqual([forA, forB].sort(), [false, true], 'exactly one of two servers claims the start');
-  assert.deepEqual(await readdir(runtimeDir), [CLAIM_FILE]);
-  const winner = forA ? a : b;
-  assert.equal(await winner.fresh(), false, 'a server does not wait for its own claim');
-  assert.equal(await (winner === a ? b : a).fresh(), true);
-  // A minute later the claim no longer holds anyone back.
-  const old = (Date.now() - AUTOSTART_LIMITS.claimMs - 5_000) / 1000;
-  await utimes(join(runtimeDir, CLAIM_FILE), old, old);
-  assert.equal(await a.fresh(), false); assert.equal(await b.fresh(), false);
-  assert.equal(await (winner === a ? b : a).claim(), true);
-  now += 1;
+  assert.equal(await a.claim(), true);
+  assert.equal(await a.fresh(), false, 'a server does not wait for its own claim');
+  assert.equal(await b.fresh(), true); assert.equal(await b.claim(), false);
+  await b.release(); assert.equal(await b.fresh(), true, 'b holds nothing, so it removes nothing');
+  await a.release(); assert.equal(await b.fresh(), false);
+  assert.deepEqual(await readdir(runtimeDir), []);
+  // More than a minute old, or in the future: stale (not waited for).
+  assert.equal(await a.claim(), true);
+  now += AUTOSTART_LIMITS.claimMs + 1; assert.equal(await b.fresh(), false);
+  now -= AUTOSTART_LIMITS.claimMs + 1 + CLOCK_SLACK_MS + 60_000; assert.equal(await b.fresh(), false, 'the clock was set back');
+  now += 60_000 + CLOCK_SLACK_MS; assert.equal(await b.fresh(), true);
+});
+
+test('appInstanceState: a lock whose pid now belongs to a process started after the lock was made is a leftover (pid reuse)', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'nai-instance-reuse-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await symlink(`host-${process.pid}`, join(root, 'SingletonLock'));
+  const made = (await lstat(join(root, 'SingletonLock'))).mtimeMs;
+  assert.equal(await appInstanceState(root, { platform: 'darwin', startTime: async () => made - 60_000 }), 'running', 'its process started before the lock');
+  assert.equal(await appInstanceState(root, { platform: 'darwin', startTime: async () => made + 2_000 }), 'running', 'within the whole-second slack of ps');
+  assert.equal(await appInstanceState(root, { platform: 'linux', startTime: async () => made + 3_600_000 }), 'absent', 'a later process reuses the pid');
+  assert.equal(await appInstanceState(root, { platform: 'darwin', startTime: async () => null }), 'running', 'unknown start time: the live pid counts');
+  // The real ps of this platform reads this very process (started before the lock).
+  assert.equal(await appInstanceState(root, { platform: process.platform === 'win32' ? 'darwin' : process.platform }), process.platform === 'win32' ? 'absent' : 'running');
 });
 
 test('the stdio server\'s default bridge in a test process starts nothing and writes nothing', async t => {
@@ -311,4 +348,37 @@ test('the server instructions describe the automatic start and how it is turned 
   assert.match(INSTRUCTIONS, /With NOVELAI_MCP_AUTOSTART=0, or when the server does not run with the app's own executable, it does not start the app/);
   assert.equal(TOOL_DEFINITIONS.length, 18);
   assert.match(TOOL_DEFINITIONS.find(tool => tool.name === 'list_queue').description, /Read-only; never enqueues, starts or retries a batch\./);
+});
+
+test('review rework: workspace_not_ready is sent again only for the canvas methods and the canvas capture', async () => {
+  const notReady = () => new BridgeError('workspace_not_ready', 'loading');
+  assert.deepEqual([...CANVAS_RETRY_METHODS].sort(), ['apply_edit', 'capture_canvas_recipe', 'draft_edit', 'get_asset', 'list_workspaces', 'read_prompt_review', 'read_workspace', 'undo_edit']);
+  for (const method of ['enqueue_queue_recipes', 'list_queue', 'put_queue_recipe', 'asset_library']) {
+    const w = world({ onLaunch: s => { s.bridge = 'up'; } });
+    const bridge = client([noBridge(), notReady]);
+    await assert.rejects(createAutostartBridge(bridge, w.options).call(method, {}), error => error.code === 'workspace_not_ready' && !error.message.includes(STILL_LOADING));
+    assert.equal(bridge.sent.length, 2, method);
+  }
+  const w = world({ onLaunch: s => { s.bridge = 'up'; } });
+  const capture = client([noBridge(), notReady, notReady]);
+  assert.deepEqual(await createAutostartBridge(capture, w.options).call('capture_canvas_recipe', {}), { ok: 'capture_canvas_recipe' });
+  assert.equal(capture.sent.length, 4);
+});
+
+test('review rework: a launcher that throws is start_failed (with details); the next call within a minute says it tried to start it', async () => {
+  const w = world();
+  w.options.launcher = { resolve: () => APP, launch: async () => { throw new Error('boom'); } };
+  const autostart = createAutostartBridge(client([noBridge(), noBridge()]), w.options);
+  await assert.rejects(autostart.call('list_queue', {}), error => error.code === 'unavailable' && error.details.autostart === 'start_failed' && /starting it failed \(boom\)/.test(error.message));
+  await assert.rejects(autostart.call('list_queue', {}), error => error.details.autostart === 'recently_started' && /This server tried to start it less than a minute ago and does not try again so soon\./.test(error.message) && !/started it less/.test(error.message));
+});
+
+test('review rework: the claim is released when the start is over, whether it worked or not', async () => {
+  for (const [name, setup, expected] of [['ready', { onLaunch: s => { s.bridge = 'up'; } }, 'ok'], ['failed', { launchResult: { ok: false, reason: 'x' } }, 'start_failed'], ['not ready', {}, 'started_not_ready']]) {
+    const w = world(setup);
+    let released = 0;
+    w.options.claims = { fresh: async () => false, claim: async () => true, release: async () => { released++; } };
+    const outcome = await createAutostartBridge(client([noBridge()]), w.options).call('list_queue', {}).then(() => 'ok', error => error.details?.autostart);
+    assert.equal(outcome, expected, name); assert.equal(released, 1, name);
+  }
 });

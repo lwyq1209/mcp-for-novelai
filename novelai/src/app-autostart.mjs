@@ -11,14 +11,17 @@
  *    (src/app-launch.mjs), it starts that app in the background — at most once a minute per server process, and
  *    only one server per data root at a time (the claim file) — and waits.
  * 3. Waiting ends when a new bridge.json appears (another one than the refused one), at most AUTOSTART_LIMITS.waitMs
- *    (30 s) after the failure; the call is then sent once more. After a start by this call, a canvas call the host
- *    refuses with workspace_not_ready (refused before anything is run: the window is still loading) is sent again
- *    every 500 ms within the same 30 s; any other answer is returned at once.
+ *    (30 s) after the failure; the call is then sent once more. After a start by this call, a canvas call
+ *    (CANVAS_RETRY_METHODS) the host refuses with workspace_not_ready (refused before anything is run: the window is
+ *    still loading) is sent again every 500 ms within the same 30 s; any other answer, and that code for any other
+ *    method, is returned at once.
  *
  * Concurrent calls of one server share one wait. NOVELAI_MCP_AUTOSTART=0 turns starting off (waiting for an app that
  * is already starting stays); test processes never start anything unless a test injects its own launcher.
  */
-import { lstat, mkdir, readFile, readlink, unlink, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { link, lstat, mkdir, readFile, readlink, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { BridgeError, readBridgeFingerprint, refusedConnection, undeliveredReason } from './bridge-client.mjs';
 import { isTestProcess, resolveDataPaths } from './data-paths.mjs';
@@ -54,48 +57,105 @@ export function autostartPolicy({ env = process.env, proc = process, launcherInj
 
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; } };
 
+/** When a process started (ms since the epoch, from `ps -o lstart=`), or null when that cannot be read. */
+export function processStartTime(pid) {
+  return new Promise(resolve => {
+    execFile('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', timeout: 5000, env: { ...process.env, LC_ALL: 'C', LANG: 'C' } }, (error, stdout) => {
+      const at = error ? NaN : Date.parse(String(stdout).trim().replace(/\s+/g, ' '));
+      resolve(Number.isFinite(at) ? at : null);
+    });
+  });
+}
+
 /**
  * Whether an app runs on this data root (its userData), from Chromium's single-instance lock: on macOS and Linux the
- * symlink SingletonLock -> <host>-<pid> while that process lives; on Windows the file `lockfile`, which the running
- * instance holds open with delete-on-close. 'running' or 'absent'; anything unreadable is 'absent' (a start then
- * meets the app's own single-instance lock).
+ * symlink SingletonLock -> <host>-<pid>; on Windows the file `lockfile`, which the running instance holds open with
+ * delete-on-close. On macOS and Linux the pid must be alive and must be the process that made the lock: a lock left
+ * by a crash whose pid now belongs to another process (one that started after the lock was made) is 'absent'.
+ * 'running' or 'absent'; anything unreadable is 'absent' (a start then meets the app's own single-instance lock).
  */
-export async function appInstanceState(dataRoot, { platform = process.platform, isAlive = alive, fs = { lstat, readlink } } = {}) {
+export async function appInstanceState(dataRoot, { platform = process.platform, isAlive = alive, startTime = processStartTime, fs = { lstat, readlink } } = {}) {
   try {
     if (platform === 'win32') { await fs.lstat(join(dataRoot, 'lockfile')); return 'running'; }
-    const target = await fs.readlink(join(dataRoot, 'SingletonLock'));
+    const lock = join(dataRoot, 'SingletonLock');
+    const target = await fs.readlink(lock);
     const pid = Number(/-(\d+)$/.exec(String(target))?.[1]);
-    return Number.isSafeInteger(pid) && pid > 0 && isAlive(pid) ? 'running' : 'absent';
+    if (!Number.isSafeInteger(pid) || pid <= 0 || !isAlive(pid)) return 'absent';
+    // The lock is made by its process after that process started (ps gives whole seconds: 5 s of slack).
+    const [made, started] = await Promise.all([fs.lstat(lock).then(info => info.mtimeMs, () => null), startTime(pid)]);
+    if (made !== null && started !== null && started > made + 5000) return 'absent';
+    return 'running';
   } catch { return 'absent'; }
 }
 
-/** The claim file of the runtime folder: claim() takes it (true) unless another server holds a fresh one; fresh()
- * says whether another server's claim is younger than claimMs. */
-export function createStartClaim(runtimeDir, { claimMs = AUTOSTART_LIMITS.claimMs, now = () => Date.now(), pid = process.pid } = {}) {
+/**
+ * The claim file of the runtime folder: which server is starting the app right now. claim() takes it (true) unless
+ * another server holds it; release() gives it up (only when it is still this server's); fresh() says whether another
+ * server holds one. Every claim is one file made at once with its whole content (a hard link of a finished temporary
+ * file, which fails when the claim exists), naming {pid, nonce, at}. A claim is held while its pid lives and its time
+ * is at most claimMs old and not more than CLOCK_SLACK_MS in the future (a clock set back); anything else is stale. A
+ * stale claim is moved aside first (a rename, which only one server can do with that file) and checked to be the one
+ * that was judged stale; a claim another server made in between is put back. So of servers that claim at once, exactly
+ * one gets it — also past a stale claim.
+ */
+export const CLOCK_SLACK_MS = 5_000;
+export function createStartClaim(runtimeDir, { claimMs = AUTOSTART_LIMITS.claimMs, now = () => Date.now(), pid = process.pid, isAlive = alive } = {}) {
   const file = join(runtimeDir, CLAIM_FILE);
-  // Its age decides; an unreadable body (being written right now, or damaged) names no server.
-  const read = async () => {
-    let info;
-    try { info = await lstat(file); } catch { return null; }
-    let pid = null;
-    try { pid = JSON.parse(await readFile(file, 'utf8'))?.pid ?? null; } catch { pid = null; }
-    return { ageMs: now() - info.mtimeMs, pid };
+  let mine = null;
+  /** {text, pid, at} of a claim file, or null when there is none. A body that cannot be read names no server. */
+  const read = async target => {
+    let info, text;
+    try { [info, text] = await Promise.all([lstat(target), readFile(target, 'utf8')]); }
+    catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
+    let body = null;
+    try { body = JSON.parse(text); } catch { body = null; }
+    const recorded = typeof body?.at === 'number' ? body.at : Date.parse(body?.startedAt ?? '');
+    return { text, pid: Number.isSafeInteger(body?.pid) ? body.pid : null, at: Number.isFinite(recorded) ? recorded : info.mtimeMs };
   };
-  const write = () => writeFile(file, `${JSON.stringify({ pid, startedAt: new Date(now()).toISOString() })}\n`, { flag: 'wx', mode: 0o600 });
+  // A claim without a readable pid (being written on a volume without hard links) is held by its age alone.
+  const held = claim => { const age = now() - claim.at; return age <= claimMs && age >= -CLOCK_SLACK_MS && (claim.pid === null || isAlive(claim.pid)); };
+  /** Makes `target` with `text` at once, or throws EEXIST. */
+  const create = async (target, text) => {
+    const temporary = join(runtimeDir, `.${CLAIM_FILE}.${randomUUID()}.tmp`);
+    await writeFile(temporary, text, { flag: 'wx', mode: 0o600 });
+    try { await link(temporary, target); }
+    catch (error) {
+      // A volume without hard links: an exclusive create (its body may be read empty for a moment: held by its mtime then).
+      if (['EPERM', 'ENOTSUP', 'ENOSYS', 'EXDEV'].includes(error?.code)) await writeFile(target, text, { flag: 'wx', mode: 0o600 });
+      else throw error;
+    } finally { await unlink(temporary).catch(() => undefined); }
+  };
+  /** Moves `claim` aside when it is still the file there; puts back one that turned out to be another one. */
+  const takeAway = async claim => {
+    const aside = join(runtimeDir, `.${CLAIM_FILE}.${randomUUID()}.stale`);
+    try { await rename(file, aside); } catch (error) { if (error?.code === 'ENOENT') return 'gone'; throw error; }
+    const moved = await read(aside).catch(() => null);
+    if (moved?.text === claim.text) { await unlink(aside).catch(() => undefined); return 'removed'; }
+    // Another server's new claim: give it back (if yet another one exists meanwhile, that one stays).
+    await link(aside, file).catch(() => undefined);
+    await unlink(aside).catch(() => undefined);
+    return 'not_ours';
+  };
   return {
-    async fresh() { const claim = await read(); return Boolean(claim) && claim.pid !== pid && claim.ageMs < claimMs; },
+    async fresh() { const claim = await read(file).catch(() => null); return Boolean(claim) && claim.pid !== pid && held(claim); },
     async claim() {
       await mkdir(runtimeDir, { recursive: true, mode: 0o700 });
-      for (let attempt = 0; attempt < 2; attempt++) {
-        try { await write(); return true; }
-        catch (error) {
-          if (error?.code !== 'EEXIST') throw error;
-          const claim = await read();
-          if (claim && claim.pid !== pid && claim.ageMs < claimMs) return false;
-          await unlink(file).catch(() => undefined);
-        }
+      const text = `${JSON.stringify({ pid, nonce: randomUUID(), at: now() })}\n`;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try { await create(file, text); mine = text; return true; }
+        catch (error) { if (error?.code !== 'EEXIST') throw error; }
+        const claim = await read(file);
+        if (!claim) continue;
+        if (held(claim) && claim.pid !== pid) return false;
+        if (await takeAway(claim) === 'not_ours') return false;
       }
       return false;
+    },
+    async release() {
+      if (!mine) return;
+      const text = mine; mine = null;
+      const claim = await read(file).catch(() => null);
+      if (claim?.text === text) await takeAway(claim).catch(() => undefined);
     },
   };
 }
@@ -104,7 +164,7 @@ const MESSAGES = {
   off: 'The NovelAI app is not running for this data folder, and automatic start is turned off (NOVELAI_MCP_AUTOSTART=0). Nothing was sent. Ask the user to open the app, then call again.',
   off_in_tests: 'The NovelAI app is not running for this data folder; automatic start is off in test runs. Nothing was sent.',
   unsupported: 'The NovelAI app is not running for this data folder, and this server cannot start it: automatic start works only when the MCP server runs with the app\'s own executable (the configurations in Settings › MCP access). Nothing was sent. Ask the user to open the app, then call again.',
-  recently_started: 'The NovelAI app is not running. This server started it less than a minute ago and does not start it again so soon. Nothing was sent. Call again in a moment, or ask the user to open the app.',
+  recently_started: 'The NovelAI app is not running. This server tried to start it less than a minute ago and does not try again so soon. Nothing was sent. Call again in a moment, or ask the user to open the app.',
   start_failed: reason => `The NovelAI app is not running, and starting it failed (${reason}). Nothing was sent. Ask the user to open the app, then call again.`,
   started_not_ready: 'The NovelAI app was not running; this server started it in the background, but it was not ready within 30 seconds. Nothing was sent. Call again in a moment; if it keeps failing, ask the user to open the app.',
   started_exited: 'The NovelAI app was not running; this server started it in the background, but it closed again before it was ready. Nothing was sent. Ask the user to open the app and check what it reports.',
@@ -113,6 +173,12 @@ const MESSAGES = {
 };
 const unavailable = (state, reason) => new BridgeError('unavailable', typeof MESSAGES[state] === 'function' ? MESSAGES[state](reason) : MESSAGES[state], { autostart: state });
 export const AUTOSTART_STATES = Object.freeze(Object.keys(MESSAGES));
+/**
+ * The host methods whose workspace_not_ready is sent again after a start: the renderer methods of the canvas tools and
+ * the canvas capture of prepare_recipe {canvas}. The host answers that code for them before anything runs
+ * (client/electron/bridge-host.ts, main.ts); any other method gets it back at once.
+ */
+export const CANVAS_RETRY_METHODS = Object.freeze(new Set(['list_workspaces', 'read_workspace', 'get_asset', 'draft_edit', 'apply_edit', 'undo_edit', 'read_prompt_review', 'capture_canvas_recipe']));
 /** The text added to a workspace_not_ready answer that outlasted the wait after a start. */
 export const STILL_LOADING = 'The app was just started by this MCP server and is still loading; call again in a few seconds.';
 
@@ -192,13 +258,20 @@ export function createAutostartBridge(bridgeClient, options = {}) {
     }
     lastStartAt = monotonicNow();
     stats.starts++;
-    const started = await launcher.launch(app, { client: caller?.client ?? null });
-    if (!started?.ok) { log(`[novelai-mcp] automatic start failed: ${started?.reason ?? 'unknown reason'}`); throw unavailable('start_failed', started?.reason ?? 'unknown reason'); }
-    log(`[novelai-mcp] started the app in the background (${app.kind}, via ${started.via}${started.pid ? `, pid ${started.pid}` : ''}); waiting for it`);
-    const waited = await waitForBridge({ stale, deadline, startedHere: true });
-    if (waited === 'gone') throw unavailable('started_exited');
-    if (waited !== 'ready') throw unavailable('started_not_ready');
-    return { startedHere: true, deadline };
+    try {
+      let started;
+      try { started = await launcher.launch(app, { client: caller?.client ?? null }); }
+      catch (error) { started = { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
+      if (!started?.ok) { log(`[novelai-mcp] automatic start failed: ${started?.reason ?? 'unknown reason'}`); throw unavailable('start_failed', started?.reason ?? 'unknown reason'); }
+      log(`[novelai-mcp] started the app in the background (${app.kind}, via ${started.via}${started.pid ? `, pid ${started.pid}` : ''}); waiting for it`);
+      const waited = await waitForBridge({ stale, deadline, startedHere: true });
+      if (waited === 'gone') throw unavailable('started_exited');
+      if (waited !== 'ready') throw unavailable('started_not_ready');
+      return { startedHere: true, deadline };
+    } finally {
+      // The start is over (ready or not): another server may start it from now on, when it is still needed.
+      await claims.release?.().catch(() => undefined);
+    }
   }
 
   return {
@@ -212,12 +285,17 @@ export function createAutostartBridge(bridgeClient, options = {}) {
       pending ??= ensureHost(failure, caller).finally(() => { pending = null; });
       let host;
       try { host = await abortable(pending, signal); }
-      catch (error) { if (error instanceof BridgeError) throw error; throw failure; }
+      catch (error) {
+        if (error instanceof BridgeError) throw error;
+        // Cancelled while waiting: the original failure (nothing was sent). Anything else went wrong in the start itself.
+        if (signal?.aborted) throw failure;
+        throw unavailable('start_failed', error instanceof Error ? error.message : String(error));
+      }
       for (;;) {
         try { return await send(); }
         catch (error) {
           if (undeliveredReason(error)) throw unavailable('lost');
-          if (!host.startedHere || !(error instanceof BridgeError) || error.code !== 'workspace_not_ready') throw error;
+          if (!host.startedHere || !(error instanceof BridgeError) || error.code !== 'workspace_not_ready' || !CANVAS_RETRY_METHODS.has(method)) throw error;
           // Refused before anything ran: the window of the app just started is still loading.
           if (signal?.aborted || monotonicNow() + limits.canvasRetryMs > host.deadline) throw new BridgeError(error.code, `${error.message} ${STILL_LOADING}`, error.details);
           await sleep(limits.canvasRetryMs, signal).catch(() => { throw new BridgeError(error.code, `${error.message} ${STILL_LOADING}`, error.details); });
