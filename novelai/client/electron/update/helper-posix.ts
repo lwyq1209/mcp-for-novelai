@@ -48,6 +48,25 @@ new="$staging/new/$name"
 old="$staging/old"
 failed="$staging/failed"
 
+close_inherited() {
+  # Every descriptor above 2 (Linux: /proc/self/fd), except the one this shell reads the script from ($1: keep it).
+  # Only numbers this shell can name in a redirection (dash: 0-9; a bad one would end the shell).
+  for l_fd in /proc/self/fd/*; do
+    l_fd=${"${"}l_fd##*/}
+    case "$l_fd" in ''|*[!0-9]*|0|1|2) continue ;; esac
+    if [ "$1" = keep-script ]; then
+      [ -n "${"${"}BASH_VERSION:-}" ] && [ "$l_fd" = 255 ] && continue
+      [ "$(readlink -f "/proc/self/fd/$l_fd" 2>/dev/null)" = "$script" ] && continue
+    fi
+    if [ -n "${"${"}BASH_VERSION:-}" ] || [ "$l_fd" -le 9 ]; then eval "exec $l_fd>&-" 2>/dev/null; fi
+  done
+}
+
+# Nothing the old app left open stays open here either (Linux): a listening socket of it would keep its port taken
+# while the new version starts.
+script=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
+if [ "$platform" = linux ]; then close_inherited keep-script; fi
+
 log "helper started for $from -> $to (pid $pid)"
 mark waiting
 
@@ -62,14 +81,6 @@ log "the app has quit"
 # The app withdraws an update it could not hand over by removing the state folder (and pending.json).
 if [ ! -f "$state/helper-state" ] || [ ! -f "$(dirname "$state")/pending.json" ]; then exit 1; fi
 
-close_inherited() {
-  # Only numbers this shell can name in a redirection (dash: 0-9; a bad one would end the shell).
-  for l_fd in /proc/self/fd/*; do
-    l_fd=${"${"}l_fd##*/}
-    case "$l_fd" in ''|*[!0-9]*|0|1|2) continue ;; esac
-    if [ -n "${"${"}BASH_VERSION:-}" ] || [ "$l_fd" -le 9 ]; then eval "exec $l_fd>&-" 2>/dev/null; fi
-  done
-}
 
 # launch.args: extra arguments of the started app, one per line (rehearsal builds only: the test switches of the run).
 launch() {
@@ -107,9 +118,9 @@ launch() {
       # The new app must not inherit what the old one left open in this helper (a listening socket of the old app
       # would keep its port taken): every descriptor above 2 is closed first (bash closes any number; dash 3-9).
       if command -v setsid >/dev/null 2>&1; then
-        ( cd "$l_app" || exit 1; close_inherited; exec setsid "./$launcher" "$@" < /dev/null > /dev/null 2>&1 ) &
+        ( cd "$l_app" || exit 1; close_inherited all; exec setsid "./$launcher" "$@" < /dev/null > /dev/null 2>&1 ) &
       else
-        ( cd "$l_app" || exit 1; close_inherited; exec nohup "./$launcher" "$@" < /dev/null > /dev/null 2>&1 ) &
+        ( cd "$l_app" || exit 1; close_inherited all; exec nohup "./$launcher" "$@" < /dev/null > /dev/null 2>&1 ) &
       fi
       ;;
   esac

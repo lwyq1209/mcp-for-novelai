@@ -172,7 +172,9 @@ describe.runIf(posix)("the POSIX update helper", () => {
   it.runIf(process.platform === "linux")("Linux: starts the new folder's executable without the descriptors the helper inherited", async () => {
     // The new "app": records the descriptors it got, then starts and confirms.
     const app = path.join(staging, "new", "MCP for NovelAI.app", "mcp-for-novelai");
-    fs.writeFileSync(app, `#!/bin/sh\nls /proc/self/fd > "${root}/fds"\nprintf '%s\\n' "$@" > "${root}/args"\nprintf '%s\\n' "$$" > "${state}/started"\nprintf '%s\\n' "$$" > "${state}/confirmed"\n`, { mode: 0o755 });
+    // It also records whether its parent helper still holds the inherited pipe (fd 53 of the helper): the old app's
+    // listening socket held there would keep the port taken while the new app starts.
+    fs.writeFileSync(app, `#!/bin/sh\nls /proc/self/fd > "${root}/fds"\nls -l /proc/${"$"}(cat "${root}/helper-pid")/fd > "${root}/helper-fds" 2>&1\nprintf '%s\\n' "$@" > "${root}/args"\nprintf '%s\\n' "$$" > "${state}/started"\nprintf '%s\\n' "$$" > "${state}/confirmed"\n`, { mode: 0o755 });
     fs.writeFileSync(path.join(state, "launch.args"), "--use-mock-keychain\n--remote-debugging-port=19999\n");
     for (const shell of ["/bin/bash", "/bin/sh"].filter(candidate => fs.existsSync(candidate))) {
       fs.rmSync(path.join(root, "fds"), { force: true });
@@ -180,10 +182,14 @@ describe.runIf(posix)("the POSIX update helper", () => {
       const stdio: Array<"ignore" | "pipe"> = [...Array(53).fill("ignore"), "pipe"];
       const child = spawn(shell, [path.join(state, "helper.sh"), "linux", state, String(app_(false)), target, staging, "0.1.3", "0.1.4", "mcp-for-novelai", "0", "5", "5"], { stdio });
       children.push(child);
+      fs.writeFileSync(path.join(root, "helper-pid"), String(child.pid));
       expect(await new Promise(resolve => child.once("exit", resolve))).toBe(0);
       const fds = fs.readFileSync(path.join(root, "fds"), "utf8").split("\n").filter(Boolean).map(Number);
       // bash (which the app uses on Linux when there is one) closes every inherited descriptor; dash only 3-9.
-      if (shell === "/bin/bash") expect(fds.every(fd => fd <= 3), `${shell}: ${fds}`).toBe(true);
+      if (shell === "/bin/bash") {
+        expect(fds.every(fd => fd <= 3), `${shell}: ${fds}`).toBe(true);
+        expect(fs.readFileSync(path.join(root, "helper-fds"), "utf8"), "the helper itself no longer holds fd 53").not.toMatch(/ 53 -> /);
+      }
       expect(fs.readFileSync(path.join(root, "args"), "utf8").trim().split("\n")).toEqual(["--updated-from=0.1.3", "--use-mock-keychain", "--remote-debugging-port=19999"]);
       expect(fs.existsSync(staging)).toBe(false);
       // Back to the starting point for the next shell: the new app staged again, an old app in place.
