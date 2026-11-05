@@ -462,6 +462,8 @@ async function scenario(name, context, index) {
   } finally {
     page?.close();
     try { if (process.platform !== 'win32') fs.chmodSync(parent, 0o755); } catch { /* unchanged */ }
+    // A scenario stopped part-way (the user came back) leaves no helper of its own that could still start an app.
+    for (const pid of helperPids(dataRoot)) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
     await stopApps(dataRoot, parent).catch(() => undefined);
     await server.close();
     result.finishedAt = new Date().toISOString();
