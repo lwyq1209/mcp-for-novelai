@@ -21,7 +21,7 @@ vi.mock('./store',async()=>{
   const actual=await vi.importActual<typeof import('./store')>('./store');
   return {readStore:()=>mock.state,writeStore:(value:unknown)=>{mock.state=value;},defaultSettings:()=>mock.state.settings,retainKnownSettings:(raw:Record<string,unknown>)=>actual.retainKnownSettings(raw),librarySettings:actual.librarySettings};
 });
-import { exportDataBackup, importDataBackup, inspectDataBackup, runAutomaticBackup } from './data-backup';
+import { createdFolderPath, exportDataBackup, importDataBackup, inspectDataBackup, runAutomaticBackup } from './data-backup';
 
 const characterSnapshot = { version: 1 as const, captions: [
   { prompt: '  adult gardener, adult gardener, {blue coat}  \n', negativePrompt: ' hat, hat  ', useCoords: true, x: 0, y: 1 },
@@ -320,6 +320,18 @@ it.each([
   expect(await fs.readdir(destination.userDataRoot)).not.toContain('style-prompt-previews');
 });
 
+it('createdFolderPath turns the long-path forms Node returns on Windows back into plain paths', () => {
+  expect(createdFolderPath(undefined)).toBeUndefined();
+  if (process.platform === 'win32') {
+    expect(createdFolderPath('\\\\?\\C:\\data\\output\\2026-11-05')).toBe('C:\\data\\output\\2026-11-05');
+    expect(createdFolderPath('\\\\?\\UNC\\server\\share\\output')).toBe('\\\\server\\share\\output');
+    expect(createdFolderPath('C:\\data\\output')).toBe('C:\\data\\output');
+  } else {
+    expect(createdFolderPath('\\\\?\\/data/output/2026-11-05')).toBe('/data/output/2026-11-05');
+    expect(createdFolderPath('/data/output')).toBe('/data/output');
+  }
+});
+
 it('an aborted import never removes folders above the ones it created, also when mkdir names them in the Windows long-path form', async () => {
   await source();
   const exported = await exportDataBackup({ destination: 'internal', categories: ['imageHistory', 'promptPresets'] });
@@ -330,8 +342,8 @@ it('an aborted import never removes folders above the ones it created, also when
   await fs.writeFile(exported.path!, await zip.generateAsync({ type: 'nodebuffer' }));
   await fixture();
   // Node on Windows returns the first created folder as \\?\C:\…; here every platform gets that prefix.
-  const mkdir = fs.mkdir.bind(fs);
-  const spy = vi.spyOn(fs, 'mkdir').mockImplementation((async (...args: Parameters<typeof fs.mkdir>) => { const created = await mkdir(...args); return typeof created === 'string' ? `\\\\?\\${created}` : created; }) as typeof fs.mkdir);
+  const mkdir = fs.mkdir.bind(fs), prefix = '\\\\?\\';
+  const spy = vi.spyOn(fs, 'mkdir').mockImplementation((async (...args: Parameters<typeof fs.mkdir>) => { const created = await mkdir(...args); return typeof created === 'string' && !created.startsWith(prefix) ? `${prefix}${created}` : created; }) as typeof fs.mkdir);
   let restored, created = 0;
   try { restored = await importDataBackup({ path: exported.path!, categories: ['imageHistory', 'promptPresets'], confirmConfigurationOverwrite: false }); }
   finally { created = (await Promise.all(spy.mock.results.map(result => result.value))).filter(value => typeof value === 'string').length; spy.mockRestore(); }
