@@ -37,6 +37,15 @@ export function clientEnv(base, { dataRoot, project, foreground = false }) {
   return env;
 }
 
+/**
+ * The Electron arguments of a test client: the client folder, the mock keychain, the visibility switches (unless
+ * allowOcclusion), the DevTools port, the agent-start switch (agentStart) and the data marker, always last.
+ */
+export function clientArgs({ dataRoot, port = null, allowOcclusion = false, agentStart = false }) {
+  const visibility = allowOcclusion ? [] : ['--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding'];
+  return [clientDir, '--use-mock-keychain', ...visibility, ...(port ? [`--remote-debugging-port=${port}`] : []), ...(agentStart ? [AGENT_START_SWITCH] : []), `${DATA_MARKER_SWITCH}=${dataRoot}`];
+}
+
 /** The short form of a start result (--quiet): who, where, and how long it took to be ready. */
 export function quietStartResult(result) {
   // A size that was not applied says why (the OS clamps a window to the screen's work area; --size needs --port).
@@ -137,9 +146,8 @@ export async function startClient(options) {
   // --disable-backgrounding-occluded-windows / --disable-renderer-backgrounding (Chromium test switches): a test window
   // covered by other windows stays "visible", so DevTools input (wheel scrolling in particular) does not stall and
   // timers keep running. --allow-occlusion keeps Chromium's normal behaviour. The data marker goes last.
-  const visibility = options['allow-occlusion'] ? [] : ['--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding'];
-  // --agent-start: started as an agent's MCP server starts it (electron/window-show.ts: its window is not shown on macOS).
-  const args = [clientDir, '--use-mock-keychain', ...visibility, ...(port ? [`--remote-debugging-port=${port}`] : []), ...(options['agent-start'] === true ? [AGENT_START_SWITCH] : []), `${DATA_MARKER_SWITCH}=${dataRoot}`];
+  // --agent-start: started as an agent's MCP server starts it (electron/window-show.ts: its window waits for the user).
+  const args = clientArgs({ dataRoot, port, allowOcclusion: options['allow-occlusion'] === true, agentStart: options['agent-start'] === true });
   // The front-app watcher (its own process, 50 ms) runs from before the launch until 5 s after the client is ready.
   const watch = foreground ? null : await startFrontWatch({ dataRoot });
   const watched = async work => {

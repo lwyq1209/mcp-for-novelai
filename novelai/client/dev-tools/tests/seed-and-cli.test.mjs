@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { dataRootRefusal } from '../lib/guard.mjs';
 import { buildOutputs, clientRequire, dataPaths } from '../lib/paths.mjs';
 import { seedLibrary } from '../lib/seed.mjs';
-import { BACKGROUND_WINDOW_ENV, clientEnv, quietStartResult } from '../test-client.mjs';
+import { AGENT_START_SWITCH, BACKGROUND_WINDOW_ENV, clientArgs, clientEnv, quietStartResult } from '../test-client.mjs';
 import { runCli, tempDir } from './helpers.mjs';
 
 const built = fs.existsSync(buildOutputs.repository);
@@ -134,6 +134,18 @@ test('--help prints the usage text of every CLI (plain text, exit 0)', () => {
   for (const command of ['dialog-text', 'toasts', '--replace']) assert.ok(ui.includes(command), command);
   const fake = runCli('fake-novelai.mjs', ['--help']).stdout;
   for (const option of ['respond', '--body', '--json', '--body-file', '--content-type', '--header']) assert.ok(fake.includes(option), option);
+});
+
+test('test-client --agent-start adds the switch an agent\'s MCP server starts the app with, before the data marker', () => {
+  const plain = clientArgs({ dataRoot: '/tmp/root', port: 9333 });
+  assert.equal(plain.at(-1), '--nai-dev-tools-data=/tmp/root'); assert.ok(!plain.some(arg => arg.startsWith('--started-by-agent')));
+  const agent = clientArgs({ dataRoot: '/tmp/root', port: 9333, agentStart: true, allowOcclusion: true });
+  assert.deepEqual(agent.slice(-2), [AGENT_START_SWITCH, '--nai-dev-tools-data=/tmp/root']);
+  assert.ok(!agent.includes('--disable-renderer-backgrounding'), '--allow-occlusion drops the visibility switches');
+  // The switch is the one the client reads (electron/window-show.ts) and the MCP server sends (novelai/src/app-launch.mjs).
+  const windowShow = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../../electron/window-show.ts'), 'utf8');
+  assert.match(windowShow, /STARTED_BY_AGENT_ARG = '--started-by-agent';/);
+  assert.ok(AGENT_START_SWITCH.startsWith('--started-by-agent='));
 });
 
 test('test-client start runs the window in the background unless --foreground (step 4c1)', () => {
