@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDanbooruService, danbooruImageUrl } from './danbooru-service';
 import { TAG_DICTIONARY, type createTagDictionary } from './search-tag-dictionary';
+import { APP_VERSION } from '../src/types';
 
 // Synthetic SFW metadata and a one-pixel PNG. No test contacts a public service.
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5WQAAAAASUVORK5CYII=', 'base64');
@@ -54,7 +55,7 @@ describe('Danbooru public metadata admission', () => {
     expect(new URL(String(url)).searchParams.get('page')).toBe('2');
     expect(new Headers(options?.headers).has('authorization')).toBe(false);
     expect(new Headers(options?.headers).has('cookie')).toBe(false);
-    expect(new Headers(options?.headers).get('user-agent')).toBe('MCP-for-NovelAI/0.1.0 (personal reference browser)');
+    expect(new Headers(options?.headers).get('user-agent')).toBe(`MCP-for-NovelAI/${APP_VERSION} (personal reference browser)`);
     expect(options?.redirect).toBe('error');
     expect(options?.signal?.aborted).toBe(true);
     expect(result).toMatchObject({ hasMore: true, filteredCount: 0, items: [{ postId: 42, rating: 'g', sourceUrl: 'https://danbooru.donmai.us/posts/42', tags: { general: ['tree', 'sky'], artists: ['sample_artist'], characters: ['sample_character'], copyrights: ['sample_series'], meta: ['highres'] } }] });
