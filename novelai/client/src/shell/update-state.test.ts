@@ -33,6 +33,15 @@ describe('the self-update in the window', () => {
     expect(broken).toMatchObject({ canInstall: true, retry: true, note: { key: 'set.ab.downloadFailed' } });
   });
 
+  it('blocks only the version that failed for good, and never after "no newer version"', () => {
+    const failed = { phase: 'failed' as const, version: '0.1.4', error: { code: 'verify_failed' as const, message: 'x', retryable: false, reason: 'signature_invalid' }, install: { supported: true } };
+    expect(updateUiState(failed, '0.1.4').canInstall).toBe(false);
+    expect(updateUiState(failed, '0.1.5')).toMatchObject({ canInstall: true, note: null, pill: null });
+    const none = { phase: 'failed' as const, error: { code: 'no_update' as const, message: 'x', retryable: false }, install: { supported: true } };
+    expect(updateUiState(none, '9.9.9').canInstall).toBe(true);
+    expect(updateUiState({ ...failed, error: { ...failed.error, code: 'install_unsupported' as const, reason: 'asset_missing' } }, '0.1.4').canInstall).toBe(false);
+  });
+
   it('has a text for every reason code in both languages', () => {
     for (const reason of ['signature_invalid', 'manifest_invalid', 'version_mismatch', 'checksum_mismatch', 'redirect_refused', 'signature_mismatch', 'package_invalid', 'extract_failed', 'network', 'stalled', 'http_status', 'too_large',
       'translocated', 'read_only', 'not_writable', 'per_machine', 'not_installed', 'sandbox_helper', 'not_packaged', 'asset_missing', 'unknown_layout', 'app_running', 'not_movable', 'move_failed', 'launch_failed', 'new_app_exited', 'not_started', 'installer_failed', 'stopped_waiting', undefined])

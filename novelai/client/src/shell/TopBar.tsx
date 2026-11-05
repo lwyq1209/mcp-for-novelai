@@ -55,7 +55,7 @@ export function TopBar({ route, onNavigate, onOpenAccount, monitor, capture = fa
   const updateInfo = useAppStore(state => state.updateInfo);
   const updateProgress = useAppStore(state => state.updateProgress);
   const updateNotice = useAppStore(state => state.updateNotice);
-  const update = updateUiState(updateProgress);
+  const update = updateUiState(updateProgress, updateInfo?.hasUpdate ? updateInfo.latestVersion : undefined);
   const queue = queueSummary(useQueueView(monitor).batches);
   const draftPending = useAgentDraftPending();
 

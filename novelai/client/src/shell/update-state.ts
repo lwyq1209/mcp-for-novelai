@@ -34,15 +34,21 @@ export function updateReasonKey(reason: string | undefined): UiStringKey {
   return (reason && KNOWN_REASONS.has(reason) ? `set.upd.${reason}` : 'set.upd.other') as UiStringKey;
 }
 
-export function updateUiState(progress: UpdateProgressInfo | null): UpdateUiState {
+/**
+ * `availableVersion`: the newer version the window offers now. A failure that stops for good (could not be verified, no
+ * file for this system) holds for the version it happened with; a check that finds another version offers it again,
+ * and "no newer version" never blocks a later one.
+ */
+export function updateUiState(progress: UpdateProgressInfo | null, availableVersion?: string): UpdateUiState {
   const phase = progress?.phase ?? 'idle';
   const supported = progress?.install?.supported === true;
   const busy = ['checking', 'downloading', 'verifying', 'preparing', 'installing'].includes(phase);
   const total = typeof progress?.total === 'number' && progress.total > 0 ? progress.total : null;
   const received = typeof progress?.received === 'number' ? progress.received : null;
   const percent = phase === 'downloading' && total && received !== null ? Math.max(0, Math.min(100, Math.floor((received / total) * 100))) : null;
-  const error = phase === 'failed' ? progress?.error : undefined;
-  const finalFailure = error?.code === 'verify_failed' || error?.code === 'install_unsupported' || error?.code === 'no_update';
+  const stale = phase === 'failed' && Boolean(availableVersion) && progress?.version !== availableVersion;
+  const error = phase === 'failed' && !stale ? progress?.error : undefined;
+  const finalFailure = error?.code === 'verify_failed' || error?.code === 'install_unsupported';
   const unsupportedReason = progress?.install && !supported ? progress.install.reason : undefined;
   const waitsForQueue = phase === 'ready' && progress?.queueBusy === true;
   let note: UpdateNote | null = null;
@@ -69,7 +75,7 @@ export function updateUiState(progress: UpdateProgressInfo | null): UpdateUiStat
   return {
     busy, percent, waitsForQueue, received, total, pill, note,
     canInstall: supported && !finalFailure,
-    retry: phase === 'failed' && !finalFailure && error?.retryable === true,
+    retry: Boolean(error) && !finalFailure && error?.retryable === true,
   };
 }
 

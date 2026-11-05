@@ -59,7 +59,6 @@ export function AboutSection() {
   const noteText = useUpdateNoteText();
   const updateProgress = useAppStore(state => state.updateProgress);
   const updateNotice = useAppStore(state => state.updateNotice);
-  const ui = updateUiState(updateProgress);
   const noticeNote = updateNoticeNote(updateNotice);
   const settings = useSettings();
   const update = useSettingWriter();
@@ -80,6 +79,7 @@ export function AboutSection() {
   const message = updateCheckMessage(result);
   // The newer release to offer: the manual result, else the one the automatic checks announced.
   const available = result?.status === 'available' ? result : updateInfo?.hasUpdate ? updateInfo : null;
+  const ui = updateUiState(updateProgress, available?.latestVersion);
 
   return <section className="sp-section" data-testid="settings-about">
     <h2>{t('set.about')}</h2>

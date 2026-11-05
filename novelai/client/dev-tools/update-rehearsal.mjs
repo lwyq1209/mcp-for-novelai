@@ -294,7 +294,10 @@ function helperPids(dataRoot) {
 }
 function installedVersion(installed) {
   if (process.platform === 'darwin') return run('/usr/bin/plutil', ['-extract', 'CFBundleShortVersionString', 'raw', '-o', '-', path.join(installed.target, 'Contents', 'Info.plist')]).trim();
-  if (process.platform === 'win32') return spawnSync('powershell.exe', ['-NoProfile', '-Command', `(Get-Item -LiteralPath '${installed.executable.replace(/'/g, "''")}').VersionInfo.ProductVersion`], { encoding: 'utf8' }).stdout.trim();
+  if (process.platform === 'win32') {
+    const read = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `[Console]::Out.Write([System.Diagnostics.FileVersionInfo]::GetVersionInfo('${installed.executable.replace(/'/g, "''")}').ProductVersion)`], { encoding: 'utf8' });
+    return String(read.stdout ?? '').replace(/^\uFEFF/, '').trim() || `(unreadable: ${String(read.stderr ?? '').trim().slice(0, 200)})`;
+  }
   const asar = path.join(installed.target, 'resources', 'app.asar');
   const bytes = fs.readFileSync(asar); const size = bytes.readUInt32LE(12); const header = JSON.parse(bytes.subarray(16, 16 + size).toString('utf8'));
   const entry = header.files['package.json']; return JSON.parse(bytes.subarray(8 + bytes.readUInt32LE(4) + Number(entry.offset), 8 + bytes.readUInt32LE(4) + Number(entry.offset) + entry.size).toString('utf8')).version;
@@ -484,7 +487,7 @@ async function rehearse(options) {
       break;
     }
   }
-  return { ok: results.every(result => result.ok), results: results.map(result => ({ scenario: result.scenario, ok: result.ok, interrupted: result.interrupted, error: result.error?.message, failed: Object.entries(result.checks).filter(([, value]) => !value.ok).map(([key]) => key), frontHits: result.frontWatch?.hits })) };
+  return { ok: results.every(result => result.ok), results: results.map(result => ({ scenario: result.scenario, ok: result.ok, interrupted: result.interrupted, error: result.error?.message, failed: Object.entries(result.checks).filter(([, value]) => !value.ok).map(([key, value]) => ({ check: key, value: value.value })), frontHits: result.frontWatch?.hits })) };
 }
 
 async function prepare(options) {

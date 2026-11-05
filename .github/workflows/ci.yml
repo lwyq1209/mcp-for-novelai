@@ -248,4 +248,5 @@ jobs:
             .tmp/update-rehearsal/data-*/updates/*/helper.log
             .tmp/update-rehearsal/data-*/updates/*/helper-state
           if-no-files-found: warn
+          include-hidden-files: true
           retention-days: 7
