@@ -139,9 +139,12 @@ import {
   selectOutputDir,
 } from "./ipc/storage";
 import { createUpdateChecker, shouldScheduleAutomaticChecks } from "./ipc/update";
+import { createAppUpdater } from "./update/app-updater";
+import type { UpdateNotice } from "../src/types";
 import { readLegalDocument, type LegalDocumentKind } from "./legal-documents";
 import {
   configureSystemProxyResolver,
+  proxyConfig,
   refreshSystemProxy,
 } from "./ipc/proxy";
 import {
@@ -197,12 +200,26 @@ let recipeReferenceScan: RecipeReferenceScan | undefined;
 let runQueueRetention: (() => void) | undefined;
 // The queue's batches for the library window's mode and source filters (set once the batch service exists).
 let libraryBatchFacts: (() => BatchFacts) | undefined;
-// New-version notice (ipc/update.ts): checks this project's latest GitHub release and only announces it; the
-// renderer shows the banner and opens the release page. Automatic checks run only in a packaged app (not from
-// source, in test clients or UI capture); "Check now" always works.
+// Whether the queue has batches generating or waiting (manual ones included; paused ones do not count): the
+// self-update does not restart the app meanwhile. Set once the batch service exists (registerIpc).
+let queueBusyNow: () => boolean = () => hasActiveGenerationJobs();
+// Self-update (update/): the source of this build, the record of an update that just ran, "Update and restart".
+const appUpdater = createAppUpdater({
+  electronDir: __dirname, dataRoot: dataPaths.root, customDataRoot: isCustomDataRoot(), version: app.getVersion(), packaged: app.isPackaged,
+  env: process.env, argv: process.argv, requestConfig: () => proxyConfig("update"), queueBusy: () => queueBusyNow(),
+  quit: () => app.quit(), log: message => logInfo(message),
+  emit: progress => { if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send("app:updateProgressEvent", progress); },
+});
+const updateNotice: UpdateNotice | null = appUpdater.startup.result
+  ? { ...appUpdater.startup.result, releaseUrl: appUpdater.source.releasePageUrl(`v${appUpdater.startup.result.to}`) }
+  : null;
+// New-version notice (ipc/update.ts): checks this project's latest GitHub release and announces it; the renderer
+// shows the banner, opens the release page or starts the self-update. Automatic checks run only in a packaged app
+// (not from source, in test clients or UI capture); "Check now" always works.
 const updateChecker = createUpdateChecker({
   currentVersion: app.getVersion(),
   readSettings: () => getSettings(),
+  fetchLatest: () => appUpdater.fetchLatest(),
   publish: (info) => {
     if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send("app:updateEvent", info);
   },
@@ -598,11 +615,13 @@ function registerIpc() {
       .filter(item => (item.payload as any)?.queueOrigin?.itemIndex === itemIndex)
       .map(item => { const payload = item.payload as any; return { id: item.id, width: Number(payload.width), height: Number(payload.height), model: String(payload.model ?? ''), actualSeed: Number.isSafeInteger(payload.actualSeed) ? payload.actualSeed : null, jobId: typeof payload.generationOrigin?.jobId === 'string' ? payload.generationOrigin.jobId : null }; }),
     // The queue panel follows its batches (status, progress); a batch event never touches the canvas.
-    onBatch(job) { const event = queueBatchEvent(job); if (event && mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send("novelai:queue:batch", event); },
+    onBatch(job) { const event = queueBatchEvent(job); if (event && mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send("novelai:queue:batch", event); appUpdater.updater.queueChanged(); },
     // Queue retention removed these ended batches: the queue view drops them.
     onRemoved(batchIds) { if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send("novelai:queue:removed", { batchIds }); },
   });
   disposeBatch = batch.dispose;
+  // The self-update waits while a batch (manual or an agent's) generates, waits or is being paused or cancelled.
+  queueBusyNow = () => hasActiveGenerationJobs() || batch.list({ workspaceId: QUEUE_WORKSPACE }).batches.some(job => ["queued", "running", "pausing", "cancelling"].includes(job.status));
   // The batches list_queue shows (queued recipe batches, manual ones of this run included).
   libraryBatchFacts = () => batchFactsOf(batch.list({ workspaceId: QUEUE_WORKSPACE }).batches.filter(job => job.execution === 'queued' && job.originWorkspaceId === QUEUE_WORKSPACE));
   // Manual generation (step 4a): a Generate click of this window is a manual batch of the shared queue. The source of
@@ -943,6 +962,12 @@ function registerIpc() {
   // Settings › About "Check now": always asks GitHub, whatever the automatic-check setting says.
   ipcMain.handle("app:checkUpdate", () => updateChecker.check("manual"));
   ipcMain.handle("app:updateStatus", () => updateChecker.status());
+  // "Update and restart" (window only): start, or install when ready; cancel; the state now; the result of the last update.
+  const fromMainWindow = (event: Electron.IpcMainInvokeEvent) => Boolean(mainWindow && !mainWindow.isDestroyed() && event.sender.id === mainWindow.webContents.id && event.senderFrame === mainWindow.webContents.mainFrame);
+  ipcMain.handle("app:updateStart", async event => fromMainWindow(event) ? appUpdater.updater.start() : appUpdater.updater.status());
+  ipcMain.handle("app:updateCancel", async event => fromMainWindow(event) ? appUpdater.updater.cancel() : appUpdater.updater.status());
+  ipcMain.handle("app:updateProgress", async () => { await appUpdater.updater.support(); return appUpdater.updater.status(); });
+  ipcMain.handle("app:updateNotice", () => updateNotice);
   ipcMain.handle("app:mcpAccess", () => mcpAccessInfo());
   // Settings › MCP access and the guide: recent agent calls (client, tool, time) and the clients seen.
   ipcMain.handle("novelai:agent:activity", async event => {
@@ -996,6 +1021,13 @@ app.whenReady().then(async () => {
   // Expired entries are purged now and every few hours while the app runs.
   trash.startAutoPurge();
   createWindow();
+  // The first start after an update: the new version confirms it once its page has loaded (the helper then removes the
+  // old version), and what the attempt left is removed a little later.
+  mainWindow?.webContents.once("did-finish-load", () => {
+    appUpdater.startup.confirm();
+    setTimeout(() => appUpdater.startup.cleanup(), updateNotice?.kind === "updated" ? 10_000 : 1000).unref();
+  });
+  if (updateNotice) logInfo(updateNotice.kind === "updated" ? `[update] updated from ${updateNotice.from} to ${updateNotice.to}` : `[update] the update to ${updateNotice.to} did not complete (${updateNotice.reason})`);
   if (shouldScheduleAutomaticChecks({ packaged: app.isPackaged, uiCapture: Boolean(uiCapturePath) })) updateChecker.start();
 
   app.on("activate", () => {
@@ -1051,6 +1083,7 @@ function closeBridgeNow() { try { void workspaceBridge?.close(); } catch (error)
 app.on("before-quit", () => {
   closeBridgeNow();
   updateChecker.stop();
+  try { appUpdater.updater.disposeSync(); } catch (error) { console.warn("[quit] update clean-up failed", error); }
   activeLibraryTrash()?.stop();
   try { disposeBatch?.(); } catch (error) { console.warn("[quit] batch dispose failed", error); }
   try { void agentActivity?.flush(); } catch (error) { console.warn("[quit] agent activity flush failed", error); }

@@ -1071,6 +1071,28 @@ export interface UpdateInfo {
   checkedAt?: string;
 }
 
+/**
+ * The self-update in the main process (electron/update/updater.ts): what "Update and restart" is doing now. idle:
+ * nothing yet; checking / downloading / verifying / preparing: under way (cancellable); ready: downloaded, verified and
+ * staged, waiting for the queue (queueBusy) or a click; installing: the helper runs and the app is quitting; failed:
+ * error says why (verify_failed stops for good; retryable ones may be tried again).
+ */
+export interface UpdateProgressInfo {
+  phase: "idle" | "checking" | "downloading" | "verifying" | "preparing" | "ready" | "installing" | "failed";
+  version?: string;
+  received?: number;
+  total?: number | null;
+  error?: { code: "verify_failed" | "download_failed" | "no_update" | "install_unsupported" | "install_failed" | "check_failed" | "cancelled"; message: string; retryable: boolean; reason?: string };
+  queueBusy?: boolean;
+  /** Whether this installation can update itself; reason when not (then only Download is offered). */
+  install?: { supported: boolean; reason?: string };
+}
+
+/** The first start after an update: it worked (updated), or the old version is running again (failed, with the reason code). */
+export type UpdateNotice =
+  | { kind: "updated"; from: string; to: string; releaseUrl: string }
+  | { kind: "failed"; to: string; reason: string; releaseUrl: string };
+
 /** Compatible generation parameters extracted from embedded image metadata. */
 export interface ImportedParams {
   preservePromptText?: boolean;
@@ -1242,6 +1264,15 @@ export interface NaiDesktopApi {
   hostErrorKey?: string;
   /** Every result the main process's checks publish (startup, every 6 hours, manual). */
   onUpdateEvent: (callback: (info: UpdateInfo) => void) => () => void;
+  /** "Update and restart": starts (or, when ready, installs) the update of the latest release. */
+  startUpdate?: () => Promise<UpdateProgressInfo>;
+  /** Stops a download or check under way and removes a staged version. */
+  cancelUpdate?: () => Promise<UpdateProgressInfo>;
+  /** The self-update's state now, with whether this installation can update itself. */
+  getUpdateProgress?: () => Promise<UpdateProgressInfo>;
+  /** The result of an update that just ran (this start is the first one after it), or null. */
+  getUpdateNotice?: () => Promise<UpdateNotice | null>;
+  onUpdateProgress?: (callback: (progress: UpdateProgressInfo) => void) => () => void;
   minimize: () => Promise<void>;
   maximize: () => Promise<void>;
   close: () => Promise<void>;

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
-import { BrandMark, Button, Dialog, Spinner, Toggle } from '../../ui';
-import { useUiText } from '../../ui/i18n';
+import { BrandMark, Button, Dialog, Progress, Spinner, Toggle } from '../../ui';
+import { formatBytes, useUiText } from '../../ui/i18n';
+import type { UiStringKey } from '../../ui/strings';
+import { NOTE_WITH_REASON_CODE, updateNoticeNote, updateReasonKey, updateUiState, type UpdateNote } from '../../shell/update-state';
 import { plainErrorMessage } from '../../host-errors/bridge';
 import { useAppStore } from '../../store';
 import { APP_NAME, APP_VERSION, PROJECT_HOMEPAGE_URL, UPSTREAM_REPOSITORY_URL, type UpdateInfo } from '../../types';
@@ -37,9 +39,28 @@ export function LegalDocumentDialog({ kind, onClose }: { kind: LegalKind | null;
   </Dialog>;
 }
 
+/** The text of a self-update note: reason codes and byte counts in the interface language. */
+export function useUpdateNoteText() {
+  const { t, lang } = useUiText();
+  return (note: UpdateNote) => {
+    const params = { ...note.params };
+    if (NOTE_WITH_REASON_CODE.has(note.key)) params.reason = t(updateReasonKey(note.params.reason));
+    for (const key of ['received', 'total'] as const) if (params[key] !== undefined) params[key] = formatBytes(Number(params[key]), lang);
+    return t(note.key as UiStringKey, params);
+  };
+}
+
+const noteTone = (tone: UpdateNote['tone']) => tone === 'danger' ? 'danger' : tone === 'ok' ? 'ok' : tone === 'accent' ? 'accent' : 'neutral';
+const noteIcon = (tone: UpdateNote['tone']) => tone === 'danger' ? 'alert' as const : tone === 'ok' ? 'check' as const : undefined;
+
 /** Settings › About & updates (prototype 29). */
 export function AboutSection() {
   const { t } = useUiText();
+  const noteText = useUpdateNoteText();
+  const updateProgress = useAppStore(state => state.updateProgress);
+  const updateNotice = useAppStore(state => state.updateNotice);
+  const ui = updateUiState(updateProgress);
+  const noticeNote = updateNoticeNote(updateNotice);
   const settings = useSettings();
   const update = useSettingWriter();
   const updateInfo = useAppStore(state => state.updateInfo);
@@ -69,9 +90,22 @@ export function AboutSection() {
         <Button icon="refresh" busy={checking} onClick={() => void check()} data-testid="update-check">{t(checking ? 'set.ab.checking' : 'set.ab.check')}</Button>
       </div>
       {message && message.tone !== 'accent' ? <div className="sp-gb sp-divided"><InlineNote tone={message.tone === 'danger' ? 'danger' : 'ok'} icon={message.tone === 'danger' ? 'alert' : 'check'} testId="update-result">{t(message.key, message.params)}</InlineNote></div> : null}
-      {available?.latestVersion ? <SettingsRow className="sp-row--update" label={t('set.ab.available', { version: available.latestVersion })} hint={t('set.ab.availableHint')}>
-        <Button variant="primary" icon="external" disabled={!available.releaseUrl} onClick={() => { if (available.releaseUrl) open(available.releaseUrl); }} data-testid="update-download">{t('set.ab.download')}</Button>
+      {noticeNote && updateNotice ? <div className="sp-gb sp-divided" data-testid="update-notice">
+        <InlineNote tone={noteTone(noticeNote.tone)} icon={noteIcon(noticeNote.tone)}>{noteText(noticeNote)}</InlineNote>
+        <div className="sp-line">
+          <Button size="sm" icon="external" onClick={() => open(updateNotice.releaseUrl)} data-testid="update-notes">{t('set.ab.updatedNotes')}</Button>
+          <Button size="sm" onClick={() => useAppStore.getState().dismissUpdateNotice()}>{t('top.updatedDismiss')}</Button>
+        </div>
+      </div> : null}
+      {available?.latestVersion ? <SettingsRow className="sp-row--update" label={t('set.ab.available', { version: available.latestVersion })} hint={t(ui.canInstall ? 'set.ab.availableHintInstall' : 'set.ab.availableHint')}>
+        {ui.canInstall ? <Button variant="primary" icon={ui.retry ? 'refresh' : 'download'} busy={ui.busy} disabled={ui.busy || ui.waitsForQueue} onClick={() => { if (!isSettingsCapture()) void useAppStore.getState().startUpdate().catch(() => undefined); }} data-testid="update-install">{t(ui.waitsForQueue ? 'set.ab.waitQueue' : ui.retry ? 'set.ab.retry' : 'set.ab.install')}</Button> : null}
+        {ui.busy && updateProgress?.phase !== 'installing' || ui.waitsForQueue ? <Button onClick={() => void useAppStore.getState().cancelUpdate().catch(() => undefined)} data-testid="update-cancel">{t('set.ab.cancel')}</Button> : null}
+        <Button variant={ui.canInstall ? 'default' : 'primary'} icon="external" disabled={!available.releaseUrl} onClick={() => { if (available.releaseUrl) open(available.releaseUrl); }} data-testid="update-download">{t('set.ab.download')}</Button>
       </SettingsRow> : null}
+      {available?.latestVersion && ui.note ? <div className="sp-gb" data-testid="update-progress">
+        {ui.percent !== null ? <Progress value={ui.percent / 100} label={noteText(ui.note)} /> : null}
+        <InlineNote tone={noteTone(ui.note.tone)} icon={noteIcon(ui.note.tone)}>{noteText(ui.note)}</InlineNote>
+      </div> : null}
       {settings ? <SettingsRow label={t('set.ab.auto')} hint={t('set.ab.autoHint')}>
         <Toggle checked={settings.autoCheckUpdates !== false} label={t('set.ab.auto')} onChange={value => void update('autoCheckUpdates', value)} />
       </SettingsRow> : null}

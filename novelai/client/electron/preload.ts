@@ -31,6 +31,8 @@ import type {
   HistoryItemsRequest,
   SettingKey,
   UpdateInfo,
+  UpdateNotice,
+  UpdateProgressInfo,
   StylePromptPreviewImage,
   ReferencePresetExportRequest,
   ReferencePresetLibrary,
@@ -266,6 +268,15 @@ contextBridge.exposeInMainWorld("naiDesktop", bridgeSafeApi({
       callback(payload);
     ipcRenderer.on("app:updateEvent", listener);
     return () => ipcRenderer.removeListener("app:updateEvent", listener);
+  },
+  startUpdate: (): Promise<UpdateProgressInfo> => ipcRenderer.invoke("app:updateStart"),
+  cancelUpdate: (): Promise<UpdateProgressInfo> => ipcRenderer.invoke("app:updateCancel"),
+  getUpdateProgress: (): Promise<UpdateProgressInfo> => ipcRenderer.invoke("app:updateProgress"),
+  getUpdateNotice: (): Promise<UpdateNotice | null> => ipcRenderer.invoke("app:updateNotice"),
+  onUpdateProgress: (callback: (progress: UpdateProgressInfo) => void) => {
+    const listener = (_event: unknown, payload: UpdateProgressInfo) => callback(payload);
+    ipcRenderer.on("app:updateProgressEvent", listener);
+    return () => ipcRenderer.removeListener("app:updateProgressEvent", listener);
   },
   minimize: () => ipcRenderer.invoke("window:minimize"),
   maximize: () => ipcRenderer.invoke("window:maximize"),

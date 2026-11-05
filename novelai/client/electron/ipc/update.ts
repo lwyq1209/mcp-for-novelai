@@ -1,5 +1,6 @@
-// New-version notice. The app only tells the user that a newer release exists and opens its GitHub release page
-// in the system browser; it never downloads or installs anything itself.
+// New-version notice. The app tells the user that a newer release exists; "Download" opens its GitHub release page in
+// the system browser, "Update and restart" hands it to the self-update (electron/update/: signed manifest, download,
+// install), which asks the same latest-release API again before it downloads anything.
 //
 // One source: the latest release of this project on GitHub (unauthenticated REST API, the "update" proxy
 // category). A packaged app checks once shortly after start and then every 6 hours while automatic checks
@@ -119,10 +120,10 @@ function releasePage(value: unknown): string {
  * The latest release of this project, or null when the repository has published none yet (HTTP 404). Drafts and
  * pre-releases never come back from this endpoint; one marked so anyway is treated as no release.
  */
-export async function fetchLatestRelease(): Promise<LatestRelease | null> {
+export async function fetchLatestRelease(apiUrl: string = LATEST_RELEASE_API_URL): Promise<LatestRelease | null> {
   let response;
   try {
-    response = await axios.get(LATEST_RELEASE_API_URL, {
+    response = await axios.get(apiUrl, {
       headers: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": USER_AGENT },
       timeout: UPDATE_REQUEST_TIMEOUT_MS,
       responseType: "json",

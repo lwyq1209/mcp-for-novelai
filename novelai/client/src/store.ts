@@ -24,6 +24,8 @@ import type {
   LastGenerationState,
   NAIInpaintModel,
   UpdateInfo,
+  UpdateNotice,
+  UpdateProgressInfo,
   UpscaleScale,
   VibeTransferImage,
   PreciseReferenceImage,
@@ -91,6 +93,7 @@ type StoreIpcListenerRegistry = {
   owner: object;
   removeGenerationPreview?: () => void;
   removeUpdateEvent?: () => void;
+  removeUpdateProgress?: () => void;
   removeManualBatch?: () => void;
   removeManualItem?: () => void;
 };
@@ -415,6 +418,10 @@ interface AppState {
   toastKey: string;
   /** Latest new-version check result from the main process; the banner shows while it is available. */
   updateInfo: UpdateInfo | null;
+  /** The self-update ("Update and restart") as the main process reports it; null before the first read. */
+  updateProgress: UpdateProgressInfo | null;
+  /** This start is the first one after an update: it worked, or the old version runs again. Cleared when dismissed. */
+  updateNotice: UpdateNotice | null;
 
   load: () => Promise<void>;
   setShowOnboarding: (value: boolean) => void;
@@ -442,6 +449,10 @@ interface AppState {
   dismissUpdate: () => void;
   /** "Skip this version": remembered in ignoredUpdateVersion; automatic checks no longer announce it. */
   ignoreUpdate: (version: string) => Promise<void>;
+  /** "Update and restart": starts the update, or installs a ready one. */
+  startUpdate: () => Promise<UpdateProgressInfo | null>;
+  cancelUpdate: () => Promise<void>;
+  dismissUpdateNotice: () => void;
   setSelectedDate: (date: string) => Promise<void>;
   setSelectedGroupId: (groupId: string) => Promise<void>;
   setGenerationGroupId: (groupId: string) => Promise<void>;
@@ -1254,6 +1265,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   toast: "",
   toastKey: "",
   updateInfo: null,
+  updateProgress: null,
+  updateNotice: null,
 
   async load() {
     const listenerHost = window as typeof window & Record<string, unknown>;
@@ -1261,6 +1274,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (listenerRegistry?.owner !== storeIpcListenerOwner) {
       listenerRegistry?.removeGenerationPreview?.();
       listenerRegistry?.removeUpdateEvent?.();
+      listenerRegistry?.removeUpdateProgress?.();
       listenerRegistry?.removeManualBatch?.();
       listenerRegistry?.removeManualItem?.();
       const removeGenerationPreview = window.naiDesktop.onGenerationPreview((event) => {
@@ -1276,6 +1290,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       });
       const removeUpdateEvent = window.naiDesktop.onUpdateEvent((info) => set({ updateInfo: info }));
+      const removeUpdateProgress = typeof window.naiDesktop.onUpdateProgress === "function"
+        ? window.naiDesktop.onUpdateProgress((progress) => set({ updateProgress: progress }))
+        : undefined;
       // This window's manual batches: their progress from the queue's batch events, their saved images for the canvas.
       const removeManualBatch = typeof window.naiDesktop.onQueueBatch === "function"
         ? window.naiDesktop.onQueueBatch((batch) => { if (batch?.source?.kind === "manual") applyManualBatch(set, get, batch); })
@@ -1287,10 +1304,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       void Promise.resolve(window.naiDesktop.getUpdateStatus?.())
         .then((info) => { if (info && !get().updateInfo) set({ updateInfo: info }); })
         .catch(() => undefined);
+      void Promise.resolve(window.naiDesktop.getUpdateProgress?.())
+        .then((progress) => { if (progress && !get().updateProgress) set({ updateProgress: progress }); })
+        .catch(() => undefined);
+      void Promise.resolve(window.naiDesktop.getUpdateNotice?.())
+        .then((notice) => { if (notice) set({ updateNotice: notice }); })
+        .catch(() => undefined);
       listenerHost[storeIpcListenerRegistryKey] = {
         owner: storeIpcListenerOwner,
         removeGenerationPreview: typeof removeGenerationPreview === "function" ? removeGenerationPreview : undefined,
         removeUpdateEvent: typeof removeUpdateEvent === "function" ? removeUpdateEvent : undefined,
+        removeUpdateProgress: typeof removeUpdateProgress === "function" ? removeUpdateProgress : undefined,
         removeManualBatch: typeof removeManualBatch === "function" ? removeManualBatch : undefined,
         removeManualItem: typeof removeManualItem === "function" ? removeManualItem : undefined,
       } satisfies StoreIpcListenerRegistry;
@@ -1552,6 +1576,22 @@ export const useAppStore = create<AppState>((set, get) => ({
       settings: state.settings ? { ...state.settings, ignoredUpdateVersion } : state.settings,
       updateInfo: state.updateInfo ? { ...state.updateInfo, status: "ignored", hasUpdate: false } : null,
     }));
+  },
+
+  async startUpdate() {
+    if (typeof window.naiDesktop.startUpdate !== "function") return null;
+    const progress = await window.naiDesktop.startUpdate();
+    set({ updateProgress: progress });
+    return progress;
+  },
+
+  async cancelUpdate() {
+    if (typeof window.naiDesktop.cancelUpdate !== "function") return;
+    set({ updateProgress: await window.naiDesktop.cancelUpdate() });
+  },
+
+  dismissUpdateNotice() {
+    set({ updateNotice: null });
   },
 
   async setSelectedDate(date) {
