@@ -1,6 +1,6 @@
 {
   "name": "mcp-for-novelai",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "MCP for NovelAI: a desktop NovelAI image generation client that AI agents use through MCP.",
   "author": "lwyq1209",

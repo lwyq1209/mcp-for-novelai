@@ -74,7 +74,7 @@ test('detached scene review forwards only a validated t2i patch and keeps image 
 
 test('MCP initializes and advertises one server: core tools first, then canvas tools', async t => {
   const { client } = await mcp(t, () => ({}));
-  assert.deepEqual(client.getServerVersion(), { name: 'novelai', version: '0.1.1' });
+  assert.deepEqual(client.getServerVersion(), { name: 'novelai', version: '0.1.2' });
   const instructions = client.getInstructions() ?? '';
   assert.match(instructions, /Adult fictional NSFW/);
   assert.match(instructions, /target, harass or harm real people/);

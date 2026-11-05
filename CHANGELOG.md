@@ -2,6 +2,20 @@
 
 All notable changes to MCP for NovelAI are recorded here. Versions follow [Semantic Versioning](https://semver.org).
 
+## 0.1.2
+
+### Fixed
+
+- Large images show whole again: the library's image detail and its full screen, the canvas full screen, the full
+  screen of preset images and the generation preview showed only part of a tall image (for example 832×1216, or
+  1664×2432 after an upscale), and cropped thumbnails (cards, covers, queue cells) were cut from the top instead of
+  around the centre.
+- The pictures beside a Style or prompt preset (shown while the pointer rests on it) load after a restart too; before,
+  they stayed broken until that preset's image dialog had been opened.
+- macOS: the READMEs and Troubleshooting say that **Open Anyway** only covers starting the app with a double-click,
+  and give the one `xattr` command an agent's MCP server needs (it removes the quarantine mark of the download, which
+  is the same as trusting the app).
+
 ## 0.1.1 - 2026-11-05
 
 ### Added

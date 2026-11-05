@@ -10,7 +10,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const json = relative => JSON.parse(readFileSync(resolve(root, relative), 'utf8'));
 
 test('the client, the MCP server and the novelai package share one release version', () => {
-  assert.equal(VERSION, '0.1.1');
+  assert.equal(VERSION, '0.1.2');
   assert.equal(SERVER_VERSION, VERSION);
   for (const file of ['package.json', 'client/package.json']) {
     const manifest = json(file);
