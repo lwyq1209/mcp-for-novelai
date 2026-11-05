@@ -109,6 +109,21 @@ test('win32: syncDirectory succeeds where a raw directory fsync is refused', { s
     await syncDirectory(dir);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+test('win32: renameReplace keeps replacing a file that another reader polls every few milliseconds', { skip: !win32 && 'win32 only', timeout: 120_000 }, async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'platform-fs-')); const destination = join(dir, 'state.json');
+  try {
+    await writeFile(destination, '0');
+    let stop = false, reads = 0, refused = 0;
+    const reader = (async () => { while (!stop) { try { await readFile(destination); reads++; } catch { /* between replacements */ } await new Promise(done => setTimeout(done, 2)); } })();
+    const io = { open, lstat, rename: async (from, to) => { try { return await rename(from, to); } catch (error) { if (['EPERM', 'EBUSY', 'EACCES'].includes(error?.code)) refused++; throw error; } } };
+    const platformFs = createPlatformFs({ platform: 'win32', io }), started = Date.now();
+    try {
+      for (let round = 1; round <= 100; round++) { const next = join(dir, `next-${round}.json`); await writeFile(next, String(round)); await platformFs.renameReplace(next, destination); }
+    } finally { stop = true; await reader; }
+    t.diagnostic(`100 replacements in ${Date.now() - started} ms during ${reads} reads; ${refused} rename attempts were refused while the file was open and retried`);
+    assert.equal(await readFile(destination, 'utf8'), '100');
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
 test('win32: renameReplace waits for a reader holding the destination', { skip: !win32 && 'win32 only' }, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'platform-fs-')); const source = join(dir, 'next.json'), destination = join(dir, 'bridge.json');
   try {

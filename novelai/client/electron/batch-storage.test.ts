@@ -3,9 +3,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { createCompactionUnlink, createBatchStorage, FROZEN_COMPACTION_POLICY, FROZEN_QUEUE_LIMITS, BatchInputError, BatchQuotaError, type FrozenBatchInput } from './batch-storage';
+import { COMPACTION_UNLINK_DELAYS_MS, createCompactionUnlink, createBatchStorage, FROZEN_COMPACTION_POLICY, FROZEN_QUEUE_LIMITS, BatchInputError, BatchQuotaError, type FrozenBatchInput } from './batch-storage';
 import { runCleanups } from '../src/test-support/temp-dirs';
-import { RENAME_RETRY_DELAYS_MS } from './platform-fs';
 
 const directories: string[] = [];
 // The cleanup after H10 removes 4,000 stored batches (about 12,000 files and 4,000 folders): fast alone, but past the
@@ -700,7 +699,7 @@ it('P3-1 on win32, markers already deferred are tried once per lock without back
     for (const status of ['paused', 'queued', 'paused'] as const) {
       busyAttempts = 0; timers.mockClear();
       await storage.save(running.batchId, { ...running.initial, status } as any);
-      saves.push({ attempts: busyAttempts, backoffs: timers.mock.calls.filter(([, ms]) => RENAME_RETRY_DELAYS_MS.includes(Number(ms))).length });
+      saves.push({ attempts: busyAttempts, backoffs: timers.mock.calls.filter(([, ms]) => COMPACTION_UNLINK_DELAYS_MS.includes(Number(ms))).length });
     }
     expect(saves).toEqual(Array(3).fill({ attempts: 6, backoffs: 0 }));
   } finally { Object.defineProperty(process, 'platform', realPlatform); vi.resetModules(); }

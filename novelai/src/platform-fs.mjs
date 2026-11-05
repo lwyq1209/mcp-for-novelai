@@ -7,8 +7,13 @@
 import { constants } from 'node:fs';
 import { open, lstat, rename } from 'node:fs/promises';
 
-/** Backoff before each retry of an overwriting rename on win32 (sum 200 ms). */
-export const RENAME_RETRY_DELAYS_MS = Object.freeze([10, 20, 40, 60, 70]);
+/**
+ * Backoff before each retry of an overwriting rename on win32 (sum 4.27 s). MoveFileEx cannot replace a file while any
+ * handle to it is open (a reader, an antivirus scan, the search indexer, a backup or sync tool), and a write that
+ * cannot be replaced stops what depends on it (the frozen queue stops on a failed state write), so the retries cover
+ * a scan of a few seconds; graceful-fs retries such renames for up to a minute.
+ */
+export const RENAME_RETRY_DELAYS_MS = Object.freeze([10, 20, 40, 80, 160, 320, 640, 1000, 1000, 1000]);
 const RENAME_RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
 
 const refused = code => Object.assign(new Error(code === 'ELOOP'

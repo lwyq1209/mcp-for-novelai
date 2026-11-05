@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { openNoFollow, RENAME_RETRY_DELAYS_MS, renameReplace, syncDirectory as syncDirectoryEntry } from './platform-fs';
+import { openNoFollow, renameReplace, syncDirectory as syncDirectoryEntry } from './platform-fs';
 import type { BatchJob, BatchRequest } from '../src/workspace/batch-types';
 import type { GenerationSnapshot } from '../src/workspace/generation-types';
 import { isSystemMetadataFile, isSystemMetadataName } from './system-metadata-files';
@@ -94,16 +94,19 @@ export class BatchCompactionDeferredError extends Error {
 /** Codes a file briefly held open by another process (indexer, antivirus, backup) reports on unlink. */
 const BUSY_UNLINK_CODES = new Set(['EBUSY', 'EPERM', 'EACCES']);
 const deferrableCleanup = (error: unknown) => BUSY_UNLINK_CODES.has((error as any)?.code);
-/** Removal of a file compaction no longer needs. On win32 a busy file is retried with the same bounded
- * backoff as renameReplace; elsewhere the operation is the plain unlink. A missing file is already gone. */
+/** Backoff before each retry of a busy compaction unlink on win32 (sum 200 ms). Shorter than renameReplace's: a
+ * cleanup that stays busy is deferred and rolled forward later, it never stops the queue. */
+export const COMPACTION_UNLINK_DELAYS_MS: readonly number[] = Object.freeze([10, 20, 40, 60, 70]);
+/** Removal of a file compaction no longer needs. On win32 a busy file is retried with a short bounded backoff;
+ * elsewhere the operation is the plain unlink. A missing file is already gone. */
 export function createCompactionUnlink({ platform = process.platform as string, unlink = (file: string) => fs.unlink(file), sleep = (ms: number) => new Promise<void>(done => setTimeout(done, ms)), retry = true }: { platform?: string; unlink?: (file: string) => Promise<void>; sleep?: (ms: number) => Promise<void>; retry?: boolean } = {}) {
   return async (file: string): Promise<void> => {
     for (let attempt = 0; ; attempt++) {
       try { await unlink(file); return; }
       catch (error: any) {
         if (error?.code === 'ENOENT') return;
-        if (!retry || platform !== 'win32' || !BUSY_UNLINK_CODES.has(error?.code) || attempt >= RENAME_RETRY_DELAYS_MS.length) throw error;
-        await sleep(RENAME_RETRY_DELAYS_MS[attempt]);
+        if (!retry || platform !== 'win32' || !BUSY_UNLINK_CODES.has(error?.code) || attempt >= COMPACTION_UNLINK_DELAYS_MS.length) throw error;
+        await sleep(COMPACTION_UNLINK_DELAYS_MS[attempt]);
       }
     }
   };
