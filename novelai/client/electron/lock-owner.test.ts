@@ -112,7 +112,10 @@ describe('a lock left by a killed process', () => {
     await new Promise(resolve => setTimeout(resolve, 400));
     expect(done).toBe(false);
     expect(JSON.parse(await fs.readFile(lock, 'utf8'))).toEqual(legacy);
-    await fs.rm(lock); await fs.writeFile(lock, JSON.stringify({ ...legacy, leaseUntil: legacy.createdAt }), { flag: 'wx', mode: 0o600 });
+    // Ending the lease frees the lock. The waiting write polls, so it may also take the lock in the moment between the
+    // removal and the new file (EEXIST here): either way it goes on.
+    await fs.rm(lock);
+    await fs.writeFile(lock, JSON.stringify({ ...legacy, leaseUntil: legacy.createdAt }), { flag: 'wx', mode: 0o600 }).catch(error => { if (error?.code !== 'EEXIST') throw error; });
     await expect(write).resolves.toBe(2);
   });
 
