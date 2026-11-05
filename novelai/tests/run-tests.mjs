@@ -18,7 +18,9 @@ const TEST_TIMEOUT_MS = 180_000;
 const forwarded = process.argv.slice(2);
 const limits = forwarded.some(arg => arg === '--test-timeout' || arg.startsWith('--test-timeout=')) ? [] : [`--test-timeout=${TEST_TIMEOUT_MS}`];
 
-const run = realpathSync(mkdtempSync(join(tmpdir(), 'novelai-test-run-')));
+// realpathSync.native: on Windows the temp folder is often named in its 8.3 short form (C:\Users\RUNNER~1\…); the
+// run's folders get the long form that real data roots have.
+const run = realpathSync.native(mkdtempSync(join(tmpdir(), 'novelai-test-run-')));
 let status = 1;
 try {
   const temp = join(run, 'tmp');

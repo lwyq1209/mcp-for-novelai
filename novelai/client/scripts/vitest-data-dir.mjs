@@ -11,7 +11,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 export default function isolateTestRun() {
-  const run = realpathSync(mkdtempSync(join(tmpdir(), 'novelai-client-test-run-')));
+  // realpathSync.native: on Windows the temp folder is often named in its 8.3 short form (C:\Users\RUNNER~1\…), which
+  // the client's canonical-path checks (fs.realpath, the long form) rightly treat as an alias; real data roots and
+  // output folders are long paths, so the run's folders are too.
+  const run = realpathSync.native(mkdtempSync(join(tmpdir(), 'novelai-client-test-run-')));
   const temp = join(run, 'tmp');
   mkdirSync(temp);
   const previous = { TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP, NOVELAI_DATA_DIR: process.env.NOVELAI_DATA_DIR };
