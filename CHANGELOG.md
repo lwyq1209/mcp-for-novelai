@@ -12,7 +12,9 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
   on Linux it runs in the background until you open it again. Only a call that certainly reached no app
   starts anything; a call whose outcome may be unknown is never sent again. One start per minute per server, one
   server per data folder at a time. `NOVELAI_MCP_AUTOSTART=0` turns it off. macOS starts the app through
-  LaunchServices, Windows outside the agent's process tree (WMI), Linux as a detached process. A server run from
+  LaunchServices, Windows outside the agent's process tree (WMI), Linux as a detached process. The started app gets
+  none of the agent's environment (only what the system needs to run it: no tokens, keys or proxies), and on the
+  default data folder it starts as from its icon (images still go to `<Pictures>/MCP for NovelAI`). A server run from
   source with your own Node does not start the app.
 - Settings › MCP access shows which agent started the app and when, and says under Advanced how to turn the automatic
   start off.

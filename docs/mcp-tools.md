@@ -45,15 +45,17 @@ The server starts the app itself, so an agent never has to ask the user to open 
    reached the app — the connection dropped after the request was sent, the reply was garbled, the call timed out —
    is reported as it is and **never sent again**; the rules of [Request keys and paid
    requests](#request-keys-and-paid-requests) stay exactly as they are.
-2. If the app is already starting for this data folder (its single-instance lock names a live process, or another
-   server started it less than a minute ago), the server only waits for it. Otherwise it starts the app it belongs
-   to: the installed app whose executable runs the server, or — from source — the built client whose
-   `dist-mcp/novelai-mcp.mjs` it is, with that client's development Electron. It starts it at most once a minute,
-   and when several agents call at once only one server starts it (a claim file, `runtime/mcp-autostart.json`, with
-   the app's own single-instance lock behind it).
+2. If the app is already starting for this data folder (its single-instance lock names the live process that made
+   it, or another live server is starting it right now), the server only waits for it. Otherwise it starts the app it
+   belongs to: the installed app whose executable runs the server, or — from source — the built client whose
+   `dist-mcp/novelai-mcp.mjs` it is, with exactly that client's own development Electron
+   (`node_modules/electron/dist`). It starts it at most once a minute, and when several agents call at once only one
+   server starts it: they compete for a claim file, `runtime/mcp-autostart.json`, that only one can hold (taken over
+   only when its server is gone, or the claim is more than a minute old or in the future), and the app's own
+   single-instance lock keeps it to one app in any case.
 3. It waits up to 30 seconds for the app's `bridge.json`, then sends the call once more. If the call was a canvas
-   tool and the app's window is still loading (`workspace_not_ready`, which the app answers before it runs
-   anything), it sends it again every half second within the same 30 seconds.
+   tool or `prepare_recipe {canvas}` and the app's window is still loading (`workspace_not_ready`, which the app
+   answers before it runs anything), it sends it again every half second within the same 30 seconds.
 
 The app starts in the background, never takes the focus and keeps its window out of the way until the user opens it:
 on macOS the window is not shown — only the Dock icon appears, and clicking it shows the window; on Windows the window
@@ -62,8 +64,15 @@ and the app has no taskbar entry until the user opens the app again. Opening the
 platform; a second start by an agent never brings it forward. The window still loads, so the canvas tools work while
 it waits (its page is not throttled in the background meanwhile). macOS: LaunchServices (`open -n -g -a <app> --env NOVELAI_DATA_DIR=…`); Windows: `Win32_Process.Create`
 (WMI), outside the agent's process tree and job, so closing the agent's terminal does not close the app (if WMI fails,
-a detached process, and the server logs that); Linux: a detached process. The app gets the server's
-`NOVELAI_DATA_DIR` (or none, for the default data folder) and records in Settings › MCP access which agent started it.
+a detached process, and the server logs that); Linux: a detached process. The app gets `NOVELAI_DATA_DIR` only when
+the server's data folder is not the app's default one (every configuration of Settings › MCP access names the data
+folder, the default one included; for the default folder the variable is left out, so the app starts as from its icon
+and keeps `<Pictures>/MCP for NovelAI` as its default output folder; the app also treats `NOVELAI_DATA_DIR` set to its
+default folder as an ordinary start). It gets none of the agent's environment: on Windows and Linux only the variables
+the system needs to run it (system folders, user profile, locale, display, session bus, input methods), never
+`ELECTRON_*`, proxy, key, token, secret or password variables. The app has its own proxy setting (Settings › Account &
+network, the system proxy by default), so an agent's proxy variables are not needed. The app records in Settings › MCP
+access which agent started it.
 Starting the app never generates anything: batches it recovers from its last run wait paused for an explicit resume.
 
 When the server does not start the app, `unavailable` says why in its message and in `details.autostart`:
@@ -73,7 +82,7 @@ When the server does not start the app, `unavailable` says why in its message an
 | `off` | `NOVELAI_MCP_AUTOSTART=0` (also `false`, `off`, `no`) in the server's environment: ask the user to open the app |
 | `off_in_tests` | A test process (`node --test`, Vitest, `npm test`); tests never start the app |
 | `unsupported` | The server does not run with an app's own executable (for example system Node running `novelai/src/mcp.mjs`) |
-| `recently_started` | This server started the app less than a minute ago and it is not running |
+| `recently_started` | This server tried to start the app less than a minute ago (whether that start worked or not) and it is not running |
 | `start_failed` | Starting it failed (the message names the reason) |
 | `started_not_ready`, `started_exited` | It was started but was not ready within 30 seconds, or closed again |
 | `starting_not_ready` | It was already starting and was not ready within 30 seconds |

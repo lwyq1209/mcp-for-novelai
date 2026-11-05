@@ -34,10 +34,15 @@ quits. When no app is running, the server normally starts it in the background a
   once; see [Opening the app the first time](#opening-the-app-the-first-time)); the app's log is in `logs/` of the data
   folder.
 - `starting_not_ready` — the app is starting (by you or another agent) and was slow; call again in a moment.
-- `recently_started` — this server started the app less than a minute ago and it closed again; it does not start it
-  again so soon. Open it yourself or call again later.
-- No `details.autostart` — the connection dropped after the request was sent: the call may or may not have reached the
-  app and is never sent again automatically (see the next points).
+- `recently_started` — this server tried to start the app less than a minute ago (the start failed, or the app closed
+  again); it does not try again so soon. Open it yourself or call again later.
+- On Linux, `started_not_ready` can also mean the agent starts its MCP servers without the desktop's variables
+  (`DISPLAY` or `WAYLAND_DISPLAY`, `DBUS_SESSION_BUS_ADDRESS`): the app cannot open without them. Open it yourself, or
+  pass them in the agent's MCP configuration.
+- No `details.autostart` — usually the connection dropped after the request was sent: the call may or may not have
+  reached the app and is never sent again automatically (see the next points). Two cases without it are certain not to
+  have been sent: the message says the connection file cannot be read (restart the app; it writes a new one), or the
+  call was cancelled while it waited for the app to start.
 
 Also:
 
