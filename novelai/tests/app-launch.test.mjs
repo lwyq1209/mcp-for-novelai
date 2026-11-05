@@ -7,7 +7,7 @@ import { EventEmitter } from 'node:events';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { STARTED_BY_AGENT_ARG, appEnvironment, launchApp, macOpenArguments, resolveOwnApp, startedByAgentArgument } from '../src/app-launch.mjs';
 import { SW_SHOWNOACTIVATE, outsideJobOutcome, outsideJobRequest, windowsArgument, windowsCommandLine } from '../src/win32-process.mjs';
@@ -138,7 +138,7 @@ test('Linux launch: a detached spawn without stdio, unref\'d; a spawn error is a
   // A relative data folder names the server's folder for the app too (its working directory differs).
   const relative = [];
   await launchApp(app, { env: { NOVELAI_DATA_DIR: ' rel/data ' }, spawnImpl: (command, args, options) => { relative.push(options.env); return fakeChild(); } });
-  assert.equal(relative[0].NOVELAI_DATA_DIR, join(process.cwd(), 'rel', 'data'));
+  assert.equal(relative[0].NOVELAI_DATA_DIR, posix.resolve('rel/data'));
   assert.deepEqual(await launchApp(app, { env: {}, spawnImpl: () => fakeChild({ spawnError: Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }) }) }), { ok: false, reason: 'the app could not be started (spawn ENOENT)' });
 });
 
