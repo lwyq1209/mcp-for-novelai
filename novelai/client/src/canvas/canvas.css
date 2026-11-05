@@ -225,11 +225,12 @@
 .cv-empty-mark { width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center; background: var(--ui-accent-soft); color: var(--ui-accent-text); margin-bottom: 4px; }
 
 /* Running generation over the viewport */
-.cv-gen { position: absolute; inset: 18px; z-index: 5; display: grid; place-items: center; pointer-events: none; transition: opacity var(--ui-t-med) var(--ui-ease); }
+.cv-gen { position: absolute; inset: 18px; z-index: 5; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; pointer-events: none; transition: opacity var(--ui-t-med) var(--ui-ease); }
 .cv-gen.is-waiting { background: rgba(11, 10, 16, .55); border-radius: var(--ui-r-l); }
 .cv-gen.is-leaving { opacity: 0; }
-.cv-gen-frame { max-width: 100%; max-height: calc(100% - 56px); border-radius: 10px; box-shadow: 0 20px 60px rgba(0, 0, 0, .5); }
-.cv-gen.has-preview { grid-template-rows: 1fr auto; gap: 10px; }
+/* The stream frame fits the first row (one cell wide, as library.css explains for .lib-dr-img), the status the second. */
+.cv-gen-frame { max-width: 100%; max-height: 100%; border-radius: 10px; box-shadow: 0 20px 60px rgba(0, 0, 0, .5); }
+.cv-gen.has-preview { grid-template-rows: minmax(0, 1fr) auto; gap: 10px; }
 .cv-gen-status { display: flex; flex-direction: column; gap: 6px; min-width: 260px; padding: 8px 12px; border-radius: var(--ui-r-m); background: var(--ui-bg-2); border: 1px solid var(--ui-line); font-size: 12px; }
 .cv-gen-track { height: 3px; border-radius: 3px; background: var(--ui-bg-4); overflow: hidden; }
 .cv-gen-track i { display: block; height: 100%; background: var(--ui-agent); transition: width var(--ui-t-med) linear; }
@@ -252,7 +253,7 @@
 .cv-qchip { flex: none; gap: 7px; }
 
 /* Full screen */
-.cv-full { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 32px; background: rgba(6, 6, 10, .92); }
+.cv-full { position: fixed; inset: 0; z-index: 80; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; padding: 32px; background: rgba(6, 6, 10, .92); }
 .cv-full img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; box-shadow: 0 20px 60px rgba(0, 0, 0, .6); }
 .cv-full-close { position: absolute; top: 14px; right: 14px; }
 

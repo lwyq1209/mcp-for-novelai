@@ -68,7 +68,7 @@
 .rpi-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 55vh; overflow-y: auto; }
 .rpi-entry { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: var(--ui-r-l); background: var(--ui-bg-1); border: 1px solid var(--ui-line); }
 .rpi-entry-head { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.rpi-thumb { width: 56px; height: 56px; flex: none; display: grid; place-items: center; border-radius: var(--ui-r-m); background: var(--ui-bg-3); color: var(--ui-text-3); overflow: hidden; }
+.rpi-thumb { width: 56px; height: 56px; flex: none; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; border-radius: var(--ui-r-m); background: var(--ui-bg-3); color: var(--ui-text-3); overflow: hidden; }
 .rpi-thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .rpi-entry-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .rpi-entry-text strong { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
