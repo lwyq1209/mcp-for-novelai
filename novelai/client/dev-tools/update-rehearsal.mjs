@@ -420,6 +420,14 @@ async function scenario(name, context, index) {
     result.ok = Object.values(result.checks).every(item => item.ok);
   } catch (error) {
     result.error = { code: error.code ?? 'failed', message: error.message, details: error.details };
+    // What the helper and the apps said, for a failure.
+    try {
+      const updates = path.join(dataRoot, 'updates');
+      result.helperStates = pendingState(dataRoot).states;
+      result.helperLog = fs.existsSync(updates) ? fs.readdirSync(updates).flatMap(id => { try { return fs.readFileSync(path.join(updates, id, 'helper.log'), 'utf8').split('\n').slice(-25); } catch { return []; } }) : [];
+      result.appLog = fs.readFileSync(path.join(dataRoot, 'logs', 'app.log'), 'utf8').split('\n').filter(line => /\[update\]|ERROR|WARN/.test(line)).slice(-25);
+      result.processes = appProcesses(dataRoot, parent);
+    } catch { /* best effort */ }
     if (error.code === 'user_back' || error.code === 'front_detected') result.interrupted = error.code;
   } finally {
     page?.close();
@@ -487,7 +495,8 @@ async function rehearse(options) {
       break;
     }
   }
-  return { ok: results.every(result => result.ok), results: results.map(result => ({ scenario: result.scenario, ok: result.ok, interrupted: result.interrupted, error: result.error?.message, failed: Object.entries(result.checks).filter(([, value]) => !value.ok).map(([key, value]) => ({ check: key, value: value.value })), frontHits: result.frontWatch?.hits })) };
+  return { ok: results.every(result => result.ok), results: results.map(result => ({ scenario: result.scenario, ok: result.ok, interrupted: result.interrupted, error: result.error?.message, failed: Object.entries(result.checks).filter(([, value]) => !value.ok).map(([key, value]) => ({ check: key, value: value.value })), frontHits: result.frontWatch?.hits,
+    ...(result.ok ? {} : { helperStates: result.helperStates, helperLog: result.helperLog, appLog: result.appLog }) })) };
 }
 
 async function prepare(options) {
