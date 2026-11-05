@@ -4,8 +4,9 @@
  * The server starts only the app it belongs to, and only when that is certain:
  * - packaged: it runs with the app's own executable as Node (ELECTRON_RUN_AS_NODE=1) from that app's
  *   resources/mcp/novelai-mcp.mjs (macOS: <App>.app/Contents/Resources/mcp/, with the executable in Contents/MacOS/);
- * - from source: it runs with a development Electron (node_modules/electron) from <client>/dist-mcp/novelai-mcp.mjs
- *   of a built client (dist-electron/electron/bootstrap.js), which is then started as `electron <client>`.
+ * - from source: it runs with that client's own development Electron (<client>/node_modules/electron/dist/<path.txt>,
+ *   compared as real paths) from <client>/dist-mcp/novelai-mcp.mjs of a built client (dist-electron/electron/bootstrap.js),
+ *   which is then started as `electron <client>`.
  * Anything else (system Node running novelai/src/mcp.mjs, a bundle copied elsewhere) is not guessed: no start.
  *
  * Every start carries STARTED_BY_AGENT_ARG, so the app shows its first window without taking the focus
@@ -19,15 +20,18 @@
  *   taskbar without activating it, electron/window-show.ts); when WMI fails definitely, a detached spawn instead
  *   (logged: closing the agent's terminal may then close the app too).
  * - Linux: a detached spawn (own session, no stdio, unref'd).
- * On Windows and Linux the app gets this server's environment without ELECTRON_RUN_AS_NODE, the development and test
- * switches and the calling agent's session markers; NOVELAI_DATA_DIR names the server's own data folder (resolved like
- * data-paths.cjs does, so a relative value means the same folder), or stays absent.
+ * The app gets only what the system needs to run it (appEnvironment: a fixed list per platform; never ELECTRON_*, proxy,
+ * key, token, secret or password variables — the app has its own proxy setting, the system proxy by default), and
+ * NOVELAI_DATA_DIR only when the server's data folder is not the app's default data root (isCustomDataRoot): with the
+ * default root the app starts as from its icon, with its default output folder <Pictures>/MCP for NovelAI. The value
+ * passed is resolved like data-paths.cjs does, so a relative value names the same folder.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DATA_DIR_ENV } from './data-paths.mjs';
+import { DATA_DIR_ENV, isCustomDataRoot } from './data-paths.mjs';
 import { SW_SHOWNOACTIVATE, createOutsideJobAsync, powershellPath, windowsCommandLine } from './win32-process.mjs';
 
 /** The switch that tells the app an agent started it (electron/window-show.ts reads it). `=<client>` names the agent. */
@@ -46,7 +50,7 @@ const pathFor = platform => platform === 'win32' ? path.win32 : path.posix;
  * {ok: false, reason} ('not_electron': not run with an app's executable; 'unknown_location': the server file is not
  * where an app ships it or a built client keeps it). Pure: `exists` and the facts are injectable.
  */
-export function resolveOwnApp({ moduleFile = fileURLToPath(import.meta.url), execPath = process.execPath, versions = process.versions, platform = process.platform, exists = existsSync } = {}) {
+export function resolveOwnApp({ moduleFile = fileURLToPath(import.meta.url), execPath = process.execPath, versions = process.versions, platform = process.platform, exists = existsSync, readText = file => readFileSync(file, 'utf8'), realpath = file => realpathSync.native(file) } = {}) {
   if (!versions?.electron) return { ok: false, reason: 'not_electron' };
   const p = pathFor(platform);
   const file = p.resolve(moduleFile), dir = p.dirname(file), exe = p.resolve(execPath);
@@ -64,8 +68,12 @@ export function resolveOwnApp({ moduleFile = fileURLToPath(import.meta.url), exe
   if (p.basename(dir) === 'dist-mcp') {
     const client = p.dirname(dir);
     const built = exists(p.join(client, 'package.json')) && exists(p.join(client, 'dist-electron', 'electron', 'bootstrap.js'));
-    const electronName = platform === 'win32' ? 'electron.exe' : platform === 'darwin' ? 'Electron' : 'electron';
-    const devElectron = p.basename(exe).toLowerCase() === electronName.toLowerCase() && exists(exe);
+    // Exactly this client's development Electron: node_modules/electron/dist/<path.txt>, compared as real paths.
+    let own = null;
+    try { own = p.join(client, 'node_modules', 'electron', 'dist', readText(p.join(client, 'node_modules', 'electron', 'path.txt')).trim()); } catch { own = null; }
+    const real = file => { try { return realpath(file); } catch { return p.resolve(file); } };
+    const fold = value => platform === 'win32' ? value.toLowerCase() : value;
+    const devElectron = Boolean(own) && exists(exe) && fold(real(exe)) === fold(real(own));
     if (!built || !devElectron) return { ok: false, reason: 'unknown_location' };
     if (platform === 'darwin') {
       const at = exe.lastIndexOf('.app/Contents/MacOS/');
@@ -77,21 +85,49 @@ export function resolveOwnApp({ moduleFile = fileURLToPath(import.meta.url), exe
   return { ok: false, reason: 'unknown_location' };
 }
 
-/** Variables that would make the started app something else than a normal start (development, UI capture, test
- * windows, Node mode) or that belong to the calling agent's session. */
-const DROPPED = /^(ELECTRON_RUN_AS_NODE|ELECTRON_NO_ATTACH_CONSOLE|VITE_DEV_SERVER_URL|NAI_UI_CAPTURE_PATH|NAI_DEV_TOOLS_BACKGROUND|NOVELAI_INPAINT_DIAGNOSTICS|NOVELAI_MCP_AUTOSTART|NODE_OPTIONS|CLAUDECODE|CLAUDE_CODE_.*|CLAUDE_PID|CLAUDE_EFFORT|MSYSTEM)$/i;
+/**
+ * What the system needs to run the app, and nothing of the agent: Windows' system folders, user profile and processor
+ * facts; on Linux (and for macOS's `open`) the user, locale, display, session bus, desktop-environment detection (which
+ * picks the secret store of the token), input methods (typing Chinese prompts) and scaling. Windows names are matched
+ * without letter case.
+ */
+const KEEP = {
+  win32: /^(SystemRoot|windir|ComSpec|PATHEXT|PATH|TEMP|TMP|USERPROFILE|APPDATA|LOCALAPPDATA|HOMEDRIVE|HOMEPATH|USERNAME|USERDOMAIN|COMPUTERNAME|ProgramFiles|ProgramFiles\(x86\)|ProgramW6432|CommonProgramFiles|CommonProgramFiles\(x86\)|CommonProgramW6432|ProgramData|ALLUSERSPROFILE|PUBLIC|SystemDrive|NUMBER_OF_PROCESSORS|PROCESSOR_[A-Z0-9_]+|OS)$/i,
+  posix: /^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LANGUAGE|LC_[A-Z_]+|TZ|TMPDIR|DISPLAY|WAYLAND_DISPLAY|XAUTHORITY|XDG_[A-Z0-9_]+|DBUS_SESSION_BUS_ADDRESS|DESKTOP_SESSION|GNOME_DESKTOP_SESSION_ID|KDE_FULL_SESSION|KDE_SESSION_VERSION|GTK_IM_MODULE|QT_IM_MODULE|XMODIFIERS|SDL_IM_MODULE|GDK_SCALE|GDK_DPI_SCALE|QT_SCALE_FACTOR|QT_AUTO_SCREEN_SCALE_FACTOR)$/,
+};
+/** Never passed, even when a name above would match (XDG_*, LC_*, PROCESSOR_*): credentials, proxies, Electron switches. */
+const NEVER = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PROXY|^ELECTRON_/i;
 
-/** The environment of the started app (Windows and Linux): this server's, without DROPPED, one entry per name (Windows
- * names are case-insensitive). NOVELAI_DATA_DIR is kept exactly as it is, or stays absent. */
+/**
+ * The environment of the started app on Windows and Linux, and of `open` on macOS: only the variables of KEEP for the
+ * platform, minus NEVER, one entry per name (Windows names are case-insensitive). NOVELAI_DATA_DIR is never taken from
+ * here; launchApp adds it when the data folder is not the default one.
+ */
 export function appEnvironment(env = process.env, platform = process.platform) {
+  const keep = platform === 'win32' ? KEEP.win32 : KEEP.posix;
   const kept = {}, seen = new Set();
   for (const [key, value] of Object.entries(env)) {
-    if (value === undefined || DROPPED.test(key)) continue;
+    if (value === undefined || !keep.test(key) || NEVER.test(key)) continue;
     const id = platform === 'win32' ? key.toUpperCase() : key;
     if (seen.has(id)) continue;
     seen.add(id); kept[key] = value;
   }
   return kept;
+}
+
+const userHome = () => { try { return os.userInfo().homedir || os.homedir(); } catch { return os.homedir(); } };
+/**
+ * The data folder to hand to the app: null when the server has none or it is the app's default data root as the app
+ * will compute it (macOS: from the user's own home, as for an app LaunchServices starts; Windows and Linux: from the
+ * environment the app gets), else that folder, resolved.
+ */
+export function dataFolderForApp(env, app, childEnv = appEnvironment(env, app.platform), { homedir } = {}) {
+  const value = typeof env[DATA_DIR_ENV] === 'string' && env[DATA_DIR_ENV].trim() ? env[DATA_DIR_ENV].trim() : null;
+  if (!value) return null;
+  const resolved = pathFor(app.platform).resolve(value);
+  const home = homedir ?? (app.platform === 'darwin' ? userHome() : app.platform === 'win32' ? (childEnv.USERPROFILE ?? os.homedir()) : (childEnv.HOME ?? userHome()));
+  const custom = isCustomDataRoot({ platform: app.platform, env: { ...childEnv, [DATA_DIR_ENV]: resolved }, homedir: home });
+  return custom ? resolved : null;
 }
 
 let openEnvSupport = null;
@@ -110,22 +146,21 @@ export function macOpenArguments(app, { dataDir, agentArgument }) {
   return ['-n', '-g', '-a', app.macApp, ...(dataDir ? ['--env', `${DATA_DIR_ENV}=${dataDir}`] : []), '--args', ...app.args, agentArgument];
 }
 
-const nonBlank = value => typeof value === 'string' && value.trim() ? value : null;
 
 /**
  * Starts `app` (from resolveOwnApp) once. Resolves {ok: true, via, pid?} when the start was handed over (the app may
  * still fail later; the caller waits for its bridge), or {ok: false, reason} when it certainly did not start.
  */
-export async function launchApp(app, { client = null, env = process.env, spawnImpl = spawn, runSync = spawnSync, outsideJob = createOutsideJobAsync, log = () => {}, exists = existsSync } = {}) {
+export async function launchApp(app, { client = null, env = process.env, spawnImpl = spawn, runSync = spawnSync, outsideJob = createOutsideJobAsync, log = () => {}, exists = existsSync, ...overrides } = {}) {
   const agentArgument = startedByAgentArgument(client);
-  // The data folder this server uses (as data-paths.cjs resolves it), so a relative value names the same folder for
-  // the app, which starts in another working directory.
-  const dataDir = nonBlank(env[DATA_DIR_ENV]) ? pathFor(app.platform).resolve(env[DATA_DIR_ENV].trim()) : null;
+  const childEnv = appEnvironment(env, app.platform);
+  // The data folder, only when it is not the app's own default (dataFolderForApp).
+  const dataDir = dataFolderForApp(env, app, childEnv, { homedir: overrides.homedir });
   if (app.platform === 'darwin') {
     if (dataDir && !openSupportsEnv({ run: runSync })) return { ok: false, reason: 'This macOS `open` cannot pass the data folder (no --env option); the app was not started.' };
     const args = macOpenArguments(app, { dataDir, agentArgument });
-    // `open` itself gets no Node-mode switch; the app gets the session environment plus --env.
-    const openEnv = appEnvironment(env, 'darwin');
+    // `open` itself gets only the list of appEnvironment; the app gets the session environment plus --env.
+    const openEnv = childEnv;
     return await new Promise(resolve => {
       let stderr = '', done = false;
       const finish = value => { if (!done) { done = true; clearTimeout(timer); resolve(value); } };
@@ -140,8 +175,7 @@ export async function launchApp(app, { client = null, env = process.env, spawnIm
       child.once('close', code => finish(code === 0 ? { ok: true, via: 'open' } : { ok: false, reason: `open exited ${code}${stderr.trim() ? `: ${stderr.trim().split('\n')[0]}` : ''}` }));
     });
   }
-  const childEnv = appEnvironment(env, app.platform);
-  if (dataDir) for (const key of Object.keys(childEnv)) if (key === DATA_DIR_ENV || (app.platform === 'win32' && key.toUpperCase() === DATA_DIR_ENV)) childEnv[key] = dataDir;
+  if (dataDir) childEnv[DATA_DIR_ENV] = dataDir;
   const cwd = pathFor(app.platform).dirname(app.executable);
   const args = [...app.args, agentArgument];
   if (app.platform === 'win32') {

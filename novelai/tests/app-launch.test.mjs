@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join, posix } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { STARTED_BY_AGENT_ARG, appEnvironment, launchApp, macOpenArguments, resolveOwnApp, startedByAgentArgument } from '../src/app-launch.mjs';
+import { STARTED_BY_AGENT_ARG, appEnvironment, dataFolderForApp, launchApp, macOpenArguments, resolveOwnApp, startedByAgentArgument } from '../src/app-launch.mjs';
 import { SW_SHOWNOACTIVATE, outsideJobOutcome, outsideJobRequest, windowsArgument, windowsCommandLine } from '../src/win32-process.mjs';
 
 const electron = { node: '24.0.0', electron: '42.11.0' };
@@ -31,19 +31,34 @@ test('resolveOwnApp: a packaged app is the one whose executable runs the bundle 
   assert.deepEqual(resolveOwnApp({ platform: 'linux', versions: electron, execPath: '/home/u/x/mcp', moduleFile: '/home/u/mcp/novelai-mcp.mjs', exists: () => true }), { ok: false, reason: 'unknown_location' });
 });
 
-test('resolveOwnApp: from source, a development Electron running a built client\'s dist-mcp bundle starts that client', () => {
+test('resolveOwnApp: from source, only that client\'s own development Electron running its built dist-mcp bundle starts that client', () => {
   const client = '/repo/novelai/client', exe = `${client}/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron`;
   const built = files([exe, `${client}/package.json`, `${client}/dist-electron/electron/bootstrap.js`]);
-  assert.deepEqual(resolveOwnApp({ platform: 'darwin', versions: electron, execPath: exe, moduleFile: `${client}/dist-mcp/novelai-mcp.mjs`, exists: built }),
+  // node_modules/electron/path.txt names the binary inside dist/ (as the Electron installer writes it).
+  const pathTxt = name => file => { if (file.endsWith('path.txt')) return `${name}\n`; throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); };
+  const same = file => file;
+  const mac = { platform: 'darwin', versions: electron, moduleFile: `${client}/dist-mcp/novelai-mcp.mjs`, readText: pathTxt('Electron.app/Contents/MacOS/Electron'), realpath: same };
+  assert.deepEqual(resolveOwnApp({ ...mac, execPath: exe, exists: built }),
     { ok: true, kind: 'source', platform: 'darwin', executable: exe, args: [client], macApp: `${client}/node_modules/electron/dist/Electron.app` });
+  // Another checkout's Electron, or any binary named Electron, is not this client's: no start.
+  for (const other of ['/other/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron', '/Applications/Some.app/Contents/MacOS/Electron'])
+    assert.deepEqual(resolveOwnApp({ ...mac, execPath: other, exists: () => true }), { ok: false, reason: 'unknown_location' }, other);
+  // The same binary reached through a symbolic link is this client's.
+  const link = '/links/Electron';
+  assert.equal(resolveOwnApp({ ...mac, execPath: link, exists: () => true, realpath: file => file === link ? exe : file }).ok, false, 'a link outside an .app bundle has no app to open');
+  assert.equal(resolveOwnApp({ ...mac, execPath: '/private/repo/novelai/client/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron', exists: () => true, realpath: file => file.replace(/^\/private/, '') }).ok, true);
+  // No path.txt (Electron not installed in that client): no start.
+  assert.deepEqual(resolveOwnApp({ ...mac, execPath: exe, exists: built, readText: () => { throw new Error('ENOENT'); } }), { ok: false, reason: 'unknown_location' });
   const winClient = 'C:\\repo dir\\novelai\\client', winExe = `${winClient}\\node_modules\\electron\\dist\\electron.exe`;
-  assert.deepEqual(resolveOwnApp({ platform: 'win32', versions: electron, execPath: winExe, moduleFile: `${winClient}\\dist-mcp\\novelai-mcp.mjs`, exists: files([winExe, `${winClient}\\package.json`, `${winClient}\\dist-electron\\electron\\bootstrap.js`]) }),
-    { ok: true, kind: 'source', platform: 'win32', executable: winExe, args: [winClient] });
+  const win = { platform: 'win32', versions: electron, moduleFile: `${winClient}\\dist-mcp\\novelai-mcp.mjs`, readText: pathTxt('electron.exe'), realpath: same, exists: files([winExe, winExe.toUpperCase(), `${winClient}\\package.json`, `${winClient}\\dist-electron\\electron\\bootstrap.js`]) };
+  assert.deepEqual(resolveOwnApp({ ...win, execPath: winExe }), { ok: true, kind: 'source', platform: 'win32', executable: winExe, args: [winClient] });
+  assert.equal(resolveOwnApp({ ...win, execPath: winExe.toUpperCase() }).ok, true, 'Windows paths compare without letter case');
+  assert.equal(resolveOwnApp({ ...win, execPath: 'D:\\other\\node_modules\\electron\\dist\\electron.exe', exists: () => true }).ok, false);
   const linuxExe = `${client}/node_modules/electron/dist/electron`;
-  assert.equal(resolveOwnApp({ platform: 'linux', versions: electron, execPath: linuxExe, moduleFile: `${client}/dist-mcp/novelai-mcp.mjs`, exists: files([linuxExe, `${client}/package.json`, `${client}/dist-electron/electron/bootstrap.js`]) }).ok, true);
+  assert.equal(resolveOwnApp({ platform: 'linux', versions: electron, execPath: linuxExe, moduleFile: `${client}/dist-mcp/novelai-mcp.mjs`, readText: pathTxt('electron'), realpath: same, exists: files([linuxExe, `${client}/package.json`, `${client}/dist-electron/electron/bootstrap.js`]) }).ok, true);
   // Not built, or not a development Electron: no start.
-  assert.deepEqual(resolveOwnApp({ platform: 'darwin', versions: electron, execPath: exe, moduleFile: `${client}/dist-mcp/novelai-mcp.mjs`, exists: files([exe, `${client}/package.json`]) }), { ok: false, reason: 'unknown_location' });
-  assert.deepEqual(resolveOwnApp({ platform: 'darwin', versions: electron, execPath: '/Applications/MCP for NovelAI.app/Contents/MacOS/MCP for NovelAI', moduleFile: `${client}/dist-mcp/novelai-mcp.mjs`, exists: () => true }), { ok: false, reason: 'unknown_location' });
+  assert.deepEqual(resolveOwnApp({ ...mac, execPath: exe, exists: files([exe, `${client}/package.json`]) }), { ok: false, reason: 'unknown_location' });
+  assert.deepEqual(resolveOwnApp({ ...mac, execPath: '/Applications/MCP for NovelAI.app/Contents/MacOS/MCP for NovelAI', exists: () => true }), { ok: false, reason: 'unknown_location' });
 });
 
 test('resolveOwnApp: system Node (novelai/src/mcp.mjs, or any bundle run with node) never starts an app', () => {
@@ -61,11 +76,30 @@ test('the start argument names the calling client, URI-encoded so it is one plai
   for (const client of [null, {}, { name: '' }, { name: 'a\nb' }, { name: 'x'.repeat(101) }]) assert.equal(startedByAgentArgument(client), STARTED_BY_AGENT_ARG);
 });
 
-test('the started app\'s environment: no Node mode, no development or test switches, no agent session markers; the data folder as it is', () => {
-  const env = { PATH: '/bin', HOME: '/h', ELECTRON_RUN_AS_NODE: '1', NOVELAI_DATA_DIR: '/tmp/数据 dir', NOVELAI_PROJECT_ROOT: '/p', VITE_DEV_SERVER_URL: 'http://x', NAI_UI_CAPTURE_PATH: '/c.png', NAI_DEV_TOOLS_BACKGROUND: '1', NOVELAI_MCP_AUTOSTART: '1', NODE_OPTIONS: '--inspect', CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'cli', LANG: 'zh_CN.UTF-8' };
-  assert.deepEqual(appEnvironment(env, 'linux'), { PATH: '/bin', HOME: '/h', NOVELAI_DATA_DIR: '/tmp/数据 dir', NOVELAI_PROJECT_ROOT: '/p', LANG: 'zh_CN.UTF-8' });
-  assert.equal(Object.hasOwn(appEnvironment({ PATH: '/bin' }, 'linux'), 'NOVELAI_DATA_DIR'), false, 'no data folder set: none is added');
-  assert.deepEqual(appEnvironment({ Path: 'a', PATH: 'b', electron_run_as_node: '1' }, 'win32'), { Path: 'a' });
+test('the started app\'s environment is a fixed list of what the system needs: no agent, Electron, proxy or credential variables', () => {
+  // The variables the review found passed through (args-probe.mjs), and others of the same kind.
+  const leaked = { ELECTRON_RUN_AS_NODE: '1', electron_run_as_node: '1', CLAUDECODE: '1', NODE_OPTIONS: '--require x', ANTHROPIC_API_KEY: 'sk-x', GITHUB_TOKEN: 'ghp', HTTPS_PROXY: 'http://127.0.0.1:9', http_proxy: 'http://127.0.0.1:9', NO_PROXY: '*', ALL_PROXY: 'socks5://x', NODE_EXTRA_CA_CERTS: '/x.pem', ELECTRON_NO_ASAR: '1', ELECTRON_ENABLE_LOGGING: '1', NOVELAI_PROJECT_ROOT: '/p', NOVELAI_TEST_RUN_DATA_DIR: '/t', NOVELAI_DATA_DIR: '/d', CODEX_SANDBOX: 'seatbelt', VITE_DEV_SERVER_URL: 'http://x', NAI_DEV_TOOLS_BACKGROUND: '1', AWS_SECRET_ACCESS_KEY: 's', DB_PASSWORD: 'p', XDG_SESSION_TOKEN: 't', LC_SECRET: 's' };
+  const linux = { PATH: '/bin', HOME: '/h', USER: 'u', LOGNAME: 'u', SHELL: '/bin/sh', LANG: 'zh_CN.UTF-8', LC_ALL: 'C.UTF-8', DISPLAY: ':0', WAYLAND_DISPLAY: 'wayland-0', XAUTHORITY: '/h/.Xauthority', XDG_RUNTIME_DIR: '/run/user/1000', XDG_CONFIG_HOME: '/h/.config', XDG_CURRENT_DESKTOP: 'GNOME', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus', DESKTOP_SESSION: 'gnome', GTK_IM_MODULE: 'fcitx', QT_IM_MODULE: 'fcitx', XMODIFIERS: '@im=fcitx', GDK_SCALE: '2', TMPDIR: '/tmp', TZ: 'Asia/Shanghai' };
+  assert.deepEqual(appEnvironment({ ...leaked, ...linux }, 'linux'), linux);
+  const windows = { SystemRoot: 'C:\\WINDOWS', windir: 'C:\\WINDOWS', ComSpec: 'C:\\WINDOWS\\system32\\cmd.exe', PATHEXT: '.COM;.EXE', Path: 'C:\\WINDOWS', TEMP: 'C:\\t', TMP: 'C:\\t', USERPROFILE: 'C:\\Users\\u', APPDATA: 'C:\\Users\\u\\AppData\\Roaming', LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local', HOMEDRIVE: 'C:', HOMEPATH: '\\Users\\u', USERNAME: 'u', ProgramFiles: 'C:\\Program Files', 'ProgramFiles(x86)': 'C:\\Program Files (x86)', ProgramData: 'C:\\ProgramData', SystemDrive: 'C:', NUMBER_OF_PROCESSORS: '8', PROCESSOR_ARCHITECTURE: 'AMD64', PROCESSOR_IDENTIFIER: 'x', OS: 'Windows_NT' };
+  assert.deepEqual(appEnvironment({ ...leaked, ...windows, PATH: 'second spelling', MSYSTEM: 'MINGW64' }, 'win32'), windows, 'one entry per name without letter case; nothing else');
+  // macOS: what `open` itself gets (the app gets the session environment of LaunchServices).
+  assert.deepEqual(appEnvironment({ ...leaked, PATH: '/bin', HOME: '/Users/u', TMPDIR: '/var/t', LANG: 'en_US.UTF-8' }, 'darwin'), { PATH: '/bin', HOME: '/Users/u', TMPDIR: '/var/t', LANG: 'en_US.UTF-8' });
+});
+
+test('the data folder goes to the app only when it is not the app\'s default data root (that one starts as from its icon)', () => {
+  const mac = { platform: 'darwin' }, win = { platform: 'win32' }, linux = { platform: 'linux' };
+  const macDefault = '/Users/u/Library/Application Support/mcp-for-novelai';
+  for (const value of [macDefault, `${macDefault}/`, `${macDefault}//`, ` ${macDefault} `]) assert.equal(dataFolderForApp({ NOVELAI_DATA_DIR: value }, mac, {}, { homedir: '/Users/u' }), null, value);
+  assert.equal(dataFolderForApp({ NOVELAI_DATA_DIR: '/Users/u/nai data' }, mac, {}, { homedir: '/Users/u' }), '/Users/u/nai data');
+  assert.equal(dataFolderForApp({ NOVELAI_DATA_DIR: '/Users/other/Library/Application Support/mcp-for-novelai' }, mac, {}, { homedir: '/Users/u' }), '/Users/other/Library/Application Support/mcp-for-novelai');
+  assert.equal(dataFolderForApp({}, mac, {}, { homedir: '/Users/u' }), null);
+  const roaming = 'C:\\Users\\u\\AppData\\Roaming';
+  assert.equal(dataFolderForApp({ NOVELAI_DATA_DIR: 'c:\\users\\U\\appdata\\roaming\\MCP-FOR-NOVELAI\\' }, win, { APPDATA: roaming, USERPROFILE: 'C:\\Users\\u' }), null, 'Windows: letter case and a trailing separator do not matter');
+  assert.equal(dataFolderForApp({ NOVELAI_DATA_DIR: 'D:\\nai' }, win, { APPDATA: roaming, USERPROFILE: 'C:\\Users\\u' }), 'D:\\nai');
+  assert.equal(dataFolderForApp({ NOVELAI_DATA_DIR: '/h/.config/mcp-for-novelai' }, linux, { HOME: '/h' }), null);
+  assert.equal(dataFolderForApp({ NOVELAI_DATA_DIR: '/x/cfg/mcp-for-novelai' }, linux, { HOME: '/h', XDG_CONFIG_HOME: '/x/cfg' }), null, 'the XDG_CONFIG_HOME the app also gets');
+  assert.equal(dataFolderForApp({ NOVELAI_DATA_DIR: '/h/.config/mcp-for-novelai' }, linux, { HOME: '/h', XDG_CONFIG_HOME: '/x/cfg' }), '/h/.config/mcp-for-novelai');
 });
 
 test('macOS: open -n -g -a <exactly this app> with the data folder through --env and the start argument last', () => {
@@ -142,6 +176,22 @@ test('Linux launch: a detached spawn without stdio, unref\'d; a spawn error is a
   assert.deepEqual(await launchApp(app, { env: {}, spawnImpl: () => fakeChild({ spawnError: Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }) }) }), { ok: false, reason: 'the app could not be started (spawn ENOENT)' });
 });
 
+test('a server on the default data root starts the app without NOVELAI_DATA_DIR (macOS: no --env; Windows and Linux: not in its environment)', async () => {
+  const runSync = () => ({ stdout: '', stderr: 'Usage: open [-n] [-g] [-a <application>]' }); // an `open` without --env is enough then
+  const calls = [];
+  const mac = { ok: true, platform: 'darwin', kind: 'packaged', executable: '/A.app/Contents/MacOS/A', macApp: '/A.app', args: [] };
+  const started = await launchApp(mac, { env: { NOVELAI_DATA_DIR: '/Users/u/Library/Application Support/mcp-for-novelai/', PATH: '/bin' }, homedir: '/Users/u', runSync, spawnImpl: (command, args, options) => { calls.push(args); return fakeChild(); } });
+  assert.equal(started.ok, true); assert.ok(!calls[0].includes('--env'), JSON.stringify(calls[0]));
+  const requests = [];
+  const win = { ok: true, platform: 'win32', kind: 'packaged', executable: 'C:\\App\\App.exe', args: [] };
+  await launchApp(win, { env: { NOVELAI_DATA_DIR: 'C:\\Users\\u\\AppData\\Roaming\\mcp-for-novelai', APPDATA: 'C:\\Users\\u\\AppData\\Roaming', USERPROFILE: 'C:\\Users\\u', SystemRoot: 'C:\\WINDOWS' }, exists: () => false, outsideJob: async request => { requests.push(request); return { pid: 1 }; } });
+  assert.deepEqual(requests[0].env, { APPDATA: 'C:\\Users\\u\\AppData\\Roaming', USERPROFILE: 'C:\\Users\\u', SystemRoot: 'C:\\WINDOWS' });
+  const spawns = [];
+  const linux = { ok: true, platform: 'linux', kind: 'packaged', executable: '/opt/app/app', args: [] };
+  await launchApp(linux, { env: { NOVELAI_DATA_DIR: '/h/.config/mcp-for-novelai', HOME: '/h', PATH: '/bin', GITHUB_TOKEN: 'x' }, spawnImpl: (command, args, options) => { spawns.push(options.env); return fakeChild(); } });
+  assert.deepEqual(spawns[0], { HOME: '/h', PATH: '/bin' });
+});
+
 test('Windows command lines read back exactly as given (CommandLineToArgvW rules)', () => {
   assert.equal(windowsArgument('plain'), 'plain');
   assert.equal(windowsArgument(''), '""');
@@ -194,7 +244,9 @@ $psi = New-Object System.Diagnostics.ProcessStartInfo; $psi.FileName = $env:NAI_
 $p = [System.Diagnostics.Process]::Start($psi); $p.WaitForExit(); exit $p.ExitCode`;
 const CHILD = `// Records what it was started with, then stays up (at most 90 s).
 const fs = require('node:fs');
-fs.writeFileSync(process.argv[2], JSON.stringify({ pid: process.pid, argv: process.argv.slice(3), env: { ELECTRON_RUN_AS_NODE: process.env.ELECTRON_RUN_AS_NODE ?? null, NOVELAI_DATA_DIR: process.env.NOVELAI_DATA_DIR ?? null, CLAUDECODE: process.env.CLAUDECODE ?? null, SystemRoot: Boolean(process.env.SystemRoot), Path: Boolean(process.env.Path || process.env.PATH) } }));
+const pick = names => Object.fromEntries(names.map(name => [name, process.env[name] ?? null]));
+fs.writeFileSync(process.argv[2], JSON.stringify({ pid: process.pid, argv: process.argv.slice(3), keys: Object.keys(process.env).sort(),
+  env: { ...pick(['ELECTRON_RUN_AS_NODE', 'ELECTRON_ENABLE_LOGGING', 'NOVELAI_DATA_DIR', 'CLAUDECODE', 'HTTPS_PROXY', 'NAI_TEST_API_KEY', 'NAI_TEST_TOKEN', 'NAI_TEST_SECRET', 'NODE_OPTIONS']), SystemRoot: Boolean(process.env.SystemRoot), Path: Boolean(process.env.Path || process.env.PATH) } }));
 setTimeout(() => process.exit(0), 90000);
 `;
 const RUNNER = launcher => `// Inside the job: starts the child once through the MCP server's launcher and once as a plain detached child.
@@ -202,7 +254,9 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 const { launchApp } = await import(${JSON.stringify(launcher)});
 const [child, wmiFile, plainFile] = process.argv.slice(2);
-process.env.ELECTRON_RUN_AS_NODE = '1'; process.env.CLAUDECODE = '1'; process.env.NOVELAI_DATA_DIR = process.env.NAI_TEST_DATA_DIR;
+// What an agent's environment may carry: none of it may reach the started process.
+Object.assign(process.env, { ELECTRON_RUN_AS_NODE: '1', ELECTRON_ENABLE_LOGGING: '1', CLAUDECODE: '1', HTTPS_PROXY: 'http://127.0.0.1:9', NAI_TEST_API_KEY: 'sk-test', NAI_TEST_TOKEN: 'ghp-test', NAI_TEST_SECRET: 's', NODE_OPTIONS: '--no-deprecation' });
+process.env.NOVELAI_DATA_DIR = process.env.NAI_TEST_DATA_DIR;
 const started = await launchApp({ ok: true, platform: 'win32', kind: 'packaged', executable: process.execPath, args: [child, wmiFile, 'say "hi"', 'C:\\\\trailing dir\\\\', '数据 参数'] }, { client: { name: 'claude-code' }, env: process.env });
 const plain = spawn(process.execPath, [child, plainFile], { detached: true, stdio: 'ignore' }); plain.unref();
 for (let i = 0; i < 300 && !(existsSync(wmiFile) && existsSync(plainFile)); i++) await new Promise(resolve => setTimeout(resolve, 100));
@@ -232,7 +286,9 @@ test('win32: the app launcher starts a process outside a kill-on-close job; it s
   assert.equal(alive(plain.pid), false, 'the kill-on-close job took the plain detached child down (the test job works)');
   assert.equal(alive(wmi.pid), true, 'the launched process outlives the job of the agent that started it');
   assert.deepEqual(wmi.argv, ['say "hi"', 'C:\\trailing dir\\', '数据 参数', '--started-by-agent=claude-code']);
-  assert.deepEqual(wmi.env, { ELECTRON_RUN_AS_NODE: null, NOVELAI_DATA_DIR: data, CLAUDECODE: null, SystemRoot: true, Path: true });
+  assert.deepEqual(wmi.env, { ELECTRON_RUN_AS_NODE: null, ELECTRON_ENABLE_LOGGING: null, NOVELAI_DATA_DIR: data, CLAUDECODE: null, HTTPS_PROXY: null, NAI_TEST_API_KEY: null, NAI_TEST_TOKEN: null, NAI_TEST_SECRET: null, NODE_OPTIONS: null, SystemRoot: true, Path: true });
+  // Which names the process got (the block Win32_ProcessStartup passes, and whatever Windows adds): for the log.
+  t.diagnostic(`environment names of the WMI-started process: ${wmi.keys.join(', ')}`);
   process.kill(wmi.pid);
   assert.ok(existsSync(base));
 });
