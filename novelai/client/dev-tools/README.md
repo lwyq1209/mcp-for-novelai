@@ -12,7 +12,9 @@ Paths below are relative to `novelai/client`.
 
 - **Explicit test data roots only.** `--data <folder>` is required. Refused: anything inside the platform's
   application-data folder or Pictures (macOS `~/Library`, `~/Pictures`; Windows `%APPDATA%`, `%LOCALAPPDATA%`,
-  `~\AppData`, `~\Pictures`; Linux `~/.config`, `~/.local/share`, `~/Pictures`), any `.runtime` / `.isolated` folder
+  `~\AppData`, `~\Pictures`, `~\OneDrive\Pictures` and the Pictures folder of the registry; Linux `~/.config`,
+  `~/.local/share`, `~/Pictures` and `XDG_PICTURES_DIR` of `user-dirs.dirs`, or without one the default output folder
+  `~/MCP for NovelAI` that the client then uses), any `.runtime` / `.isolated` folder
   (e.g. the main repository's `novelai/.runtime`), the home folder, `/`, this checkout or its ancestors, and anything
   inside this checkout except its ignored `.tmp/` folders. Symbolic links are resolved first. A subfolder of the OS
   temp folder is always allowed. A non-empty folder must carry the marker `.dev-tools/marker.json` written by these

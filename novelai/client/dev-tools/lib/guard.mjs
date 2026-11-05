@@ -34,23 +34,25 @@ const USER_SHELL_FOLDERS = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\
 const realPictures = new Map();
 /**
  * The Pictures folder Electron's app.getPath('pictures') finds besides ~/Pictures (the default output folder is
- * <Pictures>/MCP for NovelAI): Linux reads XDG_PICTURES_DIR from user-dirs.dirs (a localized or moved folder),
- * Windows the Pictures folder of the registry (moved to another drive or into OneDrive). Read only for the platform
- * this process runs on (an injected platform stays a pure computation); unreadable means none.
+ * <Pictures>/MCP for NovelAI). Linux: XDG_PICTURES_DIR of user-dirs.dirs (a localized or moved folder), and without
+ * one the home folder itself (xdg_user_dir_lookup falls back to $HOME, so the client then writes ~/MCP for NovelAI).
+ * Windows: the Pictures folder of the registry (moved to another drive or into OneDrive). Read only for the platform
+ * this process runs on (an injected platform stays a pure computation); on Windows, unreadable means none.
  */
 function systemPicturesDirectories({ platform, env, homedir }) {
-  if (platform !== process.platform) return [];
+  if (platform !== process.platform || platform === 'darwin') return [];
   const key = JSON.stringify([platform, homedir, env.XDG_CONFIG_HOME ?? null, env.USERPROFILE ?? null]);
   if (!realPictures.has(key)) {
     let found = null;
-    try {
-      if (platform === 'linux' || (platform !== 'darwin' && platform !== 'win32')) {
-        const config = typeof env.XDG_CONFIG_HOME === 'string' && path.posix.isAbsolute(env.XDG_CONFIG_HOME.trim()) ? env.XDG_CONFIG_HOME.trim() : path.posix.join(homedir, '.config');
-        found = xdgPicturesDirectory(fs.readFileSync(path.posix.join(config, 'user-dirs.dirs'), 'utf8'), homedir);
-      } else if (platform === 'win32') {
-        found = windowsPicturesDirectory(execFileSync('reg.exe', ['query', USER_SHELL_FOLDERS, '/v', 'My Pictures'], { encoding: 'utf8', windowsHide: true, timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }), env);
-      }
-    } catch { found = null; }
+    if (platform === 'win32') {
+      try { found = windowsPicturesDirectory(execFileSync('reg.exe', ['query', USER_SHELL_FOLDERS, '/v', 'My Pictures'], { encoding: 'utf8', windowsHide: true, timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }), env); }
+      catch { found = null; }
+    } else {
+      const config = typeof env.XDG_CONFIG_HOME === 'string' && path.posix.isAbsolute(env.XDG_CONFIG_HOME.trim()) ? env.XDG_CONFIG_HOME.trim() : path.posix.join(homedir, '.config');
+      let text = null;
+      try { text = fs.readFileSync(path.posix.join(config, 'user-dirs.dirs'), 'utf8'); } catch { text = null; }
+      found = xdgPicturesDirectory(text, homedir) ?? path.posix.normalize(homedir);
+    }
     realPictures.set(key, found);
   }
   return realPictures.get(key) ? [realPictures.get(key)] : [];
@@ -81,7 +83,13 @@ export function blockedRoots({ platform = process.platform, env = process.env, h
     add(env.XDG_DATA_HOME); add(p.join(homedir, '.local', 'share'));
     add(p.join(homedir, 'Pictures'));
   }
-  for (const folder of pictures) add(folder);
+  // A Pictures folder blocks itself; one that is the home folder (Linux without XDG user dirs) blocks only the default
+  // output folder in it, since the home folder's other subfolders are ordinary places for test data.
+  const key = value => { const normal = p.normalize(value).replace(/[\\/]+$/, ''); return platform === 'win32' || platform === 'darwin' ? normal.toLowerCase() : normal; };
+  for (const folder of pictures) {
+    if (typeof folder !== 'string' || !p.isAbsolute(folder)) continue;
+    add(key(folder) === key(homedir) ? dataPaths.defaultOutputDirectory(folder, { platform, env: {} }) : folder);
+  }
   return roots;
 }
 
@@ -120,9 +128,9 @@ export function canonicalPath(value, platform = process.platform) {
 
 /**
  * Why `dataRoot` may not be used as a test data root, or null. Pure apart from resolving symbolic links of existing
- * ancestors. Platform/env/homedir are injectable for tests.
+ * ancestors and finding this system's Pictures folder. Platform/env/homedir/pictures are injectable for tests.
  */
-export function dataRootRefusal(dataRoot, { platform = process.platform, env = process.env, homedir = os.homedir(), tmpdir = platform === process.platform ? os.tmpdir() : null, checkout = { worktreeRoot, novelaiDir, clientDir, devToolsDir } } = {}) {
+export function dataRootRefusal(dataRoot, { platform = process.platform, env = process.env, homedir = os.homedir(), tmpdir = platform === process.platform ? os.tmpdir() : null, checkout = { worktreeRoot, novelaiDir, clientDir, devToolsDir }, pictures } = {}) {
   const p = pathFor(platform);
   if (typeof dataRoot !== 'string' || !dataRoot.trim()) return 'A test data root must be given explicitly with --data <folder>.';
   const resolved = platform === process.platform ? canonicalPath(dataRoot.trim(), platform) : p.resolve(dataRoot.trim());
@@ -132,7 +140,7 @@ export function dataRootRefusal(dataRoot, { platform = process.platform, env = p
   // A subfolder of the OS temp folder is always a throwaway location (on Windows it lives inside %LOCALAPPDATA%).
   const temp = tmpdir ? (platform === process.platform ? canonicalPath(tmpdir, platform) : p.normalize(tmpdir)) : null;
   const inTemp = Boolean(temp && inside(resolved, temp) && compare(resolved) !== compare(temp));
-  for (const root of inTemp ? [] : blockedRoots({ platform, env, homedir })) {
+  for (const root of inTemp ? [] : blockedRoots({ platform, env, homedir, ...(pictures ? { pictures } : {}) })) {
     const canonicalRoot = platform === process.platform ? canonicalPath(root.path, platform) : root.path;
     if (inside(resolved, canonicalRoot) || inside(resolved, root.path)) return `${resolved} is inside ${root.path}, a real application-data or Pictures location; test data roots never go there.`;
   }

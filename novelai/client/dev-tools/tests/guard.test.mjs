@@ -101,6 +101,10 @@ test('the Pictures folder the OS reports is blocked: XDG user-dirs on Linux, the
   assert.equal(windowsPicturesDirectory('    My Pictures    REG_EXPAND_SZ    %UNSET%\\Pics\r\n', {}), null, 'an unexpanded variable is not a path');
   const linux = { platform: 'linux', env: {}, homedir: '/home/u', pictures: ['/home/u/图片'], checkout: { worktreeRoot: '/w', novelaiDir: '/w/novelai', clientDir: '/w/novelai/client', devToolsDir: '/w/novelai/client/dev-tools' } };
   assert.ok(blockedRoots(linux).some(root => root.path === '/home/u/图片'));
+  // Without XDG user dirs Electron's Pictures folder is the home folder: only the default output folder in it is blocked.
+  const bare = { ...linux, pictures: ['/home/u'] };
+  assert.ok(dataRootRefusal('/home/u/MCP for NovelAI/x', bare), 'the default output folder in the home folder is refused');
+  assert.equal(dataRootRefusal('/home/u/tests/data-1', bare), null, 'other folders in the home folder stay usable');
   const win = { platform: 'win32', env: { APPDATA: 'C:\\Users\\x\\AppData\\Roaming' }, homedir: 'C:\\Users\\x', pictures: ['D:\\Pics'] };
   assert.ok(blockedRoots(win).some(root => root.path === 'D:\\Pics'));
 });
