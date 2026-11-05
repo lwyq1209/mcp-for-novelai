@@ -11,7 +11,8 @@ import { electronBinary, npmBuildCommand, resolveNpmCli } from '../scripts/win32
 const win32 = process.platform === 'win32';
 const scripts = new URL('../scripts/', import.meta.url);
 // start-client.mjs resolves its data root with the shared module; the throwaway tree needs both files.
-const DATA_PATH_FILES = [['src/data-paths.mjs', new URL('../src/data-paths.mjs', import.meta.url)], ['client/shared/runtime/data-paths.cjs', new URL('../client/shared/runtime/data-paths.cjs', import.meta.url)]];
+// The modules the launcher imports besides its own folder: the data root and the shared WMI process start.
+const DATA_PATH_FILES = [['src/data-paths.mjs', new URL('../src/data-paths.mjs', import.meta.url)], ['client/shared/runtime/data-paths.cjs', new URL('../client/shared/runtime/data-paths.cjs', import.meta.url)], ['src/win32-process.mjs', new URL('../src/win32-process.mjs', import.meta.url)]];
 
 test('resolveNpmCli prefers an npm-cli.js npm_execpath, else the npm next to node, else explains', () => {
   const execPath = 'C:\\Program Files\\nodejs\\node.exe', bundled = 'C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js';
