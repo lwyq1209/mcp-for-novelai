@@ -96,6 +96,14 @@ test('the real watcher runs (lsappinfo, ≤ 100 ms) and sees no test client whil
   const seen = await watch.stop();
   assert.equal(seen.supported, true); assert.deepEqual(seen.hits, []);
   assert.ok(seen.samples >= 4, `samples ${seen.samples}`);
-  const off = await startFrontWatch({ platform: 'linux' });
-  assert.deepEqual(await off.stop(), { supported: false, hits: [], samples: 0, maxGapMs: 0 });
+});
+
+test('elsewhere the watcher watches nothing but has the same interface (test-client start names the pid on every platform)', async () => {
+  for (const platform of ['linux', 'win32']) {
+    const off = await startFrontWatch({ platform });
+    assert.equal(off.supported, false);
+    assert.doesNotThrow(() => off.addPid(process.pid));
+    assert.deepEqual(off.hits(), []);
+    assert.deepEqual(await off.stop(), { supported: false, hits: [], samples: 0, maxGapMs: 0 });
+  }
 });

@@ -19,7 +19,8 @@ export const FRONT_WATCH_AFTER_READY_MS = 5000;
  * Returns {supported, stop()}; stop() resolves to {supported, hits: [{at, pid, name}], samples, maxGapMs, startedAt, stoppedAt}.
  */
 export async function startFrontWatch({ dataRoot = null, intervalMs = FRONT_WATCH_INTERVAL_MS, lsappinfo, platform = process.platform } = {}) {
-  if (platform !== 'darwin') return { supported: false, stop: async () => ({ supported: false, hits: [], samples: 0, maxGapMs: 0 }) };
+  // The same shape as the real watcher (callers use addPid and hits on any platform), watching nothing.
+  if (platform !== 'darwin') return { supported: false, hits: () => [], addPid() {}, stop: async () => ({ supported: false, hits: [], samples: 0, maxGapMs: 0 }) };
   const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'nai-front-watch-')), 'front.jsonl');
   const args = [WORKER, '--out', out, '--interval', String(intervalMs), ...(dataRoot ? ['--data', path.resolve(dataRoot)] : []), ...(lsappinfo ? ['--lsappinfo', lsappinfo] : [])];
   const child = spawn(process.execPath, args, { stdio: ['pipe', 'pipe', 'ignore'], detached: false });
