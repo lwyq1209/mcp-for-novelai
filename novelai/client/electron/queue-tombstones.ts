@@ -170,9 +170,19 @@ export function createQueueTombstones(runtimeDir: string, options: { anchorDir?:
   async function readText(target: string, limit: number): Promise<string | null> {
     let handle;
     try { handle = await openNoFollow(target, constants.O_RDONLY | constants.O_NOFOLLOW); }
-    catch (error: any) { if (error.code === 'ENOENT') return null; throw error; }
+    catch (error: any) { if (error.code === 'ENOENT' && await underFolders(target)) return null; throw error.code === 'ENOENT' ? Object.assign(new Error('a parent of the path is not a folder'), { code: 'ENOTDIR' }) : error; }
     try { const info = await handle.stat(); if (!info.isFile() || info.size > limit) throw Object.assign(new Error('not a regular file or too large'), { code: 'EINVAL' }); return await handle.readFile('utf8'); }
     finally { await handle.close(); }
+  }
+  /**
+   * Whether the nearest existing ancestor of a missing path is a folder. POSIX reports a path through a file as ENOTDIR;
+   * Windows reports it as missing (ENOENT), so a folder replaced by a file would read as absent instead of damaged.
+   */
+  async function underFolders(target: string) {
+    for (let folder = path.dirname(target); ; folder = path.dirname(folder)) {
+      try { return (await fs.stat(folder)).isDirectory(); }
+      catch (error: any) { if (error.code !== 'ENOENT' || path.dirname(folder) === folder) return false; }
+    }
   }
   async function readAnchor(target: string): Promise<AnchorRead> {
     // An anchor that is not a readable regular file (a folder, a dangling path, no permission) counts as changed.
