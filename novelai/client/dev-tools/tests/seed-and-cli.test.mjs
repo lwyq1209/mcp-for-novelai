@@ -4,7 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { buildOutputs, clientRequire } from '../lib/paths.mjs';
+import { fileURLToPath } from 'node:url';
+import { dataRootRefusal } from '../lib/guard.mjs';
+import { buildOutputs, clientRequire, dataPaths } from '../lib/paths.mjs';
 import { seedLibrary } from '../lib/seed.mjs';
 import { BACKGROUND_WINDOW_ENV, clientEnv, quietStartResult } from '../test-client.mjs';
 import { runCli, tempDir } from './helpers.mjs';
@@ -54,8 +56,11 @@ test('seed-library refuses a data root that is not empty', async t => {
 });
 
 test('CLIs refuse a missing --data and real locations before doing anything', t => {
-  const real = path.join(os.homedir(), 'Library', 'Application Support', 'mcp-for-novelai');
-  const pictures = path.join(os.homedir(), 'Pictures', 'MCP for NovelAI', 'dev-tools-never');
+  // This platform's real data root (<appData>/mcp-for-novelai) and a folder inside its default output folder.
+  const real = path.join(dataPaths.appDataDirectory(), 'mcp-for-novelai');
+  const pictures = path.join(dataPaths.defaultOutputDirectory(path.join(os.homedir(), 'Pictures'), { env: {} }), 'dev-tools-never');
+  // Checked here first: a CLI is never started on a real location the guard would let through.
+  for (const location of [real, pictures]) assert.ok(dataRootRefusal(location), `the guard refuses ${location}`);
   const cases = [
     ['test-client.mjs', ['start'], 'refused_no_data'],
     ['test-client.mjs', ['start', '--data', real], 'refused_location'],
@@ -141,6 +146,6 @@ test('test-client start runs the window in the background unless --foreground (s
   assert.equal(foreground[BACKGROUND_WINDOW_ENV], undefined, 'an inherited switch is dropped too');
   assert.equal(background.PATH, '/usr/bin');
   // The name is the one the client reads (electron/window-show.ts).
-  const source = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), '../../electron/window-show.ts'), 'utf8');
+  const source = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../../electron/window-show.ts'), 'utf8');
   assert.match(source, new RegExp(`BACKGROUND_WINDOW_ENV = '${BACKGROUND_WINDOW_ENV}'`));
 });

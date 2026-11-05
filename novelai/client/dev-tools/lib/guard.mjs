@@ -1,5 +1,6 @@
 // Safety guard of every dev-tools entry that takes a data root. A test data root must be explicit, must not be (or be
 // inside) a real client location, and must be a fresh folder or one these tools marked as a test data root.
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,8 +12,57 @@ const MARKER_TOOL = 'mcp-for-novelai dev-tools test data root';
 
 function pathFor(platform) { return platform === 'win32' ? path.win32 : path.posix; }
 
-/** Locations whose contents belong to a real installation or the user (each blocks itself and everything inside). */
-export function blockedRoots({ platform = process.platform, env = process.env, homedir = os.homedir() } = {}) {
+/** `XDG_PICTURES_DIR` of a user-dirs.dirs text ("$HOME/…" or an absolute path, shell-quoted), or null. */
+export function xdgPicturesDirectory(text, homedir) {
+  const match = /^[ \t]*XDG_PICTURES_DIR[ \t]*=[ \t]*"((?:[^"\\\n]|\\.)*)"/m.exec(typeof text === 'string' ? text : '');
+  if (!match) return null;
+  const value = match[1].replace(/\\(.)/g, '$1');
+  const resolved = value === '$HOME' || value.startsWith('$HOME/') ? path.posix.join(homedir, value.slice(5)) : value;
+  return path.posix.isAbsolute(resolved) ? path.posix.normalize(resolved) : null;
+}
+
+/** `My Pictures` of HKCU\…\Explorer\User Shell Folders (reg query output, REG_EXPAND_SZ expanded with `env`), or null. */
+export function windowsPicturesDirectory(regOutput, env) {
+  const match = /^[ \t]*My Pictures[ \t]+REG_(?:EXPAND_)?SZ[ \t]+(.+?)[ \t]*$/m.exec(typeof regOutput === 'string' ? regOutput : '');
+  if (!match) return null;
+  const lookup = name => Object.entries(env).find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1];
+  const value = match[1].replace(/%([^%]+)%/g, (whole, name) => lookup(name) ?? whole);
+  return /%[^%]+%/.test(value) || !path.win32.isAbsolute(value) ? null : path.win32.normalize(value);
+}
+
+const USER_SHELL_FOLDERS = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders';
+const realPictures = new Map();
+/**
+ * The Pictures folder Electron's app.getPath('pictures') finds besides ~/Pictures (the default output folder is
+ * <Pictures>/MCP for NovelAI): Linux reads XDG_PICTURES_DIR from user-dirs.dirs (a localized or moved folder),
+ * Windows the Pictures folder of the registry (moved to another drive or into OneDrive). Read only for the platform
+ * this process runs on (an injected platform stays a pure computation); unreadable means none.
+ */
+function systemPicturesDirectories({ platform, env, homedir }) {
+  if (platform !== process.platform) return [];
+  const key = JSON.stringify([platform, homedir, env.XDG_CONFIG_HOME ?? null, env.USERPROFILE ?? null]);
+  if (!realPictures.has(key)) {
+    let found = null;
+    try {
+      if (platform === 'linux' || (platform !== 'darwin' && platform !== 'win32')) {
+        const config = typeof env.XDG_CONFIG_HOME === 'string' && path.posix.isAbsolute(env.XDG_CONFIG_HOME.trim()) ? env.XDG_CONFIG_HOME.trim() : path.posix.join(homedir, '.config');
+        found = xdgPicturesDirectory(fs.readFileSync(path.posix.join(config, 'user-dirs.dirs'), 'utf8'), homedir);
+      } else if (platform === 'win32') {
+        found = windowsPicturesDirectory(execFileSync('reg.exe', ['query', USER_SHELL_FOLDERS, '/v', 'My Pictures'], { encoding: 'utf8', windowsHide: true, timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }), env);
+      }
+    } catch { found = null; }
+    realPictures.set(key, found);
+  }
+  return realPictures.get(key) ? [realPictures.get(key)] : [];
+}
+
+/**
+ * Locations whose contents belong to a real installation or the user (each blocks itself and everything inside):
+ * the platform's application-data folders (the client's data root <appData>/mcp-for-novelai and the former names)
+ * and its Pictures folders (the default output folder <Pictures>/MCP for NovelAI). `pictures` overrides the
+ * Pictures folder found on this system (tests).
+ */
+export function blockedRoots({ platform = process.platform, env = process.env, homedir = os.homedir(), pictures = systemPicturesDirectories({ platform, env, homedir }) } = {}) {
   const p = pathFor(platform);
   const roots = [];
   const add = value => { if (typeof value === 'string' && value.trim() && p.isAbsolute(value.trim())) roots.push({ path: p.normalize(value.trim()) }); };
@@ -31,6 +81,7 @@ export function blockedRoots({ platform = process.platform, env = process.env, h
     add(env.XDG_DATA_HOME); add(p.join(homedir, '.local', 'share'));
     add(p.join(homedir, 'Pictures'));
   }
+  for (const folder of pictures) add(folder);
   return roots;
 }
 
@@ -39,15 +90,26 @@ const sameOrInside = (p, child, parent) => {
   return relative === '' || (!relative.startsWith('..') && !p.isAbsolute(relative));
 };
 
-/** The absolute path with every existing ancestor resolved through symbolic links (the missing tail kept as written). */
+/**
+ * The absolute path with every existing ancestor resolved through symbolic links (the missing tail kept as written).
+ * A dangling link (one whose target does not exist yet) is followed too, so a link to a real location that has not
+ * been created yet still resolves into it.
+ */
 export function canonicalPath(value, platform = process.platform) {
   const p = pathFor(platform);
   let current = p.resolve(value);
   const tail = [];
-  for (;;) {
+  for (let links = 0; ;) {
     try { return p.join(fs.realpathSync.native(current), ...tail.reverse()); }
     catch (error) {
       if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') throw error;
+      let target = null;
+      try { if (fs.lstatSync(current).isSymbolicLink()) target = fs.readlinkSync(current); } catch { target = null; }
+      if (target !== null) {
+        if (++links > 40) throw Object.assign(new Error(`Too many symbolic links in ${value}.`), { code: 'ELOOP' });
+        current = p.resolve(p.dirname(current), target);
+        continue;
+      }
       const parent = p.dirname(current);
       if (parent === current) return p.join(current, ...tail.reverse());
       tail.push(p.basename(current));
