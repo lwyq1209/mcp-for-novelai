@@ -64,6 +64,10 @@ function setup(extra: Partial<BatchDependencies> = {}) {
   return { service, generation, accepted, jobs, read, args, settle, emitJob: (job: BatchChildJob) => subscribers.forEach(listener => listener(structuredClone(job))), setRevision: (value: number) => { revision = value; } };
 }
 const expectCount = async (h: ReturnType<typeof setup>, count: number) => waitUntil(() => expect(h.accepted).toHaveLength(count));
+/** Polling a state file on disk: every 25 ms, not every 2. On Windows a reader holding the file keeps the service from
+ * replacing it (MoveFileEx); a reader polling every 2 ms had it open so much that a replacement stayed refused for
+ * over 4 s of retries on the CI runner, and the queue then stopped on the failed state write. */
+const DISK_POLL = { interval: 25 };
 const expectStatus = async (h: ReturnType<typeof setup>, batch: BatchJob, status: BatchJob['status']) => waitUntil(() => expect(h.read(batch).status).toBe(status));
 const queued = (extra: Record<string, unknown> = {}) => request({ execution: 'queued', count: 1, ...extra });
 async function queueSetup(extra: Partial<BatchDependencies> = {}) {
@@ -675,7 +679,7 @@ describe('W2b frozen queue capacity', () => {
   it('H6 arms the background compaction when an MCP batch ends and fires it after the grace period', async () => {
     const h = await queueSetup(), a = await h.service.enqueue(imageRequest(mcpKey('timer-a'))); await expectCount(h, 1); h.settle(0); await expectStatus(h, a, 'succeeded');
     const b = await h.service.enqueue(imageRequest(mcpKey('timer-b'))); await expectCount(h, 2); h.settle(1); await expectStatus(h, b, 'succeeded');
-    await waitUntil(async () => expect(JSON.parse(await fs.readFile(frozenFile(h.runtimeDir, `${b.batchId}.state.json`), 'utf8')).job.status).toBe('succeeded'));
+    await waitUntil(async () => expect(JSON.parse(await fs.readFile(frozenFile(h.runtimeDir, `${b.batchId}.state.json`), 'utf8')).job.status).toBe('succeeded'), DISK_POLL);
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     try {
       expect(await h.service.reclaim()).toMatchObject({ compacted: 0 }); // nothing due yet; re-arms the timer under fake time
@@ -688,7 +692,7 @@ describe('W2b frozen queue capacity', () => {
   it('H6 reclaim compacts at most the requested number of due batches and reports capacity', async () => {
     const h = await queueSetup(), batches: BatchJob[] = [];
     for (let index = 0; index < 3; index++) { const batch = await h.service.enqueue(imageRequest(mcpKey(`reclaim-${index}`))); await expectCount(h, index + 1); h.settle(index); await expectStatus(h, batch, 'succeeded'); batches.push(batch); }
-    await waitUntil(async () => expect(JSON.parse(await fs.readFile(frozenFile(h.runtimeDir, `${batches[2].batchId}.state.json`), 'utf8')).job.status).toBe('succeeded'));
+    await waitUntil(async () => expect(JSON.parse(await fs.readFile(frozenFile(h.runtimeDir, `${batches[2].batchId}.state.json`), 'utf8')).job.status).toBe('succeeded'), DISK_POLL);
     const before = h.service.capacity()!; expect(before.batches).toBe(3);
     for (const invalid of [0, 9, 1.5]) await expect(h.service.reclaim(invalid)).rejects.toMatchObject({ code: 'invalid_arguments' });
     vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(Date.now() + minutes(11));
@@ -1223,9 +1227,9 @@ describe('frozen-queue state writes (queue retention rework: what is written at 
     const h = await recordingSetup({ stateFlushMs: 30 });
     const batch = await h.service.enqueue(queued());
     await expectCount(h, 1);
-    await waitUntil(async () => expect((await stateOnDisk(h.runtimeDir, batch.batchId)).items[0]).toMatchObject({ status: 'running', jobId: 'child-1', providerOutcome: 'unknown' }));
+    await waitUntil(async () => expect((await stateOnDisk(h.runtimeDir, batch.batchId)).items[0]).toMatchObject({ status: 'running', jobId: 'child-1', providerOutcome: 'unknown' }), DISK_POLL);
     h.settle(0); await expectStatus(h, batch, 'succeeded');
-    await waitUntil(async () => expect((await stateOnDisk(h.runtimeDir, batch.batchId)).status).toBe('succeeded'));
+    await waitUntil(async () => expect((await stateOnDisk(h.runtimeDir, batch.batchId)).status).toBe('succeeded'), DISK_POLL);
   });
 
   it('a crash while the image runs (its progress not yet written) restores it as unknown and never resends it', async () => {
@@ -1246,7 +1250,7 @@ describe('frozen-queue state writes (queue retention rework: what is written at 
     const h = await recordingSetup({ stateFlushMs: 60_000, isBusy: () => busy });
     const batch = await h.service.enqueue(queued({ count: 2, seedMode: 'increment' }));
     await expectCount(h, 1); busy = true; h.settle(0);
-    await waitUntil(async () => expect((await stateOnDisk(h.runtimeDir, batch.batchId)).items[0]).toMatchObject({ status: 'succeeded', providerOutcome: 'response_received' }));
+    await waitUntil(async () => expect((await stateOnDisk(h.runtimeDir, batch.batchId)).items[0]).toMatchObject({ status: 'succeeded', providerOutcome: 'response_received' }), DISK_POLL);
     const copy = await copyRuntime(h.runtimeDir);
     const restored = setup({ runtimeDir: copy }); await restored.service.ready; cleanups.push(restored.service.dispose);
     expect(restored.read(batch)).toMatchObject({ status: 'paused', error: { code: 'recovered_paused' } });
