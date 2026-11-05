@@ -55,6 +55,19 @@ function bundleIdentifier(bundle: string): string | undefined {
 /** The command-line switches a rehearsal build hands to the restarted app (the test client's own). */
 const REHEARSAL_SWITCHES = /^--(use-mock-keychain|disable-backgrounding-occluded-windows|disable-renderer-backgrounding|remote-debugging-port=\d{4,5}|nai-dev-tools-data=.+)$/;
 
+/**
+ * What the helper hands to the restarted app besides --updated-from (pure). macOS `open --env` lines: the data folder
+ * of a custom data root and NOVELAI_PROJECT_ROOT, as the app had them; a rehearsal build also its NAI_UPDATE_TEST_*
+ * variables, NAI_DEV_TOOLS_BACKGROUND and its test switches. A release build never passes test variables or switches.
+ */
+export function restartHandOver({ testBuild, env, argv, customDataRoot, dataRoot }: { testBuild: boolean; env: NodeJS.ProcessEnv; argv: readonly string[]; customDataRoot: boolean; dataRoot: string }) {
+  const lines: string[] = [];
+  if (customDataRoot) lines.push(`NOVELAI_DATA_DIR=${dataRoot}`);
+  if (typeof env.NOVELAI_PROJECT_ROOT === "string" && env.NOVELAI_PROJECT_ROOT) lines.push(`NOVELAI_PROJECT_ROOT=${env.NOVELAI_PROJECT_ROOT}`);
+  if (testBuild) for (const key of [TEST_ENV.feed, TEST_ENV.publicKey, TEST_ENV.macCertificate, "NAI_DEV_TOOLS_BACKGROUND"]) { const value = env[key]; if (typeof value === "string" && value) lines.push(`${key}=${value}`); }
+  return { env: lines, args: testBuild ? argv.slice(1).filter(arg => REHEARSAL_SWITCHES.test(arg)) : [], background: testBuild && env.NAI_DEV_TOOLS_BACKGROUND === "1" };
+}
+
 export interface AppUpdaterOptions {
   electronDir: string;
   dataRoot: string;
@@ -89,20 +102,14 @@ export function createAppUpdater(options: AppUpdaterOptions): AppUpdater {
     : { result: null, confirm() {}, cleanup() {} };
   if (options.packaged) removeOldStateFolders(updatesDir);
   const fetchLatest = () => fetchLatestRelease(source.latestApiUrl);
-  const background = testBuild && options.env.NAI_DEV_TOOLS_BACKGROUND === "1";
+  const handOver = restartHandOver({ testBuild, env: options.env, argv: options.argv, customDataRoot: options.customDataRoot, dataRoot: options.dataRoot });
   const updater = createUpdater({
     source, currentVersion: options.version, platform: process.platform, arch: process.arch, execPath: process.execPath, packaged: options.packaged, pid: process.pid,
     bundleId: process.platform === "darwin" && located ? bundleIdentifier(located.target) : undefined,
     updatesDir, env: { ...options.env }, installDeps: nodeInstallDeps, fetchLatest, requestConfig: options.requestConfig,
-    queueBusy: options.queueBusy, quit: options.quit, startHelper, emit: options.emit, log: options.log, background,
-    launchEnv() {
-      const lines: string[] = [];
-      if (options.customDataRoot) lines.push(`NOVELAI_DATA_DIR=${options.dataRoot}`);
-      if (typeof options.env.NOVELAI_PROJECT_ROOT === "string" && options.env.NOVELAI_PROJECT_ROOT) lines.push(`NOVELAI_PROJECT_ROOT=${options.env.NOVELAI_PROJECT_ROOT}`);
-      if (testBuild) for (const key of [TEST_ENV.feed, TEST_ENV.publicKey, TEST_ENV.macCertificate, "NAI_DEV_TOOLS_BACKGROUND"]) { const value = options.env[key]; if (typeof value === "string" && value) lines.push(`${key}=${value}`); }
-      return lines;
-    },
-    launchArgs: () => testBuild ? options.argv.slice(1).filter(arg => REHEARSAL_SWITCHES.test(arg)) : [],
+    queueBusy: options.queueBusy, quit: options.quit, startHelper, emit: options.emit, log: options.log, background: handOver.background,
+    launchEnv: () => handOver.env,
+    launchArgs: () => handOver.args,
   });
   return { source, testBuild, updater, startup, fetchLatest };
 }

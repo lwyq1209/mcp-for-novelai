@@ -6,7 +6,8 @@
 // and restart" through DevTools. Never the real update key, the release certificate, the daily app or its data.
 //
 //   node dev-tools/update-rehearsal.mjs prepare  --work <dir> [--from 0.1.3-test] [--to 0.1.4-test]
-//   node dev-tools/update-rehearsal.mjs rehearse --work <dir> [--scenarios success,tamper,…] [--idle-gate|--no-idle-gate] [--keep]
+//   node dev-tools/update-rehearsal.mjs rehearse --work <dir> [--scenarios success,tamper,…] [--idle-gate|--no-idle-gate] [--keep] [--resume]
+//                                                [--max-hours 6] [--front-alert <file of an independent front sampler>]
 //   node dev-tools/update-rehearsal.mjs serve    --work <dir> [--port <n>]     (the fake GitHub of the work dir, in the foreground)
 //   node dev-tools/update-rehearsal.mjs clean    --work <dir>                  (stops nothing; removes the installed test apps and unregisters them)
 //
@@ -211,6 +212,17 @@ async function stopApps(dataRoot, root, { timeoutMs = 30_000 } = {}) {
   return { stopped: pids, left: appProcesses(dataRoot, root) };
 }
 
+/** macOS: LaunchServices' type of the running test app (UIElement: never the active app, no Dock icon). */
+function applicationType(dataRoot, root) {
+  if (process.platform !== 'darwin') return null;
+  const [pid] = appProcesses(dataRoot, root);
+  if (!pid) return null;
+  try {
+    const asn = /ASN:[0-9a-fx-]+/i.exec(run('lsappinfo', ['find', `pid=${pid}`]))?.[0];
+    return asn ? /"ApplicationType"="([^"]*)"/.exec(run('lsappinfo', ['info', '-only', 'applicationtype', asn]))?.[1] ?? null : null;
+  } catch { return null; }
+}
+
 // ── the user's presence (macOS) ─────────────────────────────────────────────────────────────────────────────────
 export function presence() {
   if (process.platform !== 'darwin') return { locked: false, idleSeconds: Infinity };
@@ -310,6 +322,7 @@ async function scenario(name, context, index) {
     startApp(installed, dataRoot, server.url, keys, port);
     page = await openPage(port);
     guard.check();
+    result.applicationType = applicationType(dataRoot, parent);
     const before = await pollUntil(async () => { try { return dataFingerprint(dataRoot); } catch { return null; } }, { timeoutMs: 20_000 });
     if (name === 'downgrade') {
       for (const [label, tag, expected] of [['older', `v${from.version.replace(/^(\d+)\.(\d+)\.(\d+)/, (_, a, b, c) => `${a}.${b}.${Math.max(0, Number(c) - 1)}`)}`, 'current'], ['same', `v${from.version}`, 'current'], ['replay', 'v9.9.9-test', 'replay']]) {
@@ -357,7 +370,8 @@ async function scenario(name, context, index) {
         await clickInstall(page); // Try again
       }
       if (name === 'kill-waiting') {
-        const killed = await pollUntil(() => { const pids = helperPids(dataRoot); if (!pids.length) return null; for (const pid of pids) process.kill(pid, 'SIGKILL'); return pids; }, { timeoutMs: 120_000, intervalMs: 20 });
+        // Once it said it waits (the app quits only then), before the app has exited.
+        const killed = await pollUntil(() => { const states = Object.values(pendingState(dataRoot).states)[0] ?? []; if (!states.includes('waiting')) return null; const pids = helperPids(dataRoot); if (!pids.length) return null; for (const pid of pids) process.kill(pid, 'SIGKILL'); return { pids, states }; }, { timeoutMs: 120_000, intervalMs: 20 });
         check('helper killed while waiting', killed, Boolean(killed));
       }
       if (name === 'kill-launched') {
@@ -418,7 +432,7 @@ async function scenario(name, context, index) {
 }
 
 /** Watches the user (idle gate) and the front app while a scenario runs; check() throws when either says stop. */
-async function scenarioGuard({ idleGate, work }) {
+async function scenarioGuard({ idleGate, work, frontAlert }) {
   const watch = await startFrontWatch({});
   let stopReason = null;
   const timer = setInterval(() => {
@@ -428,6 +442,8 @@ async function scenarioGuard({ idleGate, work }) {
   }, 500);
   return {
     check() {
+      // An independent sampler's alert file (--front-alert), if one runs: any line stops everything.
+      if (frontAlert && fs.existsSync(frontAlert) && fs.readFileSync(frontAlert, 'utf8').trim()) throw new ToolError('front_detected', `The front-app sampler saw a test app in front (${frontAlert}).`);
       const hits = watch.hits();
       if (hits.length) { fs.appendFileSync(path.join(work, 'front-alert.jsonl'), `${JSON.stringify(hits)}\n`); throw new ToolError('front_detected', `A test app came to the front (${JSON.stringify(hits[0])}).`); }
       if (stopReason) throw new ToolError('user_back', 'The user came back; the scenario stops.');
@@ -455,7 +471,7 @@ async function rehearse(options) {
         if (!userAway()) process.stderr.write(`[rehearsal] ${name}: waiting until the screen is locked or the user is idle for 120 s\n`);
         while (!userAway()) { if (Date.now() > deadline) throw new ToolError('no_idle_window', 'No idle window in time; the remaining scenarios did not run.', { results }); await sleep(5000); }
       }
-      const guard = await scenarioGuard({ idleGate, work });
+      const guard = await scenarioGuard({ idleGate, work, frontAlert: options['front-alert'] ? path.resolve(String(options['front-alert'])) : null });
       const result = await scenario(name, { work, keys, from: state.from, to: state.to, guard, keep: options.keep === true }, index++);
       const front = await guard.stop();
       result.frontWatch = { hits: front.hits.length, samples: front.samples, maxGapMs: front.maxGapMs };
@@ -506,7 +522,7 @@ export async function main(argv) {
   const { positional, options } = parseArgs(argv, { booleans: ['idle-gate', 'no-idle-gate', 'keep', 'resume'] });
   const [command] = positional;
   if (command === 'prepare') { allowOptions(options, ['work', 'from', 'to']); return prepare(options); }
-  if (command === 'rehearse') { allowOptions(options, ['work', 'scenarios', 'idle-gate', 'no-idle-gate', 'keep', 'resume', 'max-hours']); return rehearse(options); }
+  if (command === 'rehearse') { allowOptions(options, ['work', 'scenarios', 'idle-gate', 'no-idle-gate', 'keep', 'resume', 'max-hours', 'front-alert']); return rehearse(options); }
   if (command === 'serve') { allowOptions(options, ['work', 'port']); await serve(options); return undefined; }
   if (command === 'clean') { allowOptions(options, ['work']); return clean(options); }
   throw new ToolError('usage', 'usage: update-rehearsal.mjs prepare|rehearse|serve|clean --work <dir> (see --help)');
