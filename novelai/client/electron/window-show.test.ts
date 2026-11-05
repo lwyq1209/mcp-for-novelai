@@ -108,7 +108,8 @@ describe('an app an agent started (novelai/src/app-launch.mjs: --started-by-agen
   it('main.ts makes only the first window inactive and records the start for Settings › MCP access', () => {
     const source = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
     expect(source).toMatch(/const agentStart = agentStartOf\(process\.argv\);\nlet firstWindowInactive = agentStart !== null;/);
-    expect(source).toMatch(/if \(agentStart\) \{ agentActivity\.recordAppStart\(agentStart\.client\);/);
+    expect(source).toMatch(/if \(agentStart\) \{\n\s+agentActivity\.recordAppStart\(agentStart\.client\);/);
+    expect(source).toMatch(/app\.once\("did-become-active", \(\) => logInfo\(/);
     // Not an accessory app and no LSUIElement: the Dock icon of an agent-started app is the ordinary one.
     expect(source).not.toMatch(/setActivationPolicy\(/);
   });

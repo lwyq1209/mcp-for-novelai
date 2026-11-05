@@ -145,6 +145,7 @@ import {
 } from "./ipc/proxy";
 import {
   installGlobalLogging,
+  logInfo,
   getLogInfo,
   selectLogDir,
   openLogFile,
@@ -959,7 +960,13 @@ app.whenReady().then(async () => {
   agentActivity = createAgentActivity({ runtimeDir: dataPaths.runtime,
     onChange: activity => { if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send("novelai:agent:activity", activity); } });
   // Settings › MCP access shows which agent started the app, and when.
-  if (agentStart) { agentActivity.recordAppStart(agentStart.client); console.info(`[agent] started in the background by an agent's MCP server${agentStart.client ? ` (${agentStart.client.name})` : ''}`); }
+  if (agentStart) {
+    agentActivity.recordAppStart(agentStart.client);
+    // Diagnostics (macOS): if this app becomes the active app (the user clicking it, or anything else), the log says how
+    // long after the agent's start. Nothing else is logged.
+    const startedAt = Date.now();
+    app.once("did-become-active", () => logInfo(`[agent] the app became the active app ${Date.now() - startedAt} ms after an agent's MCP server started it`));
+  }
   startupStep = "bridge";
   workspaceBridge = await startWorkspaceBridge(() => mainWindow, dataPaths.runtime, queueMethods, (method, caller) => agentActivity?.record(method, caller));
   startupStep = "startup";
