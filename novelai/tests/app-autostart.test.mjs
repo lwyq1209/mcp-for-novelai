@@ -304,3 +304,11 @@ test('through the MCP server: list_queue with no app starts it once and answers;
   assert.match(refusedResult.structuredContent.error.message, /requestKey lookup failed \(The NovelAI app is not running for this data folder, and automatic start is turned off \(NOVELAI_MCP_AUTOSTART=0\)\. Nothing was sent\./);
   assert.equal(off.state.launches.length, 0);
 });
+
+test('the server instructions describe the automatic start and how it is turned off', async () => {
+  const { INSTRUCTIONS, TOOL_DEFINITIONS } = await import('../src/mcp.mjs');
+  assert.match(INSTRUCTIONS, /When a call finds it not running \(the call certainly reached no app\), the server starts it in the background without taking the focus, waits up to 30 seconds and then sends the call; a call whose outcome may be unknown is never sent again\./);
+  assert.match(INSTRUCTIONS, /With NOVELAI_MCP_AUTOSTART=0, or when the server does not run with the app's own executable, it does not start the app/);
+  assert.equal(TOOL_DEFINITIONS.length, 18);
+  assert.match(TOOL_DEFINITIONS.find(tool => tool.name === 'list_queue').description, /Read-only; never enqueues, starts or retries a batch\./);
+});
