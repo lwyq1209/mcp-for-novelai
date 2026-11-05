@@ -43,6 +43,23 @@ const GROUP_NAMES = ['Cafe Series', 'Night Scenes', 'Portraits', '风景练习',
 const AGENTS = [{ name: 'claude-code', version: '2.1.0' }, { name: 'codex', version: '0.9.1' }, { name: 'pi', version: '1.5.0' }];
 const TAG_TEXTS = ['blue sky', 'smile', 'cherry blossoms', 'night sky', 'school uniform', 'sunlight', 'rain', 'reflection', 'watercolor', 'from above', 'looking at viewer', 'wind', 'stars', 'ocean', 'city lights', 'flower', 'red scarf', 'glasses', 'ponytail', 'twintails', 'hood up', 'backlighting', 'depth of field', 'soft lighting', 'cinematic lighting', 'close-up', 'wide shot', 'dutch angle', 'sitting', 'standing', 'holding umbrella', 'cat ears', 'hair ribbon', 'white dress', 'black jacket', 'autumn leaves', 'snow', 'sunset', 'neon lights', 'bokeh'];
 
+/**
+ * A list of image sizes, "832x1216,1216x832" (or [[832, 1216], …]), as [[width, height], …]; null when not given.
+ * `name` is the option it came from (for the error).
+ */
+export function parseSizeList(value, name = 'sizes') {
+  if (value === undefined || value === null) return null;
+  const entries = Array.isArray(value) ? value : String(value).split(',');
+  const sizes = entries.map(entry => {
+    const match = Array.isArray(entry) ? [null, entry[0], entry[1]] : /^\s*(\d+)\s*[x×]\s*(\d+)\s*$/i.exec(String(entry));
+    const width = Number(match?.[1]), height = Number(match?.[2]);
+    if (!match || !Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > 8192 || height > 8192) throw new ToolError('usage', `--${name} takes sizes like 832x1216,1216x832 (1–8192 px each); got "${Array.isArray(entry) ? entry.join('x') : entry}".`);
+    return [width, height];
+  });
+  if (!sizes.length) throw new ToolError('usage', `--${name} needs at least one size.`);
+  return sizes;
+}
+
 /** Every option with its default. */
 export const SEED_DEFAULTS = Object.freeze({ history: 200, tags: 40, combos: 12, notes: 8, stylePresets: 8, positivePresets: 5, chunks: 6, referencePresets: 4, favorites: 12, collections: 3, imports: 12, trash: 0, archivedRatio: 0.05, agentRatio: 0.3, imageScale: 8, seed: 20261104, days: 120, chunkSize: 1000 });
 
@@ -53,6 +70,12 @@ export async function seedLibrary(input) {
   }
   if (options.history > 100_000) throw new ToolError('usage', '--history is at most 100000.');
   if (options.imageScale < 1) throw new ToolError('usage', '--image-scale is at least 1.');
+  // --sizes: the recorded sizes of the history images in this order (newest first, repeated), instead of random ones.
+  // --preset-images: preview images of these sizes for the first style preset and the first prompt preset (at most 3).
+  // --marks: those images (history and preset previews) carry a frame, diagonals and coloured corners (images.mjs).
+  const historySizes = parseSizeList(options.sizes, 'sizes');
+  const presetImageSizes = parseSizeList(options.presetImages, 'preset-images');
+  if (presetImageSizes && presetImageSizes.length > 3) throw new ToolError('usage', '--preset-images takes at most 3 sizes (a preset keeps at most three images).');
   const missing = missingBuildOutputs(['repository']);
   if (missing.length) throw new ToolError('not_built', `The client main process is not built (${missing.join(', ')}). Run: npm --prefix novelai/client run build.`);
   const { dataRoot } = checkDataRoot(options.data, { requireEmpty: true, create: true });
@@ -84,9 +107,9 @@ export async function seedLibrary(input) {
       const agent = rng.chance(options.agentRatio);
       const group = rng.chance(0.55) ? rng.pick(groups) : null;
       const baseModel = rng.pick(MODELS);
-      let [width, height] = rng.pick(SIZES);
-      if (mode === 'upscale') { width *= 2; height *= 2; }
-      if (mode === 'director' || mode === 'upscale') { width = Math.min(width, 2048); height = Math.min(height, 3072); }
+      let [width, height] = historySizes ? historySizes[index % historySizes.length] : rng.pick(SIZES);
+      if (!historySizes && mode === 'upscale') { width *= 2; height *= 2; }
+      if (!historySizes && (mode === 'director' || mode === 'upscale')) { width = Math.min(width, 2048); height = Math.min(height, 3072); }
       const fileWidth = Math.max(8, Math.round(width / options.imageScale)), fileHeight = Math.max(8, Math.round(height / options.imageScale));
       const seq = (perDay.get(date) ?? 0) + 1; perDay.set(date, seq);
       const model = mode === 'inpaint' ? `${baseModel === 'nai-diffusion-3' ? 'nai-diffusion-3' : baseModel}-inpainting` : mode === 'upscale' ? 'nai-diffusion-5-curated' : mode === 'director' ? `director-${rng.pick(['bg-removal', 'lineart', 'sketch', 'colorize', 'emotion', 'declutter'])}` : baseModel;
@@ -95,7 +118,7 @@ export async function seedLibrary(input) {
       const id = rng.uuid();
       const actualSeed = rng.int(1, 2_147_483_646);
       const subject = rng.pick(SUBJECTS);
-      const bytes = placeholderPng(fileWidth, fileHeight, { seed: hashString(id) });
+      const bytes = placeholderPng(fileWidth, fileHeight, { seed: hashString(id), marks: options.marks === true });
       write(filePath, bytes);
       const postprocess = mode === 'upscale' || mode === 'director';
       const params = {
@@ -155,6 +178,18 @@ export async function seedLibrary(input) {
     return list;
   });
   count('tags', tags.length);
+
+  // Preview images of the first style preset and the first prompt preset, where the host's image entry point keeps
+  // them (<data>/style-prompt-previews/<storage id>/<uuid>.png, electron/ipc/style-preset-images.ts).
+  const presetImages = await phase('presetImageFiles', () => {
+    const make = storageId => (presetImageSizes ?? []).map(([width, height], index) => {
+      const id = rng.uuid(), name = `preview-${index + 1}-${width}x${height}.png`;
+      const filePath = write(path.join(dataRoot, 'style-prompt-previews', storageId, `${id}.png`), placeholderPng(Math.max(8, Math.round(width / options.imageScale)), Math.max(8, Math.round(height / options.imageScale)), { seed: hashString(`${storageId}-${id}`), marks: options.marks === true }));
+      return { id, name, filePath, fileUrl: `nai-local://file/${encodeURIComponent(pathToFileURL(filePath).toString())}`, createdAt: iso(now.getTime() - (index + 1) * 60_000) };
+    });
+    return { style: make('sp-01'), positive: make('positive-prompt-pp-01') };
+  });
+  if (presetImageSizes) count('presetImages', presetImages.style.length + presetImages.positive.length);
 
   const referenceFiles = await phase('referenceFiles', () => Array.from({ length: options.referencePresets }, (_, index) => {
     const id = `rp-${pad(index + 1)}`, bytes = placeholderPng(128, 128, { seed: hashString(id) });
@@ -220,13 +255,13 @@ export async function seedLibrary(input) {
       for (const study of studies) put('study', study.id, study.payload, { revision: 1, name: study.name, archived: false, createdAt: study.created, updatedAt: study.created, source: { namespace: 'study', legacyId: study.id } });
       for (let index = 0; index < options.stylePresets; index++) {
         const id = `sp-${pad(index + 1)}`, created = iso(now.getTime() - (30 + index) * 3600_000), group = ['Default', 'Painterly', 'Lineart'][index % 3];
-        const payload = { id, name: `Style ${pad(index + 1)}`, prompt: rng.pick(STYLES.filter(Boolean)), group, createdAt: created };
+        const payload = { id, name: `Style ${pad(index + 1)}`, prompt: rng.pick(STYLES.filter(Boolean)), group, createdAt: created, ...(index === 0 && presetImages.style.length ? { previewImages: presetImages.style } : {}) };
         put('style_preset', id, payload, { revision: 1, name: payload.name, archived: false, createdAt: created, updatedAt: created, source: { namespace: 'style_preset', legacyId: id, position: index } });
       }
       count('stylePresets', options.stylePresets);
       for (let index = 0; index < options.positivePresets; index++) {
         const id = `pp-${pad(index + 1)}`, created = iso(now.getTime() - (40 + index) * 3600_000);
-        const payload = { id, name: `Positive ${pad(index + 1)}`, prompt: rng.pick(SUBJECTS), createdAt: created };
+        const payload = { id, name: `Positive ${pad(index + 1)}`, prompt: rng.pick(SUBJECTS), createdAt: created, ...(index === 0 && presetImages.positive.length ? { previewImages: presetImages.positive } : {}) };
         put('positive_preset', id, payload, { revision: 1, name: payload.name, archived: false, createdAt: created, updatedAt: created, source: { namespace: 'positive_preset', legacyId: id, position: index } });
       }
       count('positivePresets', options.positivePresets);

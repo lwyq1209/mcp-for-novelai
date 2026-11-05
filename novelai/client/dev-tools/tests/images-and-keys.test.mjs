@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseKeyCombo, parseTarget, stripWindowErrorSuffix, stripWindowErrorSuffixes } from '../lib/cdp.mjs';
-import { imageSize, placeholderPng, unzip, zipStored } from '../lib/images.mjs';
+import { MARK_CORNERS, imageSize, placeholderPng, unzip, zipStored } from '../lib/images.mjs';
 import { clientRequire } from '../lib/paths.mjs';
 
 const sharp = clientRequire('sharp');
@@ -17,6 +17,20 @@ test('placeholder PNGs decode at exactly the requested size and carry their text
   }
   assert.notDeepEqual(placeholderPng(16, 16, { seed: 1 }), placeholderPng(16, 16, { seed: 2 }), 'different seeds look different');
   assert.throws(() => placeholderPng(0, 10));
+});
+
+test('marked placeholders: a white frame, coloured corners and both diagonals', async () => {
+  const [width, height] = [96, 144];
+  const { data, info } = await sharp(placeholderPng(width, height, { seed: 3, marks: true })).raw().toBuffer({ resolveWithObject: true });
+  const pixel = (x, y) => [...data.subarray((y * info.width + x) * info.channels, (y * info.width + x) * info.channels + 3)];
+  const line = 2, inside = line + 3;
+  for (const [x, y] of [[0, 0], [width - 1, 0], [0, height - 1], [width - 1, height - 1], [width / 2, 0], [0, height / 2]]) assert.deepEqual(pixel(x, y), [255, 255, 255], `frame at ${x},${y}`);
+  assert.deepEqual(pixel(inside, inside), MARK_CORNERS.topLeft);
+  assert.deepEqual(pixel(width - 1 - inside, inside), MARK_CORNERS.topRight);
+  assert.deepEqual(pixel(inside, height - 1 - inside), MARK_CORNERS.bottomLeft);
+  assert.deepEqual(pixel(width - 1 - inside, height - 1 - inside), MARK_CORNERS.bottomRight);
+  assert.deepEqual(pixel(width / 2, height / 2), [255, 255, 255], 'the diagonals cross in the middle');
+  assert.deepEqual(placeholderPng(24, 24, { seed: 5, marks: false }), placeholderPng(24, 24, { seed: 5 }), 'unmarked images are unchanged');
 });
 
 test('imageSize reads JPEG and WebP headers too', async () => {

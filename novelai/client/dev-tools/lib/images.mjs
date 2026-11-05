@@ -25,11 +25,16 @@ export function hashString(text) {
   return hash >>> 0;
 }
 
+/** The corner squares of a marked placeholder: top left, top right, bottom left, bottom right. */
+export const MARK_CORNERS = Object.freeze({ topLeft: [230, 40, 40], topRight: [40, 200, 70], bottomLeft: [40, 110, 235], bottomRight: [245, 210, 30] });
+
 /**
  * An RGB PNG of exactly width×height: a diagonal two-colour gradient with a block pattern, both derived from `seed`,
  * so different requests give visibly different placeholders. `text` entries become tEXt chunks (latin1/UTF-8 bytes).
+ * `marks` adds a white frame along the edges, both diagonals and a coloured square in each corner (MARK_CORNERS), so
+ * a screenshot shows at once whether a view shows the whole image or cuts part of it off.
  */
-export function placeholderPng(width, height, { seed = 0, text = {}, level = 1 } = {}) {
+export function placeholderPng(width, height, { seed = 0, text = {}, level = 1, marks = false } = {}) {
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width * height > 64 * 1024 * 1024) throw new RangeError(`Invalid placeholder size ${width}×${height}.`);
   const hue = seed % 360;
   const [r1, g1, b1] = hsl(hue, 0.55, 0.42), [r2, g2, b2] = hsl((hue + 60 + (seed >>> 9) % 90) % 360, 0.6, 0.62);
@@ -37,14 +42,29 @@ export function placeholderPng(width, height, { seed = 0, text = {}, level = 1 }
   const stride = width * 3 + 1;
   const raw = Buffer.alloc(stride * height);
   const span = Math.max(1, width + height - 2);
+  const line = Math.max(2, Math.round(Math.min(width, height) / 48)), corner = Math.max(4, Math.round(Math.min(width, height) / 6));
+  const diagonal = Math.hypot(width, height);
+  const mark = (x, y) => {
+    if (x < line || y < line || x >= width - line || y >= height - line) return [255, 255, 255];
+    const left = x < line + corner, top = y < line + corner, right = x >= width - line - corner, bottom = y >= height - line - corner;
+    if (top && left) return MARK_CORNERS.topLeft;
+    if (top && right) return MARK_CORNERS.topRight;
+    if (bottom && left) return MARK_CORNERS.bottomLeft;
+    if (bottom && right) return MARK_CORNERS.bottomRight;
+    const cx = x + 0.5, cy = y + 0.5;
+    if (Math.abs(cx * height - cy * width) / diagonal <= line / 2 || Math.abs(cx * height + cy * width - width * height) / diagonal <= line / 2) return [255, 255, 255];
+    return null;
+  };
   for (let y = 0; y < height; y++) {
     const row = y * stride;
     raw[row] = 0;
     const by = Math.floor(y / block);
     for (let x = 0; x < width; x++) {
+      const offset = row + 1 + x * 3;
+      const marked = marks ? mark(x, y) : null;
+      if (marked) { raw[offset] = marked[0]; raw[offset + 1] = marked[1]; raw[offset + 2] = marked[2]; continue; }
       const t = (x + y) / span;
       const dark = ((Math.floor(x / block) + by) & 1) === 0 ? 0.88 : 1;
-      const offset = row + 1 + x * 3;
       raw[offset] = Math.round((r1 + (r2 - r1) * t) * dark);
       raw[offset + 1] = Math.round((g1 + (g2 - g1) * t) * dark);
       raw[offset + 2] = Math.round((b1 + (b2 - b1) * t) * dark);

@@ -7,7 +7,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { dataRootRefusal } from '../lib/guard.mjs';
 import { buildOutputs, clientRequire, dataPaths } from '../lib/paths.mjs';
-import { seedLibrary } from '../lib/seed.mjs';
+import { imageSize } from '../lib/images.mjs';
+import { parseSizeList, seedLibrary } from '../lib/seed.mjs';
 import { AGENT_START_SWITCH, BACKGROUND_WINDOW_ENV, clientArgs, clientEnv, quietStartResult } from '../test-client.mjs';
 import { runCli, tempDir } from './helpers.mjs';
 
@@ -42,6 +43,41 @@ test('seed-library builds a consistent library through the client repository', a
     assert.equal(Number(db.prepare("SELECT count(*) AS n FROM trash_entries").get().n), 5);
   } finally { db.close(); }
   assert.ok(fs.readdirSync(path.join(data, 'trash')).length >= 1, 'deleted files moved into the trash folder');
+});
+
+test('seed-library --sizes, --preset-images and --marks: history and preset images of the given sizes', async t => {
+  if (!built) return t.skip('client not built');
+  const data = path.join(tempDir(t), 'sized');
+  const minimal = { tags: 0, combos: 0, notes: 0, imports: 0, favorites: 0, collections: 0, stylePresets: 2, positivePresets: 1, chunks: 0, referencePresets: 0 };
+  const result = await seedLibrary({ data, history: 3, sizes: '832x1216,64x64', presetImages: [[1216, 832], [24, 24]], marks: true, imageScale: 8, ...minimal });
+  assert.equal(result.counts.presetImages, 4);
+  const { openLibraryRepository } = clientRequire(buildOutputs.repository);
+  const repo = openLibraryRepository({ filePath: path.join(data, 'library.sqlite'), readOnly: true });
+  try {
+    // Newest first, the sizes in order and repeated; the files are 1/--image-scale of them (at least 8 px).
+    const history = repo.all('history').map(item => item.payload).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    assert.deepEqual(history.map(item => [item.width, item.height]), [[832, 1216], [64, 64], [832, 1216]]);
+    assert.deepEqual(history.map(item => imageSize(fs.readFileSync(item.filePath))).map(size => [size.width, size.height]), [[104, 152], [8, 8], [104, 152]]);
+    // The first Style preset and the first prompt preset, in the folders the host's image entry point uses.
+    const style = repo.get('style_preset', 'sp-01').payload.previewImages, positive = repo.get('positive_preset', 'pp-01').payload.previewImages;
+    assert.deepEqual(style.map(image => path.relative(data, path.dirname(image.filePath))), ['style-prompt-previews/sp-01', 'style-prompt-previews/sp-01'].map(value => value.split('/').join(path.sep)));
+    assert.deepEqual(positive.map(image => path.relative(data, path.dirname(image.filePath))), ['style-prompt-previews/positive-prompt-pp-01', 'style-prompt-previews/positive-prompt-pp-01'].map(value => value.split('/').join(path.sep)));
+    assert.deepEqual(style.map(image => imageSize(fs.readFileSync(image.filePath))).map(size => [size.width, size.height]), [[152, 104], [8, 8]]);
+    assert.equal(repo.get('style_preset', 'sp-02').payload.previewImages, undefined, 'only the first preset gets images');
+    assert.equal(repo.integrityCheck(), 'ok');
+  } finally { repo.close(); }
+});
+
+test('size lists: parsed, or refused with a usage error', t => {
+  assert.equal(parseSizeList(undefined), null);
+  assert.deepEqual(parseSizeList('832x1216, 64X64,1024×1024'), [[832, 1216], [64, 64], [1024, 1024]]);
+  assert.deepEqual(parseSizeList([[1, 2]]), [[1, 2]]);
+  for (const bad of ['832', '0x10', '10x', '9000x10', '']) assert.throws(() => parseSizeList(bad, 'sizes'), error => error.code === 'usage' && /--sizes/.test(error.message), bad);
+  const data = path.join(tempDir(t), 'never');
+  const cli = runCli('seed-library.mjs', ['--data', data, '--preset-images', '1x1,2x2,3x3,4x4']);
+  assert.equal(cli.status, 2);
+  assert.match(cli.json.error.message, /at most 3/);
+  assert.equal(fs.existsSync(data), false, 'refused before the data root is made');
 });
 
 test('seed-library refuses a data root that is not empty', async t => {

@@ -185,6 +185,7 @@ Control routes for scripts in other processes: `/__fake/health|requests|faults|r
 
 ```sh
 node dev-tools/seed-library.mjs --data ../../.tmp/lib10k --history 10000 [--trash 30] [--tags 40] [--imports 12] [--image-scale 8] [--quiet]
+node dev-tools/seed-library.mjs --data ../../.tmp/sizes --history 5 --sizes 832x1216,1216x832,1024x1024,1664x2432,64x64 --preset-images 1664x2432,1216x832,64x64 --image-scale 1 --marks
 ```
 
 `--quiet` prints only `{ok, dataRoot, counts, totalMs}` instead of the full report (projects, collections, phase
@@ -198,6 +199,11 @@ prompt chunks, reference presets, artist favourites, user collections and import
 optional Recently Deleted entries through the client's own trash module. Every record passes
 `validateLibraryPayload` (history also `validateGeneratedHistoryPayload`), and `integrityCheck()` must be `ok`.
 Image files are `1/--image-scale` placeholders of the recorded size. 10 000 images take about 9 s (see the report).
+`--sizes WxH,…` gives the history images these recorded sizes in order (newest first, repeated) instead of random
+ones; `--preset-images WxH,…` (at most three) gives the first Style preset and the first prompt preset preview images
+of these sizes, where the app's image entry point keeps them (`<data>/style-prompt-previews/<preset>/`); `--marks`
+draws a white frame, both diagonals and a coloured square in each corner (red, green, blue, yellow from the top left)
+on those images, so a screenshot shows at once whether a view shows the whole image.
 
 ## mcp — call the bundled MCP server of a test data root
 
@@ -227,7 +233,6 @@ Library: `connectMcp({ data, project, clientName })` → `{ tools(), call(name, 
   — browsing: wheel-scroll to the middle of the library, open the image there, press → N times in the drawer (time per
   step, whether the grid follows), close it with Esc (where the focus and the scroll position end up), then time each
   filter (set, then back to 全部) until the count and the tiles stop changing. Measures only; nothing is written.
-
 The library grid is virtual (only the rows near the view are rendered, `src/library/VirtualGrid.tsx`): a tile scrolled
 past is no longer in the DOM. Scroll the library's scroll container `.lib-scroll` (e.g. `ui.mjs scroll '.lib-scroll'`,
 or wheel events over its middle), not a tile, which may leave the DOM after the first step; find tiles again after each
