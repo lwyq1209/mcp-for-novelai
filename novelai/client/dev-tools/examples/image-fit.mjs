@@ -8,7 +8,8 @@
 //   the image keeps it, a click beside it closes it), library tiles, tag cards and a tag's detail cover (cropped
 //   covers must fill their box exactly), canvas stage, canvas full screen, the image-metadata reader, the generation
 //   preview over the stage (injected into the stage, as no generation runs), the Inpaint stage (its mask canvas on
-//   the image), Style preset images and their full-screen preview.
+//   the image), Style preset images and their full-screen preview, and whether the Style and prompt preset hover
+//   previews load in the freshly started app (their saved image URLs must be served after a restart too).
 //   "contain" views: the whole picture inside the container's content box and the window, its aspect ratio kept,
 //   filling the box in at least one direction (or shown at its own size when it is smaller than the box);
 //   "cover" views: the image box is exactly the container's box.
@@ -156,6 +157,15 @@ async function main(argv) {
     await sleep(250);
     return state;
   };
+  // A preset's hover preview (the pictures shown beside a preset when the pointer rests on it) loads every image.
+  const hoverPreview = async (view, item, previews) => {
+    await page.hover(item);
+    const read = () => page.evaluate(selector => [...document.querySelectorAll(selector)].map(img => ({ done: img.complete, loaded: img.complete && img.naturalWidth > 0, natural: `${img.naturalWidth}×${img.naturalHeight}`, file: decodeURIComponent(img.currentSrc || img.src).split('/').pop() })), previews);
+    const list = (await pollUntil(async () => { const value = await read(); return value.length && value.every(entry => entry.done) ? value : null; }, { timeoutMs: 10_000 })) ?? await read();
+    const screenshot = await shot(view.replace(/\W+/g, '-'));
+    if (!list.length) record(view, null, [{ ok: false, problems: ['no hover preview is shown'] }], { screenshot });
+    for (const entry of list) record(view, entry.loaded ? entry.natural : null, [{ ok: entry.loaded, problems: entry.loaded ? [] : [`${entry.file} did not load`] }], { screenshot });
+  };
   const gone = (selector, timeoutMs = 3_000) => page.wait(selector, { state: 'hidden', timeoutMs }).then(() => true).catch(() => false);
   // A real click on the picture keeps an overlay open; a real click on its backdrop (a corner of its padding) closes it.
   const overlayClicks = async (container, image, picture) => {
@@ -294,6 +304,8 @@ async function main(argv) {
       // ── Style preset images and their full-screen preview ───────────────────────────────────────────────────────
       await step(`${label} style preset images`, async () => {
         await page.click('[data-testid="cv-style"] button.cv-hact');
+        // First (in a freshly started app, before the preset's image dialog was ever opened): the hover preview.
+        await hoverPreview('style preset hover preview', '[data-testid="cv-style-preset-sp-01"]', '.cv-style-pop .cv-pop-preview img');
         await page.click('.cv-pop-item:has([data-testid="cv-style-preset-sp-01"]) .cv-iconbtn');
         await page.wait('.spi-img img', { timeoutMs: 10_000 });
         await pollUntil(() => page.evaluate(count => [...document.querySelectorAll('.spi-img img')].filter(img => img.complete && img.naturalWidth).length >= count, PRESET_SIZES.length), { timeoutMs: 10_000 });
@@ -310,6 +322,12 @@ async function main(argv) {
         }
         await page.clickText('关闭', { within: '[role="dialog"]', exact: true });
         await gone('.spi-grid');
+        // The prompt presets (正文预设) of the prompt's 预设 picker show theirs the same way.
+        await page.click('[data-testid="cv-prompt-presets"]');
+        await page.wait('[data-testid="cv-lib-item-pp-01"]', { timeoutMs: 10_000 });
+        await hoverPreview('prompt preset hover preview', '[data-testid="cv-lib-item-pp-01"]', '.cv-lib-preview img');
+        await page.key('Escape');
+        await gone('[data-testid="cv-lib-item-pp-01"]');
       });
 
       // ── Inpaint stage: the source image and its mask canvas ────────────────────────────────────────────────────

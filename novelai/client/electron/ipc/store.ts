@@ -1,6 +1,6 @@
 import { CREDENTIAL_PREFIX, CredentialVault, SENSITIVE_SETTING_KEYS } from "./credential-vault";
 import { normalizeSavedLanguage, systemLanguages } from "./app-language";
-import { activeLibrary } from '../library-runtime';
+import { activeLibrary, activeLibraryPaths } from '../library-runtime';
 import { hostError } from "../host-error";
 import { validateGeneratedHistoryPayload, validateLibraryPayload } from '../library/validation';
 import type { LibraryRepository } from '../library/repository';
@@ -10,6 +10,7 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { toLocalMediaUrl } from "./local-media-protocol";
+import { servablePreviewImages } from "./style-preset-images";
 import type { AccountSummary, AppSettings, HistoryGroup, HistoryItem, HistoryItemsRequest, HistoryItemsSnapshot, SettingKey } from "../../src/types";
 import { CREDENTIAL_FORMAT_ISSUE_SUFFIX } from "../../src/types";
 import { installedAppDir } from "./app-mode";
@@ -341,6 +342,18 @@ export function librarySettings(): Pick<AppSettings, LibrarySettingKey> {
 export function getSettings(): AppSettings {
   const settings = cache ? cache.settings : readStore().settings;
   return { ...settings, ...librarySettings(), credentialIssues: credentialVault.issues() };
+}
+
+/**
+ * The settings the renderer reads (settings:getAll): getSettings() with the preview images of the style and prompt
+ * presets made servable in this process (servablePreviewImages), so their pictures show after a restart too.
+ */
+export function rendererSettings(): AppSettings {
+  const settings = getSettings();
+  const userDataRoot = activeLibraryPaths()?.userDataRoot;
+  if (!userDataRoot) return settings;
+  const serve = <T extends { id: string; previewImages?: unknown }>(presets: T[], prefix: string) => presets.map(preset => Array.isArray(preset.previewImages) && preset.previewImages.length ? { ...preset, previewImages: servablePreviewImages(`${prefix}${String(preset.id).trim()}`, preset.previewImages, userDataRoot) } : preset);
+  return { ...settings, stylePromptPresets: serve(settings.stylePromptPresets ?? [], ""), positivePromptPresets: serve(settings.positivePromptPresets ?? [], "positive-prompt-") };
 }
 
 export function getSetting<K extends SettingKey>(key: K): AppSettings[K] {

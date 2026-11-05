@@ -117,6 +117,7 @@ import {
   getSetting,
   getSettings,
   getToken,
+  rendererSettings,
   setSetting,
   ensureHistoryGroup,
   getHistoryGroups,
@@ -856,7 +857,7 @@ function registerIpc() {
     }
     return saved;
   });
-  ipcMain.handle("settings:getAll", () => getSettings());
+  ipcMain.handle("settings:getAll", () => rendererSettings());
   ipcMain.handle(
     "stylePreset:importImages",
     (_event, presetId: string, availableSlots: number, dialogTitle?: string) =>

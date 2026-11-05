@@ -240,11 +240,12 @@ Library: `connectMcp({ data, project, clientName })` → `{ tools(), call(name, 
   library detail (its ← → and full-screen buttons, the image as the drag source), library full screen (a click on
   the image keeps it open, a click beside it closes it), library tiles, tag cards and a tag's cover, canvas stage and
   full screen, the image-metadata reader, the generation preview (injected into the stage: nothing is generated),
-  the Inpaint stage and its mask canvas, and Style preset images and their full screen. A contained picture must lie
-  inside its container and the window, keep its aspect ratio and fill the container in at least one direction (or
-  show at its own size when it is smaller); a cropped cover must fill its box exactly. Exit code 1 and a list of
-  failures with their numbers when a check fails; `<out>/report.json` and screenshots in `<out>/shots`. The OS keeps
-  a window inside the screen's work area, so the report names the window size actually measured.
+  the Inpaint stage and its mask canvas, Style preset images and their full screen, and whether the Style and prompt
+  preset hover previews load in the freshly started app. A contained picture must lie inside its container and the
+  window, keep its aspect ratio and fill the container in at least one direction (or show at its own size when it is
+  smaller); a cropped cover must fill its box exactly. Exit code 1 and a list of failures with their numbers when a
+  check fails; `<out>/report.json` and screenshots in `<out>/shots`. The OS keeps a window inside the screen's work
+  area, so the report names the window size actually measured.
 
 The library grid is virtual (only the rows near the view are rendered, `src/library/VirtualGrid.tsx`): a tile scrolled
 past is no longer in the DOM. Scroll the library's scroll container `.lib-scroll` (e.g. `ui.mjs scroll '.lib-scroll'`,

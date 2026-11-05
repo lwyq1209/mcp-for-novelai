@@ -54,6 +54,39 @@ export function reconcileStylePromptPreviewImages(
   return (knownImages ?? saved).map((image: StylePromptPreviewImage) => ({ ...image, fileUrl: toLocalMediaUrl(image.filePath) }));
 }
 
+const samePath = (left: string, right: string) => process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+
+/**
+ * A preset's saved preview images for the renderer (settings:getAll), each made servable in this process: a saved
+ * fileUrl is valid only in the run that made it (nai-local serves only paths this process exposed), so after a
+ * restart the Style and prompt preset hover previews stayed broken until the preset's image dialog was opened. Only
+ * an image whose file is a regular file (not a symbolic link) with an image extension directly in this preset's own
+ * preview folder gets its URL rebuilt and served; any other entry keeps its saved URL and is not exposed.
+ * `storageId` is the folder id: the style preset's id, or "positive-prompt-<id>" for a prompt preset.
+ */
+export function servablePreviewImages<T>(storageId: string, images: T, userDataRoot: string): T {
+  if (!Array.isArray(images) || !images.length) return images;
+  let directory: string;
+  try {
+    // The preset's own folder, itself a real folder (lstat: a symbolic link to elsewhere is not one).
+    const planned = stylePromptPreviewDirectory(storageId, userDataRoot);
+    if (!fs.lstatSync(planned).isDirectory()) return images;
+    directory = fs.realpathSync(planned);
+  } catch { return images; }
+  return images.map(image => {
+    const filePath = image && typeof image === "object" ? (image as { filePath?: unknown }).filePath : undefined;
+    if (typeof filePath !== "string" || !path.isAbsolute(filePath) || !SUPPORTED_EXTENSIONS.has(path.extname(filePath).toLowerCase())) return image;
+    try {
+      if (!fs.lstatSync(filePath).isFile()) return image;
+      const real = fs.realpathSync(filePath);
+      if (!samePath(path.dirname(real), directory) || !fs.statSync(real).isFile()) return image;
+      return { ...image, fileUrl: toLocalMediaUrl(real) };
+    } catch {
+      return image;
+    }
+  }) as T;
+}
+
 export function copyStylePromptPreviewImages(
   sourcePaths: string[],
   presetId: string,
