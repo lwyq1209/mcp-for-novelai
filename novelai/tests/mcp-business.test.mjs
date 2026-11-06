@@ -544,7 +544,7 @@ test('source stays a whitelist: one guarded bridge, fixed host methods per tool,
   assert.equal((guards.match(/bridgeClient\.call\(/g) ?? []).length, 1);
   assert.equal((entry.match(/guardBridge\(bridgeClient\)/g) ?? []).length, 1);
   for (const source of server) assert.equal((source.match(/bridgeClient\.call\(|bridge: bridgeClient/g) ?? []).length, 0, 'no tool or core receives the unguarded client');
-  assert.match(entry, /createRecipeQueue\(\{ bridge, \.\.\.Object\.fromEntries\(\['now', 'monotonicNow', 'settleMs'\]/, 'the recipe module receives the guarded bridge and, for tests only, a clock');
+  assert.match(entry, /createRecipeQueue\(\{ bridge, \.\.\.Object\.fromEntries\(\['monotonicNow', 'settleBudgetMs', 'pollMs', 'sleep'\]/, 'the recipe module receives the guarded bridge and, for tests only, a settle clock');
   assert.equal((registry.match(/\.call\(/g) ?? []).length, 0, 'dispatch never calls the host itself');
   // Core tools reach the host only through the cores, plus asset_library by its literal name.
   assert.deepEqual([...coreTools.matchAll(/bridge\.call\(([^,]+),/g)].map(match => match[1]), ["'asset_library'"]);
@@ -561,13 +561,15 @@ test('source stays a whitelist: one guarded bridge, fixed host methods per tool,
   assert.deepEqual(importsOf(queue).filter(source => writeOrReview.test(source)), []);
   assert.ok(!/enqueue_queue_recipes|put_queue_recipe|read_queue_recipe|derive_queue_recipe|lookup_queue_request/.test(queue));
   // Phase two: the recipe module calls exactly seven fixed host methods (the five raw recipe methods, the canvas
-  // capture and list_queue for a stuck unknown receipt), each through the frozen map, and imports nothing from the removed enqueue core.
+  // capture and list_queue for an unknown receipt), each through the frozen map, and imports nothing from the removed
+  // enqueue core. Eight call sites: since 0.1.4 the settle of an unknown enqueue resends the same plan under the same key.
   assert.deepEqual(importsOf(recipes), ['node:crypto', './bridge-client.mjs', './queue-control.mjs', './recipe-masks.mjs', './recipe-sources.mjs', './recipe-sources.mjs']);
   const { RECIPE_HOST_METHODS, RECIPE_SOURCE_HOST_METHODS } = await import('../src/recipe-queue.mjs');
   assert.ok(Object.isFrozen(RECIPE_HOST_METHODS));
   assert.deepEqual(Object.values(RECIPE_HOST_METHODS).sort(), [...RECIPE_HOST_METHOD_NAMES, 'list_queue'].sort());
-  assert.equal((recipes.match(/bridge\.call\(/g) ?? []).length, 7);
-  assert.equal((recipes.match(/bridge\.call\(RECIPE_HOST_METHODS\.(?:put|read|preview|lookup|enqueue|list|capture),/g) ?? []).length, 7);
+  assert.equal((recipes.match(/bridge\.call\(/g) ?? []).length, 8);
+  assert.equal((recipes.match(/bridge\.call\(RECIPE_HOST_METHODS\.(?:put|read|preview|lookup|enqueue|list|capture),/g) ?? []).length, 8);
+  assert.equal((recipes.match(/bridge\.call\(RECIPE_HOST_METHODS\.enqueue,/g) ?? []).length, 2, 'the dispatch and the settle resend of the same hostArgs');
   for (const method of [...RECIPE_HOST_METHOD_NAMES, 'list_queue']) assert.equal(recipes.split(`'${method}'`).length - 1, 1, `${method} is named once, in the frozen map`);
   // Image sources and alpha layers: exactly asset_library {action:image}, through the source module's frozen map; masks are pure.
   const [sources, masks] = await Promise.all(['src/recipe-sources.mjs', 'src/recipe-masks.mjs'].map(read));

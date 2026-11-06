@@ -137,8 +137,14 @@ const retamper = (reply, mutate) => {
   return { ...reply, snapshot, inputHash: recipeQueue.recipeHash({ ...input, assets: assets.map(({ data: _d, ...asset }) => asset) }) };
 };
 
+/**
+ * A settle clock for one server (0.1.4: enqueue_recipes settles an unknown outcome itself): sleeping advances the
+ * injected monotonic time instead of waiting, so a settle runs at once and its budget is spent in fake seconds.
+ */
+const settleClock = (clock = { t: 0 }) => ({ monotonicNow: () => clock.t, sleep: async ms => { clock.t += ms; }, clock });
 async function connect(t, bridgeClient, options = {}) {
-  const server = serverUnderTest.create({ bridgeClient, ...options });
+  const { clock: _clock, ...recipeQueueOptions } = options.recipeQueue ?? settleClock();
+  const server = serverUnderTest.create({ bridgeClient, ...options, recipeQueue: { sleep: settleClock().sleep, ...recipeQueueOptions } });
   const client = new Client({ name: 'business-recipes-test', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport); await client.connect(clientTransport);
@@ -531,58 +537,85 @@ nodeTest('the namespaced host key is identical in separate processes, so a resta
   assert.equal(a, recipeQueue.mcpHostRequestKey('night-market #3'));
 });
 
-test('unknown outcomes are only looked up with the same key and never resent automatically', async t => {
+/** A fault that stays until the returned stop(): every call of `method` runs `fault` before (or instead of) the host. */
+const persistently = (h, method, fault) => {
+  // This harness calls before() without arguments; the call it runs for is the last one recorded.
+  const wrap = { before: async args => { h.faults[method] = wrap; await fault(args ?? h.calls.at(-1)?.args); } };
+  h.faults[method] = wrap;
+  return () => { delete h.faults[method]; };
+};
+const timeout = () => { throw new BridgeError('timeout', 'The client request was interrupted or timed out. Its outcome is unknown.'); };
+
+test('0.1.4 an unknown enqueue outcome is settled in the same call: a lookup, and the same plan under the same key again when the host holds nothing; one batch, never another key', async t => {
   const h = await realHost(t);
-  const { call, readRecipe } = await connect(t, h.bridge);
+  const { call } = await connect(t, h.bridge);
   const prepared = ok(await call('prepare_recipe', t2i()));
-  // (a) The host accepted but the reply was lost.
+  // (a) The host accepted but the reply was lost: the first lookup finds the batch.
   h.faults.enqueue_queue_recipes = 'reply-lost';
-  const lostReply = errorOf(await call('enqueue_recipes', { requestKey: 'lost-reply', items: [{ ...ref(prepared), seeds: [1] }] }));
-  assert.equal(lostReply.code, 'queue_acceptance_unknown'); assert.equal(lostReply.details.enqueueSent, true); assert.equal(Object.hasOwn(lostReply.details, 'review'), false);
-  assert.equal(h.jobs.length, 1);
-  const resolved = ok(await call('lookup_enqueue', { requestKey: 'lost-reply' }));
-  assert.equal(resolved.status, 'enqueued'); assert.equal(resolved.batch.batchId, h.jobs[0].job.batchId);
-  assert.equal(ok(await call('enqueue_recipes', { requestKey: 'lost-reply', items: [{ ...ref(prepared), seeds: [1] }] })).status, 'already_enqueued');
+  const lostReply = ok(await call('enqueue_recipes', { requestKey: 'lost-reply', items: [{ ...ref(prepared), seeds: [1] }] }));
+  assert.equal(lostReply.status, 'enqueued'); assert.equal(lostReply.reconciled, true); assert.equal(lostReply.enqueueSent, true);
+  assert.deepEqual([lostReply.settled.lookups, lostReply.settled.resends], [1, 0]); assert.equal(lostReply.batch.batchId, h.jobs[0].job.batchId);
+  assert.match(lostReply.instruction, /there is one batch/); assert.deepEqual(lostReply.items.map(item => item.seed), [1]);
   assert.equal(h.count('enqueue_queue_recipes'), 1);
-  // (b) The request never reached the host: held until a lookup proves there is no receipt.
+  assert.equal(ok(await call('enqueue_recipes', { requestKey: 'lost-reply', items: [{ ...ref(prepared), seeds: [1] }] })).status, 'already_enqueued');
+  // (b) The request never reached the host: the lookup says nothing arrived and nothing is in flight, so the same plan
+  //     goes again under the same key.
   h.faults.enqueue_queue_recipes = 'lost-before-host';
-  const lostRequest = { requestKey: 'lost-request', items: [{ ...ref(prepared), seeds: [2] }] };
-  assert.equal(errorOf(await call('enqueue_recipes', lostRequest)).code, 'queue_acceptance_unknown');
-  const held = errorOf(await call('enqueue_recipes', lostRequest));
-  assert.equal(held.code, 'queue_acceptance_unknown'); assert.equal(held.details.enqueueSent, false);
-  assert.equal(h.count('enqueue_queue_recipes'), 2, 'the held retry sent nothing');
-  assert.equal(ok(await call('lookup_enqueue', { requestKey: 'lost-request' })).status, 'not_found');
-  assert.equal(ok(await call('enqueue_recipes', lostRequest)).status, 'enqueued', 'an explicit call after not_found may use the same key');
+  const lostRequest = ok(await call('enqueue_recipes', { requestKey: 'lost-request', items: [{ ...ref(prepared), seeds: [2] }] }));
+  assert.equal(lostRequest.status, 'enqueued'); assert.deepEqual([lostRequest.settled.lookups, lostRequest.settled.resends], [1, 1]);
   assert.equal(h.count('enqueue_queue_recipes'), 3); assert.equal(h.jobs.length, 2);
-  // (c) The host itself could not confirm acceptance: its receipt is unknown and stays lookup-only, even after a restart.
+  // (c) The host's own batch service failed without an answer (its queue readable, no batch): the host keeps the
+  //     receipt unknown and restartable, and the same plan under the same key starts it over.
   h.backend.failNext = new Error('backend connection dropped');
-  const hostUnknown = { requestKey: 'host-unknown', items: [{ ...ref(prepared), seeds: [3] }] };
-  const unknown = errorOf(await call('enqueue_recipes', hostUnknown));
-  assert.equal(unknown.code, 'queue_acceptance_unknown'); assert.equal(unknown.details.hostCode, 'queue_acceptance_unknown');
-  assert.equal(ok(await call('lookup_enqueue', { requestKey: hostUnknown.requestKey })).status, 'unknown');
-  const restarted = await connect(t, h.bridge);
-  const stillUnknown = errorOf(await restarted.call('enqueue_recipes', hostUnknown));
-  assert.equal(stillUnknown.code, 'queue_acceptance_unknown'); assert.equal(stillUnknown.details.enqueueSent, false);
-  assert.equal(h.count('enqueue_queue_recipes'), 4); assert.equal(h.jobs.length, 2);
-  // (d) An unconfirmable reply is unknown too.
+  const hostUnknown = ok(await call('enqueue_recipes', { requestKey: 'host-unknown', items: [{ ...ref(prepared), seeds: [3] }] }));
+  assert.equal(hostUnknown.status, 'enqueued'); assert.equal(hostUnknown.settled.resends, 1); assert.equal(h.jobs.length, 3);
+  // (d) A reply that cannot confirm the plan is settled by the lookup that sees the real batch.
   h.faults.enqueue_queue_recipes = reply => ({ ...reply, recipePlanHash: 'b'.repeat(64) });
-  assert.equal(errorOf(await call('enqueue_recipes', { requestKey: 'odd-reply', items: [{ ...ref(prepared), seeds: [4] }] })).code, 'queue_acceptance_unknown');
-  // (e) Explicit host rejection is final for that key and reported as such.
+  const odd = ok(await call('enqueue_recipes', { requestKey: 'odd-reply', items: [{ ...ref(prepared), seeds: [4] }] }));
+  assert.equal(odd.status, 'enqueued'); assert.equal(odd.reconciled, true); assert.equal(odd.settled.resends, 0); assert.equal(h.jobs.length, 4);
+  // (e) An explicit host rejection is final for that key and reported as such, without settling.
   h.backend.failNext = Object.assign(new Error('queue is full'), { code: 'queue_full' });
   const full = errorOf(await call('enqueue_recipes', { requestKey: 'full', items: [{ ...ref(prepared), seeds: [5] }] }));
-  assert.equal(full.code, 'queue_full'); assert.equal(full.details.status, 'rejected'); assert.equal(full.details.keyStatus, 'rejected');
+  assert.equal(full.code, 'queue_full'); assert.equal(full.details.status, 'rejected'); assert.equal(full.details.keyStatus, 'rejected'); assert.equal(full.details.settled, undefined);
   assert.match(full.message, /recorded the rejection; nothing was queued under this requestKey/);
   const fullLookup = ok(await call('lookup_enqueue', { requestKey: 'full' }));
   assert.equal(fullLookup.status, 'rejected'); assert.equal(fullLookup.hostError.code, 'queue_full');
   assert.equal(errorOf(await call('enqueue_recipes', { requestKey: 'full', items: [{ ...ref(prepared), seeds: [5] }] })).code, 'queue_request_rejected');
   const enqueueCalls = h.count('enqueue_queue_recipes');
-  assert.equal(enqueueCalls, 6, 'each dispatch above happened exactly once');
+  assert.equal(enqueueCalls, 7, 'one dispatch each, plus one resend for (b) and (c)');
   assert.equal(ok(await call('lookup_enqueue', { requestKey: 'never-used' })).status, 'not_found');
   // (f) The idempotency lookup itself fails: nothing is sent.
   h.faults.lookup_queue_request = 'lost-before-host';
   const lookupDown = errorOf(await call('enqueue_recipes', { requestKey: 'lookup-down', items: [{ ...ref(prepared), seeds: [6] }] }));
   assert.equal(lookupDown.code, 'timeout'); assert.equal(lookupDown.details.enqueueSent, false); assert.equal(lookupDown.details.status, 'not_sent');
   assert.equal(h.count('enqueue_queue_recipes'), enqueueCalls, 'lookups never enqueue');
+  // (g) A client that never answers: the call ends after the settle budget with the outcome still unknown, having
+  //     resent the same plan at most SETTLE_RESENDS times and never under another key.
+  const stopEnqueue = persistently(h, 'enqueue_queue_recipes', timeout), stopLookup = persistently(h, 'lookup_queue_request', async args => { if (h.calls.filter(item => item.method === 'lookup_queue_request' && item.args.requestKey === args.requestKey).length > 1) timeout(); });
+  const silent = errorOf(await call('enqueue_recipes', { requestKey: 'silent', items: [{ ...ref(prepared), seeds: [7] }] }));
+  stopEnqueue(); stopLookup();
+  assert.equal(silent.code, 'queue_acceptance_unknown', JSON.stringify(silent)); assert.equal(silent.details.status, 'unknown'); assert.equal(silent.details.enqueueSent, true); assert.equal(silent.details.newKeyAdvised, false);
+  assert.equal(silent.details.keyStatus, 'lookup_failed'); assert.equal(silent.details.settled.resends, 0, 'no lookup ever said the host holds nothing');
+  assert.ok(silent.details.settled.seconds >= recipeQueue.SETTLE_BUDGET_MS / 1000 - 1 && silent.details.settled.seconds <= recipeQueue.SETTLE_BUDGET_MS / 1000 + 6, JSON.stringify(silent.details.settled));
+  assert.match(silent.message, /call enqueue_recipes with the same requestKey and plan/); assert.match(silent.message, /Do not switch keys/);
+  const keys = new Set(h.calls.filter(item => item.method === 'enqueue_queue_recipes').map(item => item.args.requestKey));
+  assert.equal(keys.size, 6, 'every dispatch and resend used its own call\'s key');
+  // Asking again once the client answers settles it: nothing arrived, so this call sends it.
+  assert.equal(ok(await call('enqueue_recipes', { requestKey: 'silent', items: [{ ...ref(prepared), seeds: [7] }] })).status, 'enqueued');
+  assert.equal(h.jobs.length, 5);
+});
+
+test('0.1.4 an enqueue that never gets an answer and whose lookups say nothing arrived is resent at most SETTLE_RESENDS times', async t => {
+  const h = await realHost(t);
+  const { call } = await connect(t, h.bridge);
+  const prepared = ok(await call('prepare_recipe', t2i()));
+  const stop = persistently(h, 'enqueue_queue_recipes', timeout);
+  const error = errorOf(await call('enqueue_recipes', { requestKey: 'never-arrives', items: [{ ...ref(prepared), seeds: [1] }] }));
+  stop();
+  assert.equal(error.code, 'queue_acceptance_unknown'); assert.equal(error.details.keyStatus, 'not_found'); assert.equal(error.details.hostCode, 'timeout');
+  assert.equal(error.details.settled.resends, recipeQueue.SETTLE_RESENDS);
+  assert.equal(h.count('enqueue_queue_recipes'), 1 + recipeQueue.SETTLE_RESENDS); assert.equal(h.jobs.length, 0);
+  assert.equal(ok(await call('lookup_enqueue', { requestKey: 'never-arrives' })).settlement.state, 'clear');
 });
 
 test('step 3a: an enqueue above the client per-enqueue setting is a definite refusal naming the limit; the same plan and key work once it is raised', async t => {
@@ -622,9 +655,11 @@ test('#14 the host\'s structured error details travel under details.hostDetails 
   const spoof = errorOf(await call('enqueue_recipes', { requestKey: 'host-details-spoof', items: [{ ...ref(prepared), seeds: [2] }] }));
   assert.equal(spoof.details.status, 'rejected'); assert.equal(spoof.details.keyStatus, 'not_found'); assert.equal(spoof.details.enqueueSent, true);
   assert.deepEqual(spoof.details.hostDetails, { status: 'enqueued', keyStatus: 'accepted', enqueueSent: false, pendingItems: 3 });
-  // (b) An unrecognized dispatch failure is unknown; its host details are kept too.
-  hostFails('enqueue_queue_recipes', 'odd_failure', { stage: 'dispatch' });
+  // (b) An unrecognized dispatch failure is settled (the same plan again); while the host keeps failing that way the
+  //     outcome stays unknown, and the first failure's host details are kept.
+  const stop = persistently(h, 'enqueue_queue_recipes', () => { throw new BridgeError('odd_failure', 'odd_failure from the host', { stage: 'dispatch' }); });
   const unknown = errorOf(await call('enqueue_recipes', { requestKey: 'host-details-unknown', items: [{ ...ref(prepared), seeds: [3] }] }));
+  stop();
   assert.equal(unknown.code, 'queue_acceptance_unknown'); assert.equal(unknown.details.hostCode, 'odd_failure'); assert.deepEqual(unknown.details.hostDetails, { stage: 'dispatch' }); assert.equal(unknown.details.status, 'unknown');
   // (c) The idempotency lookup and the exact recipe read fail with details: nothing is sent, details kept.
   hostFails('lookup_queue_request', 'queue_storage_error', { frozenQueue: { state: 'failed' } });
@@ -652,7 +687,7 @@ test('#14 the host\'s structured error details travel under details.hostDetails 
   assert.equal(h.jobs.length, 0, 'nothing was queued');
 });
 
-test('exact identity: a revision or inputHash mismatch, a blocked recipe, mixed modes or duplicate fixed seeds are refused before anything is sent', async t => {
+test('exact identity: a revision or inputHash mismatch, a blocked recipe or mixed modes are refused before anything is sent', async t => {
   const h = await realHost(t);
   const { call, readRecipe } = await connect(t, h.bridge);
   const prepared = ok(await call('prepare_recipe', t2i()));
@@ -670,8 +705,6 @@ test('exact identity: a revision or inputHash mismatch, a blocked recipe, mixed 
     const error = await refused({ requestKey: 'exact', items: [{ ...ref(prepared), ...missing }] }, 'recipe_not_found');
     assert.equal(error.details.status, 'not_sent'); assert.match(error.message, /does not exist/);
   }
-  await refused({ requestKey: 'exact', items: [{ ...ref(prepared), count: 2 }] }, 'invalid_arguments');
-  await refused({ requestKey: 'exact', items: [{ ...ref(prepared), seeds: [1] }, { ...ref(prepared), count: 1 }, { ...ref(prepared), count: 1 }] }, 'invalid_arguments');
   // A blocked recipe (blank positive prompt, created directly on the host) reads back as not ready and is refused.
   const blocked = await h.service.put_queue_recipe({ preparation: { mode: 't2i', authored: { params: { promptAssemblyVersion: 1, positivePrompt: '' } }, assets: [] } });
   const blockedRead = ok(await readRecipe(ref(blocked)));
@@ -694,6 +727,36 @@ test('exact identity: a revision or inputHash mismatch, a blocked recipe, mixed 
   // None of the refusals consumed the key: it is still unused and works for the correct plan.
   assert.equal(ok(await call('lookup_enqueue', { requestKey: 'exact' })).status, 'not_found');
   assert.equal(ok(await call('enqueue_recipes', { requestKey: 'exact', items: [{ ...ref(prepared), count: 2, seeds: [7, 7] }] })).status, 'enqueued', 'a deliberate repeated seed is allowed when explicit');
+});
+
+test('0.1.4 a fixed-seed recipe used for several images without seeds counts its seed up (wrapping after 2147483646), listed in the receipt with a warning; explicit seeds are kept', async t => {
+  const h = await realHost(t);
+  const { call } = await connect(t, h.bridge);
+  const prepared = ok(await call('prepare_recipe', t2i()));
+  const three = ok(await call('enqueue_recipes', { requestKey: 'fixed-3', items: [{ ...ref(prepared), count: 3 }] }));
+  assert.equal(three.status, 'enqueued'); assert.deepEqual(three.items.map(item => item.seed), [1234, 1235, 1236]);
+  assert.deepEqual(h.jobs.at(-1).args.seeds, [1234, 1235, 1236], 'the host gets the seeds as explicit item seeds');
+  const warning = three.warnings.find(item => item.code === 'fixed_seed_incremented');
+  assert.deepEqual([warning.recipeId, warning.recipeRevision, warning.field, warning.from, warning.to], [prepared.recipeId, 1, 'seeds', 1234, [1234, 1235, 1236]]);
+  assert.match(warning.message, /use 1234, 1235, 1236 so that they differ/);
+  // The same call is the same plan: answered from the receipt, nothing sent again.
+  assert.equal(ok(await call('enqueue_recipes', { requestKey: 'fixed-3', items: [{ ...ref(prepared), count: 3 }] })).status, 'already_enqueued');
+  assert.equal(errorOf(await call('enqueue_recipes', { requestKey: 'fixed-3', items: [{ ...ref(prepared), count: 2 }] })).code, 'request_conflict');
+  // Explicit seeds stay as given; the unseeded images count up from the recipe seed in order.
+  const mixed = ok(await call('enqueue_recipes', { requestKey: 'fixed-mixed', items: [{ ...ref(prepared), seeds: [5] }, { ...ref(prepared), count: 2 }] }));
+  assert.deepEqual(mixed.items.map(item => item.seed), [5, 1234, 1235]);
+  // At the top of the range the seeds wrap to 0.
+  const top = ok(await call('prepare_recipe', t2i({ seed: 2147483645 })));
+  assert.deepEqual(ok(await call('enqueue_recipes', { requestKey: 'fixed-top', items: [{ ...ref(top), count: 3 }] })).items.map(item => item.seed), [2147483645, 2147483646, 0]);
+  // One image, explicit seeds and random-seed recipes are as before, without the warning.
+  const one = ok(await call('enqueue_recipes', { requestKey: 'fixed-1', items: [ref(prepared)] }));
+  assert.deepEqual(one.items.map(item => item.seed), [null]); assert.equal(one.warnings, undefined);
+  const explicit = ok(await call('enqueue_recipes', { requestKey: 'fixed-explicit', items: [{ ...ref(prepared), seeds: [7, 7] }] }));
+  assert.deepEqual(explicit.items.map(item => item.seed), [7, 7]); assert.equal(explicit.warnings, undefined);
+  const random = ok(await call('prepare_recipe', t2i({ seed: null })));
+  const randoms = ok(await call('enqueue_recipes', { requestKey: 'random-3', items: [{ ...ref(random), count: 3 }] }));
+  assert.deepEqual(randoms.items.map(item => item.seed), [null, null, null]); assert.equal(randoms.warnings, undefined);
+  assert.deepEqual(h.jobs.at(-1).args.seeds, [777, 777, 777], 'random seeds are the host\'s to draw');
 });
 
 test('invalid enqueue, lookup and read arguments are rejected before the host', async t => {
@@ -751,230 +814,150 @@ nodeTest('client constant parity: models, samplers and dimension limits mirror c
   assert.equal(recipeQueue.MAX_QUEUE_SEED, 2147483646);
 });
 
-test('F1: a request_conflict after dispatch attaches the batch already under the key; not_found says only the same plan and key may be resent', async t => {
+test('F1: a request held on the way is settled by sending the same plan again; the late original is answered from the receipt (one batch); a request_conflict after dispatch attaches the batch under the key', async t => {
   const h = await realHost(t);
-  const { call, readRecipe } = await connect(t, h.bridge);
+  const { call } = await connect(t, h.bridge);
   const prepared = ok(await call('prepare_recipe', t2i()));
-  // Reviewer d2: plan A times out on the way and has not reached the host yet.
   h.faults.enqueue_queue_recipes = 'held';
-  const first = errorOf(await call('enqueue_recipes', { requestKey: 'late2', items: [{ ...ref(prepared), seeds: [1] }] }));
-  assert.equal(first.code, 'queue_acceptance_unknown'); assert.equal(first.details.enqueueSent, true);
-  const look = ok(await call('lookup_enqueue', { requestKey: 'late2' }));
-  assert.equal(look.status, 'not_found');
-  assert.match(look.instruction, /No receipt yet/); assert.match(look.instruction, /Resending the same plan with the same requestKey is safe/);
-  assert.match(look.instruction, /timed out can still arrive and be accepted late/); assert.match(look.instruction, /Before changing the plan, look up this same requestKey again in about \d+ seconds/);
-  assert.equal(look.settlement.state, 'settling'); assert.ok(look.settlement.retryAfterSeconds > 0 && look.settlement.retryAfterSeconds <= 130);
-  // The model changes the plan under the same key; plan A reaches the host just before plan B.
-  h.faults.enqueue_queue_recipes = { before: async () => { const [resultA] = await h.releaseHeld(); assert.equal(resultA.count, 1); } };
-  const second = errorOf(await call('enqueue_recipes', { requestKey: 'late2', items: [{ ...ref(prepared), seeds: [1, 2] }] }));
+  const first = ok(await call('enqueue_recipes', { requestKey: 'late2', items: [{ ...ref(prepared), seeds: [1] }] }));
+  assert.equal(first.status, 'enqueued'); assert.equal(first.reconciled, true); assert.deepEqual([first.settled.lookups, first.settled.resends], [1, 1]);
+  const [late] = await h.releaseHeld();
+  assert.equal(late.batchId, first.batch.batchId, 'the late original is answered from the key\'s receipt'); assert.equal(h.jobs.length, 1);
+  // Another plan under a key reaches the host just before ours: request_conflict with the batch already under the key.
+  h.faults.enqueue_queue_recipes = { before: async () => { await h.service.enqueue_queue_recipes({ requestKey: recipeQueue.mcpHostRequestKey('late3'), items: [{ ...ref(prepared), seed: 9 }], intervalSeconds: 0 }); } };
+  const second = errorOf(await call('enqueue_recipes', { requestKey: 'late3', items: [{ ...ref(prepared), seeds: [1, 2] }] }));
   assert.equal(second.code, 'request_conflict'); assert.equal(second.details.status, 'conflict'); assert.equal(second.details.enqueueSent, true); assert.equal(second.details.hostCode, 'request_conflict');
-  assert.equal(second.details.existingBatch.batchId, h.jobs[0].job.batchId); assert.equal(second.details.existingBatch.count, 1);
-  assert.match(second.message, /already holds a different accepted batch/);
-  assert.doesNotMatch(second.message, /nothing was queued/i);
-  assert.equal(h.jobs.length, 1, 'plan A is the only batch');
+  assert.equal(second.details.existingBatch.batchId, h.jobs[1].job.batchId); assert.equal(second.details.existingBatch.count, 1);
+  assert.match(second.message, /already holds a different accepted batch/); assert.doesNotMatch(second.message, /nothing was queued/i);
   // Asking again is answered from the key's receipt before anything is sent.
-  const again = errorOf(await call('enqueue_recipes', { requestKey: 'late2', items: [{ ...ref(prepared), seeds: [1, 2] }] }));
-  assert.equal(again.code, 'request_conflict'); assert.equal(again.details.enqueueSent, false); assert.equal(again.details.existingBatch.batchId, h.jobs[0].job.batchId);
-  assert.equal(ok(await call('enqueue_recipes', { requestKey: 'late2', items: [{ ...ref(prepared), seeds: [1] }] })).status, 'already_enqueued');
+  const again = errorOf(await call('enqueue_recipes', { requestKey: 'late3', items: [{ ...ref(prepared), seeds: [1, 2] }] }));
+  assert.equal(again.code, 'request_conflict'); assert.equal(again.details.enqueueSent, false); assert.equal(again.details.existingBatch.batchId, h.jobs[1].job.batchId);
+  assert.equal(h.jobs.length, 2);
 });
 
-test('F2/N-1: an unknown receipt settles for the settle window; only two unknown lookups at least that far apart with no batch justify a new key', async t => {
+test('0.1.4 lookup_enqueue answers at once: in flight -> settling a few seconds; nothing recorded -> clear; a restartable receipt -> clear (same plan, same key); stale only for a receipt the host can neither confirm nor restart; an older host is never advised a new key', async t => {
   const h = await realHost(t);
-  const clock = { t: 1_000_000 };
-  const { call, readRecipe } = await connect(t, h.bridge, { recipeQueue: { monotonicNow: () => clock.t } });
+  const { call } = await connect(t, h.bridge);
   const prepared = ok(await call('prepare_recipe', t2i()));
+  const plan = requestKey => ({ requestKey, items: [{ ...ref(prepared), seeds: [1] }] });
+  // Nothing arrived for the key and nothing is in flight: clear at once, no window.
+  const none = ok(await call('lookup_enqueue', { requestKey: 'nothing' }));
+  assert.equal(none.status, 'not_found'); assert.equal(none.inFlight, false); assert.deepEqual(none.settlement, { state: 'clear', newKeyAdvised: false });
+  assert.match(none.instruction, /nothing was queued under this requestKey/); assert.match(none.instruction, /same plan or a changed one/);
+  // An enqueue the host is still handling (the batch service holds it): settling, inFlight, a few seconds; never a new key.
+  const gate = h.gateBackend();
+  const pending = h.service.enqueue_queue_recipes({ requestKey: recipeQueue.mcpHostRequestKey('running'), items: [{ ...ref(prepared), seed: 1 }], intervalSeconds: 0 });
+  await gate.inside;
+  const running = ok(await call('lookup_enqueue', { requestKey: 'running' }));
+  assert.equal(running.status, 'unknown'); assert.equal(running.inFlight, true);
+  assert.deepEqual(running.settlement, { state: 'settling', retryAfterSeconds: 2, inFlight: true, newKeyAdvised: false });
+  assert.match(running.instruction, /still handling it/); assert.doesNotMatch(running.instruction, /NEW requestKey/);
+  gate.release(); await pending;
+  const done = ok(await call('lookup_enqueue', { requestKey: 'running' }));
+  assert.equal(done.status, 'enqueued'); assert.equal(done.settlement, undefined); assert.equal(done.inFlight, false);
+  // A receipt whose enqueue ended without a batch (the batch service failed, its queue readable): clear, resend the same plan.
   h.backend.failNext = new Error('backend connection dropped');
-  assert.equal(errorOf(await call('enqueue_recipes', { requestKey: 'stuck', items: [{ ...ref(prepared), seeds: [1] }] })).code, 'queue_acceptance_unknown');
-  clock.t += 10_000;
-  const first = ok(await call('lookup_enqueue', { requestKey: 'stuck' }));
-  assert.equal(first.status, 'unknown'); assert.deepEqual(first.queueCheck, { batchFound: false, batchesScanned: 0 });
-  assert.deepEqual(first.settlement, { state: 'settling', retryAfterSeconds: 130, unknownObservedForSeconds: 0, newKeyAdvised: false });
-  assert.match(first.instruction, /still settling/); assert.match(first.instruction, /again in about 130 seconds/); assert.doesNotMatch(first.instruction, /NEW requestKey|never clears|permanent/);
-  clock.t += 60_000;
-  const second = ok(await call('lookup_enqueue', { requestKey: 'stuck' }));
-  assert.deepEqual(second.settlement, { state: 'settling', retryAfterSeconds: 70, unknownObservedForSeconds: 60, newKeyAdvised: false });
-  const gate = errorOf(await call('enqueue_recipes', { requestKey: 'stuck', items: [{ ...ref(prepared), seeds: [1] }] }));
-  assert.equal(gate.details.enqueueSent, false); assert.match(gate.message, /may still turn into accepted/);
-  clock.t += 70_000;
+  await assert.rejects(h.service.enqueue_queue_recipes({ requestKey: recipeQueue.mcpHostRequestKey('ended'), items: [{ ...ref(prepared), seed: 1 }], intervalSeconds: 0 }), error => error.code === 'queue_acceptance_unknown');
+  const ended = ok(await call('lookup_enqueue', { requestKey: 'ended' }));
+  assert.equal(ended.status, 'unknown'); assert.deepEqual(ended.settlement, { state: 'clear', resend: 'same_plan_same_key', newKeyAdvised: false }); assert.deepEqual(ended.queueCheck, { batchFound: false, batchesScanned: 1 });
+  assert.match(ended.instruction, /Call enqueue_recipes with the same requestKey and the same plan: the host starts it again, never a second batch/);
+  const restarted = ok(await call('enqueue_recipes', plan('ended')));
+  assert.equal(restarted.status, 'enqueued'); assert.equal(restarted.reconciled, undefined, 'a plain dispatch restarted it');
+  // A receipt the host can neither confirm nor restart: stale, a new key advised (as the host says nothing more will happen).
+  h.faults.lookup_queue_request = () => ({ batch: null, status: 'unknown', inFlight: false });
   const stale = ok(await call('lookup_enqueue', { requestKey: 'stuck' }));
-  assert.deepEqual(stale.settlement, { state: 'stale', unknownObservedForSeconds: 130, newKeyAdvised: true });
-  assert.match(stale.instruction, /NEW requestKey/); assert.match(stale.instruction, /accepted late, which would duplicate/);
-  assert.equal(ok(await call('enqueue_recipes', { requestKey: 'stuck-2', items: [{ ...ref(prepared), seeds: [1] }] })).status, 'enqueued', 'the documented path works');
-  // A restarted server has never seen the key: it waits a full settle window before advising anything.
-  const restarted = await connect(t, h.bridge, { recipeQueue: { monotonicNow: () => clock.t } });
-  const fresh = ok(await restarted.call('lookup_enqueue', { requestKey: 'stuck' }));
-  assert.deepEqual(fresh.settlement, { state: 'settling', retryAfterSeconds: 130, unknownObservedForSeconds: 0, newKeyAdvised: false });
-  clock.t += 129_000;
-  assert.equal(ok(await restarted.call('lookup_enqueue', { requestKey: 'stuck' })).settlement.state, 'settling');
-  clock.t += 1_000;
-  assert.equal(ok(await restarted.call('lookup_enqueue', { requestKey: 'stuck' })).settlement.newKeyAdvised, true);
-  // Any non-unknown answer resets the clock: a later unknown starts a fresh settle window.
+  assert.deepEqual(stale.settlement, { state: 'stale', newKeyAdvised: true }); assert.match(stale.instruction, /NEW requestKey/); assert.match(stale.instruction, /in case the old request still appears/);
+  h.faults.lookup_queue_request = () => ({ batch: null, status: 'unknown', inFlight: false });
+  const stuckEnqueue = errorOf(await call('enqueue_recipes', plan('stuck')));
+  assert.equal(stuckEnqueue.code, 'queue_acceptance_unknown'); assert.equal(stuckEnqueue.details.enqueueSent, false); assert.equal(stuckEnqueue.details.newKeyAdvised, true);
+  // An older host does not say whether it is still working on the key: settling, never a new-key advice, and a plain
+  // not_found is clear for resending the same plan.
   h.faults.lookup_queue_request = () => ({ batch: null, status: 'unknown' });
-  assert.equal(ok(await call('lookup_enqueue', { requestKey: 'blinking' })).settlement.state, 'settling');
-  clock.t += 200_000;
+  const old = ok(await call('lookup_enqueue', { requestKey: 'old-host' }));
+  assert.deepEqual(old.settlement, { state: 'settling', retryAfterSeconds: 30, newKeyAdvised: false }); assert.equal(Object.hasOwn(old, 'inFlight'), false);
+  assert.match(old.instruction, /older than this MCP server/); assert.doesNotMatch(old.instruction, /NEW requestKey/);
   h.faults.lookup_queue_request = () => ({ batch: null });
-  assert.equal(ok(await call('lookup_enqueue', { requestKey: 'blinking' })).status, 'not_found');
-  clock.t += 1_000;
-  h.faults.lookup_queue_request = () => ({ batch: null, status: 'unknown' });
-  assert.deepEqual(ok(await call('lookup_enqueue', { requestKey: 'blinking' })).settlement, { state: 'settling', retryAfterSeconds: 130, unknownObservedForSeconds: 0, newKeyAdvised: false });
-  // If the queue does hold a batch under the key although the receipt says unknown, the lookup reports it.
-  h.faults.lookup_queue_request = () => ({ batch: null, status: 'unknown' });
-  const found = ok(await call('lookup_enqueue', { requestKey: 'stuck-2' }));
-  assert.equal(found.status, 'enqueued'); assert.equal(found.queueCheck.batchFound, true); assert.equal(found.batch.batchId, h.jobs[0].job.batchId); assert.equal(found.receiptPersisted, false);
-  assert.equal(found.settlement, undefined);
-  assert.equal(h.count('enqueue_queue_recipes'), 2);
+  const oldNone = ok(await call('lookup_enqueue', { requestKey: 'old-host' }));
+  assert.deepEqual(oldNone.settlement, { state: 'clear', newKeyAdvised: false }); assert.match(oldNone.instruction, /Resending the same plan with the same requestKey is safe/);
+  // If the queue holds a batch under the key although the receipt says unknown, the lookup reports it.
+  h.faults.lookup_queue_request = () => ({ batch: null, status: 'unknown', inFlight: false });
+  const found = ok(await call('lookup_enqueue', { requestKey: 'running' }));
+  assert.equal(found.status, 'enqueued'); assert.equal(found.queueCheck.batchFound, true); assert.equal(found.receiptPersisted, false); assert.equal(found.settlement, undefined);
+  assert.equal(h.jobs.length, 2);
 });
 
-test('N-1 (single process): an in-flight host enqueue demoted to unknown by our lookup is never turned into a new-key advice inside the window, and later settles to the one batch', async t => {
+test('N-1 (single process): an enqueue the host is still handling when its reply times out is waited for in the same call, and its one batch is the answer', async t => {
   const h = await realHost(t);
-  const clock = { t: 5_000_000 };
-  const { call, readRecipe } = await connect(t, h.bridge, { recipeQueue: { monotonicNow: () => clock.t } });
-  const prepared = ok(await call('prepare_recipe', t2i()));
   const inFlight = h.gateBackend();
+  // The settle sleeps advance fake time; after the second one the host's batch service is let go.
+  const clock = { t: 5_000_000 }, seen = [];
+  let sleeps = 0;
+  const { call } = await connect(t, h.bridge, { recipeQueue: { monotonicNow: () => clock.t, sleep: async ms => { clock.t += ms; if (++sleeps === 2) inFlight.release(); await new Promise(resolve => setTimeout(resolve, 2)); } } });
+  const prepared = ok(await call('prepare_recipe', t2i()));
   h.faults.enqueue_queue_recipes = 'timeout-host-continues';
-  const first = errorOf(await call('enqueue_recipes', { requestKey: 'portrait-1', items: [{ ...ref(prepared), seeds: [7] }] }));
-  assert.equal(first.code, 'queue_acceptance_unknown'); assert.match(first.message, /settle window about 130 seconds/);
-  await inFlight.inside; // the host wrote the receipt with its args and is waiting on the backend
-  const advice = [];
-  for (const step of [5_000, 60_000, 60_000]) {
-    clock.t += step;
-    const look = ok(await call('lookup_enqueue', { requestKey: 'portrait-1' }));
-    assert.equal(look.status, 'unknown', 'the lookup demoted the in-flight receipt, exactly as in the reviewer probe');
-    advice.push(look.settlement);
-    assert.equal(look.settlement.newKeyAdvised, false); assert.doesNotMatch(look.instruction, /NEW requestKey/);
-  }
-  assert.deepEqual(advice.map(value => value.retryAfterSeconds), [130, 70, 10]);
-  inFlight.release(); await Promise.allSettled(h.background);
-  clock.t += 10_000;
-  const settled = ok(await call('lookup_enqueue', { requestKey: 'portrait-1' }));
-  assert.equal(settled.status, 'enqueued'); assert.equal(settled.settlement, undefined);
+  const observe = h.bridge.call;
+  h.bridge.call = async (method, args, signal) => { const result = await observe(method, args, signal); if (method === 'lookup_queue_request') seen.push(result.inFlight); return result; };
+  const settled = ok(await call('enqueue_recipes', { requestKey: 'portrait-1', items: [{ ...ref(prepared), seeds: [7] }] }));
+  assert.equal(settled.status, 'enqueued'); assert.equal(settled.reconciled, true); assert.equal(settled.settled.resends, 0, 'nothing was sent again while the host worked on it');
+  assert.equal(seen[1], true, 'the first settle lookup saw the enqueue in flight');
+  await Promise.allSettled(h.background);
   assert.equal(h.jobs.length, 1, 'no duplicate batch'); assert.deepEqual(h.jobs.map(entry => entry.args.seeds), [[7]]);
+  assert.equal(h.count('enqueue_queue_recipes'), 1);
 });
 
-test('N-1 (two processes): a second server that meets the in-flight unknown waits the full window and then sees the single accepted batch', async t => {
+test('N-1 (two processes): a second server that meets the in-flight enqueue sends the same plan, which the host answers with the single batch once the first finishes', async t => {
   const h = await realHost(t);
-  const clock = { t: 9_000_000 };
-  const A = await connect(t, h.bridge, { recipeQueue: { monotonicNow: () => clock.t } });
-  const B = await connect(t, h.bridge, { recipeQueue: { monotonicNow: () => clock.t } });
+  const A = await connect(t, h.bridge), B = await connect(t, h.bridge);
   const prepared = ok(await A.call('prepare_recipe', t2i()));
   const plan = { requestKey: 'shared-intent', items: [{ ...ref(prepared), seeds: [7] }] };
   const inFlight = h.gateBackend();
   const pendingA = A.call('enqueue_recipes', plan);
   await inFlight.inside;
-  clock.t += 5_000;
-  const b1 = errorOf(await B.call('enqueue_recipes', plan));
-  assert.equal(b1.code, 'queue_acceptance_unknown'); assert.equal(b1.details.enqueueSent, false);
-  const bl = ok(await B.call('lookup_enqueue', { requestKey: 'shared-intent' }));
-  assert.equal(bl.status, 'unknown'); assert.deepEqual(bl.settlement, { state: 'settling', retryAfterSeconds: 130, unknownObservedForSeconds: 0, newKeyAdvised: false });
-  clock.t += 100_000;
-  assert.equal(ok(await B.call('lookup_enqueue', { requestKey: 'shared-intent' })).settlement.newKeyAdvised, false);
-  inFlight.release(); await pendingA;
-  clock.t += 40_000;
-  const settled = ok(await B.call('lookup_enqueue', { requestKey: 'shared-intent' }));
-  assert.equal(settled.status, 'enqueued'); assert.equal(settled.batch.batchId, h.jobs[0].job.batchId);
-  assert.equal(h.jobs.length, 1, 'no duplicate batch');
+  const look = ok(await B.call('lookup_enqueue', { requestKey: 'shared-intent' }));
+  assert.equal(look.status, 'unknown'); assert.equal(look.inFlight, true); assert.equal(look.settlement.newKeyAdvised, false);
+  // B's dispatch reaches the host while A's enqueue still runs there (A is let go just before it).
+  h.faults.enqueue_queue_recipes = { before: async () => { inFlight.release(); } };
+  const pendingB = B.call('enqueue_recipes', plan);
+  const [a, b] = (await Promise.all([pendingA, pendingB])).map(ok);
+  assert.equal(a.status, 'enqueued'); assert.equal(b.status, 'enqueued'); assert.equal(b.batch.batchId, a.batch.batchId);
+  assert.equal(h.jobs.length, 1, 'no duplicate batch'); assert.equal(h.count('enqueue_queue_recipes'), 2);
 });
 
-test('p3 A: the settle window runs on the monotonic clock; a wall-clock jump of one hour never advises a new key, only monotonic time past the window does', async t => {
-  const h = await realHost(t);
-  const wall = { t: 1_700_000_000_000 }, mono = { t: 50_000 };
-  const { call, readRecipe } = await connect(t, h.bridge, { recipeQueue: { now: () => wall.t, monotonicNow: () => mono.t } });
-  const prepared = ok(await call('prepare_recipe', t2i()));
-  h.backend.failNext = new Error('backend connection dropped');
-  assert.equal(errorOf(await call('enqueue_recipes', { requestKey: 'jump', items: [{ ...ref(prepared), seeds: [1] }] })).code, 'queue_acceptance_unknown');
-  const first = ok(await call('lookup_enqueue', { requestKey: 'jump' }));
-  assert.deepEqual(first.settlement, { state: 'settling', retryAfterSeconds: 130, unknownObservedForSeconds: 0, newKeyAdvised: false });
-  // Laptop sleep, NTP or a manual change: the wall clock jumps one hour, monotonic time does not move.
-  wall.t += 3_600_000;
-  const jumped = ok(await call('lookup_enqueue', { requestKey: 'jump' }));
-  assert.equal(jumped.status, 'unknown');
-  assert.deepEqual(jumped.settlement, { state: 'settling', retryAfterSeconds: 130, unknownObservedForSeconds: 0, newKeyAdvised: false });
-  assert.doesNotMatch(jumped.instruction, /NEW requestKey/);
-  // Host stuck beyond the window: monotonic time past the window still yields stale with a new-key advice.
-  mono.t += 130_000;
-  const stale = ok(await call('lookup_enqueue', { requestKey: 'jump' }));
-  assert.deepEqual(stale.settlement, { state: 'stale', unknownObservedForSeconds: 130, newKeyAdvised: true });
-  assert.match(stale.instruction, /NEW requestKey/);
-});
-
-nodeTest('p3 A: the default window clock ignores Date.now; only an injected monotonic clock or real elapsed time moves it', async t => {
+test('p3 A: the settle budget runs on the monotonic clock; a wall-clock jump never ends or lengthens it', async t => {
   const h = await realHost(t);
   // Date.now is replaced before the queue exists, so a default that captured Date.now would see the jump too.
   const realNow = Date.now, wall = { offset: 0 };
   Date.now = () => realNow() + wall.offset;
   try {
-    const queue = recipeQueue.createRecipeQueue({ bridge: h.bridge });
+    const queue = recipeQueue.createRecipeQueue({ bridge: h.bridge, settleBudgetMs: 300, pollMs: 20 });
     const prepared = await queue.prepare(t2i());
-    h.backend.failNext = new Error('backend connection dropped');
-    await assert.rejects(queue.enqueue({ requestKey: 'jump-default', items: [{ ...ref(prepared), seeds: [1] }] }), error => error.code === 'queue_acceptance_unknown');
-    assert.equal((await queue.lookup({ requestKey: 'jump-default' })).settlement.state, 'settling');
-    wall.offset = 3_600_000;
-    const jumped = await queue.lookup({ requestKey: 'jump-default' });
-    assert.equal(jumped.settlement.state, 'settling'); assert.equal(jumped.settlement.newKeyAdvised, false);
+    const stop = persistently(h, 'enqueue_queue_recipes', () => { wall.offset += 3_600_000; timeout(); });
+    const started = performance.now();
+    await assert.rejects(queue.enqueue({ requestKey: 'jump-default', items: [{ ...ref(prepared), seeds: [1] }] }), error => error.code === 'queue_acceptance_unknown' && error.details.settled.resends === recipeQueue.SETTLE_RESENDS);
+    stop();
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed >= 250 && elapsed < 5_000, `${elapsed} ms`);
   } finally { Date.now = realNow; }
   assert.throws(() => recipeQueue.createRecipeQueue({ bridge: h.bridge, monotonicNow: 5 }), /Invalid settle clock/);
+  assert.throws(() => recipeQueue.createRecipeQueue({ bridge: h.bridge, settleBudgetMs: -1 }), /Invalid settle clock/);
 });
 
-test('p3 B: after a restart (or from another process) a first not_found gets a full settle window; after the window a second not_found is clear', async t => {
+test('p3 B: after a restart (or from another process) a not_found is clear at once; a request that arrives late after all is reported enqueued', async t => {
   const h = await realHost(t);
-  const clock = { t: 7_000_000 };
-  const A = await connect(t, h.bridge, { recipeQueue: { monotonicNow: () => clock.t } });
+  const A = await connect(t, h.bridge);
   const prepared = ok(await A.call('prepare_recipe', t2i()));
   const plan = { requestKey: 'night-restart', items: [{ ...ref(prepared), seeds: [1] }] };
-  // The request times out on the way and has not reached the host; then the agent restarts.
-  h.faults.enqueue_queue_recipes = 'held';
-  assert.equal(errorOf(await A.call('enqueue_recipes', plan)).code, 'queue_acceptance_unknown');
-  const B = await connect(t, h.bridge, { recipeQueue: { monotonicNow: () => clock.t } });
+  // A dispatch held on the way while its server restarts: the new server has no memory of it.
+  h.faults.enqueue_queue_recipes = 'held'; h.faults.lookup_queue_request = 'lost-before-host';
+  const lost = errorOf(await A.call('enqueue_recipes', plan));
+  assert.equal(lost.code, 'timeout', 'the gate lookup failed, nothing was sent'); delete h.faults.enqueue_queue_recipes;
+  const B = await connect(t, h.bridge);
   const first = ok(await B.call('lookup_enqueue', { requestKey: 'night-restart' }));
-  assert.equal(first.status, 'not_found');
-  assert.deepEqual(first.settlement, { state: 'settling', retryAfterSeconds: 130, newKeyAdvised: false });
-  assert.match(first.instruction, /Resending the same plan with the same requestKey right now is safe \(the host deduplicates it\)/);
-  assert.match(first.instruction, /Before changing the plan or switching to a new requestKey, wait about 130 seconds and look up this same requestKey again/);
-  assert.match(first.instruction, /If it is still not_found after that, changing the plan or the requestKey is fine/);
-  // Looking again inside the window never shortens it.
-  clock.t += 60_000;
-  const inside = ok(await B.call('lookup_enqueue', { requestKey: 'night-restart' }));
-  assert.deepEqual(inside.settlement, { state: 'settling', retryAfterSeconds: 70, newKeyAdvised: false });
-  clock.t += 70_000;
-  const clear = ok(await B.call('lookup_enqueue', { requestKey: 'night-restart' }));
-  assert.equal(clear.status, 'not_found');
-  assert.deepEqual(clear.settlement, { state: 'clear', notFoundObservedForSeconds: 130, newKeyAdvised: false });
-  assert.match(clear.instruction, /Changing the plan or switching to a new requestKey is fine now/);
-  assert.match(clear.instruction, /can still be accepted late, which would duplicate the images; before switching keys you can check list_queue/);
-  // The same-process dispatch path keeps its behaviour: A dispatched the key, so its not_found carries A's dispatch window.
-  const own = ok(await A.call('lookup_enqueue', { requestKey: 'night-restart' }));
-  assert.equal(own.status, 'not_found'); assert.equal(own.settlement, undefined);
-  assert.match(own.instruction, /Before changing the plan, look up this same requestKey again; a different plan needs a different key/);
-  // A late arrival after all is reported as enqueued and resets the not_found clock.
-  await h.releaseHeld();
-  const late = ok(await B.call('lookup_enqueue', { requestKey: 'night-restart' }));
-  assert.equal(late.status, 'enqueued'); assert.equal(late.settlement, undefined);
+  assert.equal(first.status, 'not_found'); assert.deepEqual(first.settlement, { state: 'clear', newKeyAdvised: false });
+  assert.equal(ok(await B.call('enqueue_recipes', plan)).status, 'enqueued');
+  assert.equal(ok(await B.call('enqueue_recipes', plan)).status, 'already_enqueued');
+  assert.equal(ok(await A.call('lookup_enqueue', { requestKey: 'night-restart' })).status, 'enqueued');
   assert.equal(h.jobs.length, 1);
-});
-
-test('p3 B: resending the same plan under the same key inside a fresh not_found window is accepted once and not duplicated', async t => {
-  const h = await realHost(t);
-  const clock = { t: 3_000_000 };
-  const { call, readRecipe } = await connect(t, h.bridge, { recipeQueue: { monotonicNow: () => clock.t } });
-  const prepared = ok(await call('prepare_recipe', t2i()));
-  const look = ok(await call('lookup_enqueue', { requestKey: 'fresh-1' }));
-  assert.deepEqual(look.settlement, { state: 'settling', retryAfterSeconds: 130, newKeyAdvised: false });
-  const plan = { requestKey: 'fresh-1', items: [{ ...ref(prepared), seeds: [4] }] };
-  assert.equal(ok(await call('enqueue_recipes', plan)).status, 'enqueued');
-  assert.equal(ok(await call('enqueue_recipes', plan)).status, 'already_enqueued');
-  const after = ok(await call('lookup_enqueue', { requestKey: 'fresh-1' }));
-  assert.equal(after.status, 'enqueued'); assert.equal(after.settlement, undefined);
-  assert.equal(h.jobs.length, 1);
-  // A key this process already saw unknown (never dispatched here) keeps the existing not_found behaviour: no fresh window.
-  h.faults.lookup_queue_request = () => ({ batch: null, status: 'unknown' });
-  assert.equal(ok(await call('lookup_enqueue', { requestKey: 'seen-unknown' })).settlement.state, 'settling');
-  h.faults.lookup_queue_request = () => ({ batch: null });
-  for (const step of [0, 1_000]) {
-    clock.t += step;
-    const look = ok(await call('lookup_enqueue', { requestKey: 'seen-unknown' }));
-    assert.equal(look.status, 'not_found'); assert.equal(look.settlement, undefined);
-    assert.match(look.instruction, /Before changing the plan, look up this same requestKey again; a different plan needs a different key/);
-  }
 });
 
 /**
@@ -991,39 +974,26 @@ const receiptGate = () => {
   return { release, inside, restore: () => { fsp.link = realLink; fsp.open = realOpen; } };
 };
 
-test('p3 R1: a same-process lookup landing before the host records the plan makes the host abandon the dispatch; stale after the window, one batch under the new key', async t => {
+test('p3 R1: a lookup landing after the host published the receipt and before it recorded the plan no longer makes it abandon the dispatch: it reports inFlight, and the call settles to the one batch', async t => {
   const h = await realHost(t);
-  const clock = { t: 2_000_000 };
-  const { call, readRecipe } = await connect(t, h.bridge, { recipeQueue: { monotonicNow: () => clock.t } });
-  const prepared = ok(await call('prepare_recipe', t2i()));
-  const plan = key => ({ requestKey: key, items: [{ ...ref(prepared), seeds: [7] }] });
   const gate = receiptGate();
+  const clock = { t: 2_000_000 };
+  let sleeps = 0;
+  const { call } = await connect(t, h.bridge, { recipeQueue: { monotonicNow: () => clock.t, sleep: async ms => { clock.t += ms; if (++sleeps === 2) { gate.release(); } await new Promise(resolve => setTimeout(resolve, 2)); } } });
   try {
+    const prepared = ok(await call('prepare_recipe', t2i()));
     h.faults.enqueue_queue_recipes = 'timeout-host-continues';
-    assert.equal(errorOf(await call('enqueue_recipes', plan('race-1'))).code, 'queue_acceptance_unknown');
-    await gate.inside;
-    const look = ok(await call('lookup_enqueue', { requestKey: 'race-1' }));
-    assert.equal(look.status, 'unknown'); assert.equal(look.settlement.state, 'settling'); assert.equal(look.settlement.newKeyAdvised, false);
+    const settled = ok(await call('enqueue_recipes', { requestKey: 'race-1', items: [{ ...ref(prepared), seeds: [7] }] }));
+    assert.equal(settled.status, 'enqueued'); assert.equal(settled.reconciled, true); assert.equal(settled.settled.resends, 0);
   } finally { gate.release(); gate.restore(); }
   const [outcome] = await Promise.allSettled(h.background);
-  assert.equal(outcome.status, 'rejected'); assert.equal(outcome.reason.code, 'queue_storage_failed');
-  assert.equal(outcome.reason.message, recipeQueue.RECEIPT_TRANSITION_MESSAGE);
-  assert.equal(h.jobs.length, 0, 'the host abandoned the dispatch');
-  clock.t += 60_000;
-  assert.equal(ok(await call('lookup_enqueue', { requestKey: 'race-1' })).settlement.state, 'settling');
-  clock.t += 70_000;
-  const stale = ok(await call('lookup_enqueue', { requestKey: 'race-1' }));
-  assert.deepEqual(stale.settlement, { state: 'stale', unknownObservedForSeconds: 130, newKeyAdvised: true });
-  assert.equal(ok(await call('enqueue_recipes', plan('race-1b'))).status, 'enqueued');
-  assert.equal(ok(await call('lookup_enqueue', { requestKey: 'race-1' })).status, 'unknown', 'the abandoned receipt never changes');
-  assert.equal(h.jobs.length, 1);
+  assert.equal(outcome.status, 'fulfilled', 'the host finished its dispatch'); assert.equal(h.jobs.length, 1);
+  assert.equal(ok(await call('lookup_enqueue', { requestKey: 'race-1' })).status, 'enqueued');
 });
 
-test('p3 R2: another process looking up in that gap makes the host abandon the dispatch; the caller is told so, without a full-store or may-still-accept claim', async t => {
+test('p3 R2: another process looking up in that gap is told the enqueue is in flight; the first call finishes with its batch', async t => {
   const h = await realHost(t);
-  const clock = { t: 4_000_000 };
-  const A = await connect(t, h.bridge, { recipeQueue: { monotonicNow: () => clock.t } });
-  const B = await connect(t, h.bridge, { recipeQueue: { monotonicNow: () => clock.t } });
+  const A = await connect(t, h.bridge), B = await connect(t, h.bridge);
   const prepared = ok(await A.call('prepare_recipe', t2i()));
   const gate = receiptGate();
   let pendingA;
@@ -1031,19 +1001,36 @@ test('p3 R2: another process looking up in that gap makes the host abandon the d
     pendingA = A.call('enqueue_recipes', { requestKey: 'race-2', items: [{ ...ref(prepared), seeds: [7] }] });
     await gate.inside;
     const lookB = ok(await B.call('lookup_enqueue', { requestKey: 'race-2' }));
-    assert.equal(lookB.status, 'unknown'); assert.equal(lookB.settlement.newKeyAdvised, false);
+    assert.equal(lookB.status, 'unknown'); assert.equal(lookB.inFlight, true); assert.equal(lookB.settlement.state, 'settling'); assert.equal(lookB.settlement.newKeyAdvised, false);
   } finally { gate.release(); gate.restore(); }
-  const refusal = errorOf(await pendingA);
-  assert.equal(refusal.code, 'queue_storage_failed');
-  assert.equal(refusal.details.keyStatus, 'unknown'); assert.equal(refusal.details.abandoned, true); assert.equal(refusal.details.enqueueSent, true);
-  assert.match(refusal.message, /host abandoned this dispatch/); assert.match(refusal.message, /nothing was queued/);
-  assert.match(refusal.message, /reports stale, and then enqueue the same plan under a new requestKey/);
-  assert.doesNotMatch(refusal.message, /store is full|archiving|can still turn into accepted/);
-  assert.equal(ok(await A.call('lookup_enqueue', { requestKey: 'race-2' })).settlement.state, 'settling');
-  clock.t += 131_000;
-  assert.equal(ok(await A.call('lookup_enqueue', { requestKey: 'race-2' })).settlement.newKeyAdvised, true);
-  assert.equal(ok(await B.call('lookup_enqueue', { requestKey: 'race-2' })).settlement.newKeyAdvised, true);
-  assert.equal(h.jobs.length, 0);
+  const accepted = ok(await pendingA);
+  assert.equal(accepted.status, 'enqueued'); assert.equal(accepted.reconciled, undefined);
+  assert.equal(ok(await B.call('lookup_enqueue', { requestKey: 'race-2' })).status, 'enqueued');
+  assert.equal(h.jobs.length, 1);
+});
+
+test('p3 R3: a receipt left without its plan by a host that stopped in that gap (a crash) is started again by the same plan under the same key after a restart', async t => {
+  const h = await realHost(t);
+  const { call } = await connect(t, h.bridge);
+  const prepared = ok(await call('prepare_recipe', t2i()));
+  const gate = receiptGate(), key = recipeQueue.mcpHostRequestKey('crash-1');
+  let crashed;
+  try {
+    const pending = h.service.enqueue_queue_recipes({ requestKey: key, items: [{ ...ref(prepared), seed: 7 }], intervalSeconds: 0 });
+    await gate.inside;
+    // The app stops here: a copy of its data folder is what the next start finds.
+    crashed = join(h.base, 'after-crash'); await fsp.cp(h.runtimeDir, crashed, { recursive: true });
+    gate.release(); gate.restore();
+    await pending;
+  } finally { gate.release(); gate.restore(); }
+  const jobs = [];
+  const backend = { ready: Promise.resolve(), async enqueue(args) { const job = { batchId: randomUUID(), requestKey: args.requestKey, execution: args.execution, status: 'queued', count: args.count, intervalSeconds: args.intervalSeconds, originWorkspaceId: args.workspaceId, submittedRevision: args.expectedRevision, mode: args.mode, activeJobId: null, items: args.seeds.map((seed, index) => ({ index, status: 'queued', jobId: null, seed, results: [] })) }; jobs.push(job); return structuredClone(job); },
+    lookup: args => structuredClone(jobs.find(job => job.requestKey === args.requestKey) ?? null), list: () => ({ batches: jobs.map(job => structuredClone(job)) }), read: args => structuredClone(jobs.find(job => job.batchId === args.batchId)) };
+  const restarted = createQueueRecipeService({ runtimeDir: crashed, batch: backend, randomSeed: () => 777 });
+  assert.deepEqual(json(await restarted.lookup_queue_request({ requestKey: key })), { batch: null, status: 'unknown', inFlight: false, restartable: true });
+  const again = json(await restarted.enqueue_queue_recipes({ requestKey: key, items: [{ ...ref(prepared), seed: 7 }], intervalSeconds: 0 }));
+  assert.equal(again.requestKey, key); assert.equal(jobs.length, 1);
+  assert.equal(json(await restarted.lookup_queue_request({ requestKey: key })).status, 'accepted');
 });
 
 test('p3: a lookup that itself collides with a receipt transition says to look up the same key again later', async t => {
@@ -1052,7 +1039,7 @@ test('p3: a lookup that itself collides with a receipt transition says to look u
   h.faults.lookup_queue_request = { before: async () => { throw new BridgeError('queue_storage_failed', recipeQueue.RECEIPT_TRANSITION_MESSAGE); } };
   const failed = errorOf(await call('lookup_enqueue', { requestKey: 'collide' }));
   assert.equal(failed.code, 'queue_storage_failed');
-  assert.match(failed.message, /Only the lookup failed; nothing was sent\. Look up the same requestKey again in a few seconds; do not resend and do not switch keys/);
+  assert.match(failed.message, /Only the lookup failed; nothing was sent\. Look up the same requestKey again in a few seconds; do not switch keys/);
   assert.equal(failed.details.status, 'lookup_failed'); assert.equal(failed.details.instruction, 'Look up the same requestKey again later.');
   assert.equal(failed.details.requestKey, 'collide');
   // Any other lookup failure is passed through unchanged.
@@ -1073,29 +1060,6 @@ test('p3: a lookup that itself collides with a receipt transition says to look u
   const stray = errorOf(await call('enqueue_recipes', { requestKey: 'collide-4', items: [{ ...ref(prepared), seeds: [1] }] }));
   assert.match(stray.message, /runtime\/queue-recipes\/notes\.txt/); assert.doesNotMatch(stray.message, /store is full|archiving/);
   assert.equal(h.jobs.length, 0);
-});
-
-test('p3: any lookup result other than not_found resets the first-not_found clock of an unseen key', async t => {
-  const h = await realHost(t);
-  const clock = { t: 6_000_000 };
-  const A = await connect(t, h.bridge, { recipeQueue: { monotonicNow: () => clock.t } });
-  const B = await connect(t, h.bridge, { recipeQueue: { monotonicNow: () => clock.t } });
-  const prepared = ok(await A.call('prepare_recipe', t2i()));
-  assert.deepEqual(ok(await A.call('lookup_enqueue', { requestKey: 'reset-1' })).settlement, { state: 'settling', retryAfterSeconds: 130, newKeyAdvised: false });
-  // Another process enqueues the key; A sees it enqueued.
-  assert.equal(ok(await B.call('enqueue_recipes', { requestKey: 'reset-1', items: [{ ...ref(prepared), seeds: [1] }] })).status, 'enqueued');
-  clock.t += 100_000;
-  assert.equal(ok(await A.call('lookup_enqueue', { requestKey: 'reset-1' })).status, 'enqueued');
-  // If the host later answers not_found again, A starts a fresh full window instead of the 30 s left on the old one.
-  h.faults.lookup_queue_request = () => ({ batch: null });
-  assert.deepEqual(ok(await A.call('lookup_enqueue', { requestKey: 'reset-1' })).settlement, { state: 'settling', retryAfterSeconds: 130, newKeyAdvised: false });
-  // Same for a rejected answer.
-  assert.equal(ok(await A.call('lookup_enqueue', { requestKey: 'reset-2' })).settlement.retryAfterSeconds, 130);
-  clock.t += 100_000;
-  h.faults.lookup_queue_request = () => ({ batch: null, status: 'rejected', error: { code: 'invalid_argument', message: 'bad' } });
-  assert.equal(ok(await A.call('lookup_enqueue', { requestKey: 'reset-2' })).status, 'rejected');
-  h.faults.lookup_queue_request = () => ({ batch: null });
-  assert.deepEqual(ok(await A.call('lookup_enqueue', { requestKey: 'reset-2' })).settlement, { state: 'settling', retryAfterSeconds: 130, newKeyAdvised: false });
 });
 
 test('N-4: the unknown-receipt queue check scans the whole host queue, not just the first 8 batches', async t => {
@@ -1149,7 +1113,7 @@ test('F3: explicit host storage refusals are definite, not unknown; the unused k
   assert.equal(put.code, 'queue_storage_failed'); assert.equal(put.details.putOutcome, 'rejected'); assert.equal(put.details.saved, false); assert.match(put.message, /store is full \(16384 records or 512 MiB\)/);
   const refused = errorOf(await call('enqueue_recipes', { requestKey: 'full-store', items: [{ ...ref(prepared), seeds: [1] }] }));
   assert.equal(refused.code, 'queue_storage_failed'); assert.equal(refused.details.status, 'rejected'); assert.equal(refused.details.keyStatus, 'not_found'); assert.equal(refused.details.enqueueSent, true);
-  assert.match(refused.message, /nothing was queued/); assert.match(refused.message, /only resend the same plan with the same requestKey/);
+  assert.match(refused.message, /nothing was queued/); assert.match(refused.message, /after fixing the cause, enqueue again with the same requestKey/);
   assert.equal(ok(await call('lookup_enqueue', { requestKey: 'full-store' })).status, 'not_found');
   assert.match(refused.message, /store is full \(16384 records or 512 MiB\)/);
   for (let index = 0; index < fillers.length; index += 256) await Promise.all(fillers.slice(index, index + 256).map(file => rm(file)));
@@ -1205,8 +1169,13 @@ test('F7: identity fields (requestKey, recipeId, inputHash, batchId…) come bac
   assert.equal(ok(await call('lookup_enqueue', { requestKey })).requestKey, requestKey);
   h.faults.enqueue_queue_recipes = 'reply-lost';
   const otherKey = 'retry password: hunter2 at /Users/Alice/x/y';
-  const unknown = errorOf(await call('enqueue_recipes', { requestKey: otherKey, items: [{ ...ref(prepared), seeds: [2] }] }));
-  assert.equal(unknown.code, 'queue_acceptance_unknown'); assert.equal(unknown.details.requestKey, otherKey);
+  const settled = ok(await call('enqueue_recipes', { requestKey: otherKey, items: [{ ...ref(prepared), seeds: [2] }] }));
+  assert.equal(settled.reconciled, true); assert.equal(settled.requestKey, otherKey); assert.equal(settled.items[0].recipeId, prepared.recipeId);
+  const stop = persistently(h, 'enqueue_queue_recipes', timeout);
+  const silentKey = 'silent token: v2 /Users/Alice/x/z';
+  const unknown = errorOf(await call('enqueue_recipes', { requestKey: silentKey, items: [{ ...ref(prepared), seeds: [4] }] }));
+  stop();
+  assert.equal(unknown.code, 'queue_acceptance_unknown'); assert.equal(unknown.details.requestKey, silentKey); assert.equal(unknown.details.hostRequestKey, recipeQueue.mcpHostRequestKey(silentKey));
   const conflict = errorOf(await call('enqueue_recipes', { requestKey, items: [{ ...ref(prepared), seeds: [3] }] }));
   assert.equal(conflict.details.requestKey, requestKey); assert.equal(conflict.details.existingBatch.batchId, accepted.batch.batchId);
 });
@@ -1246,8 +1215,14 @@ test('F8: stored-input comparison, lineage, single-sample, interval, lookup and 
   // Interval is part of the plan identity: at the gate and in the dispatch reply.
   assert.equal(ok(await call('enqueue_recipes', { requestKey: 'interval', items: [{ ...ref(prepared), seeds: [1] }] })).status, 'enqueued');
   assert.equal(errorOf(await call('enqueue_recipes', { requestKey: 'interval', intervalSeconds: 5, items: [{ ...ref(prepared), seeds: [1] }] })).code, 'request_conflict');
+  // A dispatch reply with another interval cannot confirm the plan: the lookup that follows decides (here: the real batch).
   h.faults.enqueue_queue_recipes = reply => ({ ...reply, intervalSeconds: 9 });
-  assert.equal(errorOf(await call('enqueue_recipes', { requestKey: 'interval-reply', intervalSeconds: 5, items: [{ ...ref(prepared), seeds: [1] }] })).code, 'queue_acceptance_unknown');
+  const intervalReply = ok(await call('enqueue_recipes', { requestKey: 'interval-reply', intervalSeconds: 5, items: [{ ...ref(prepared), seeds: [1] }] }));
+  assert.equal(intervalReply.reconciled, true); assert.equal(intervalReply.batch.intervalSeconds, 5);
+  const tamper = reply => { h.faults.lookup_queue_request = tamper; return { ...reply, batch: reply.batch && { ...reply.batch, intervalSeconds: 9 } }; };
+  h.faults.enqueue_queue_recipes = reply => ({ ...reply, intervalSeconds: 9 }); h.faults.lookup_queue_request = tamper;
+  const otherBatch = errorOf(await call('enqueue_recipes', { requestKey: 'interval-reply-2', intervalSeconds: 5, items: [{ ...ref(prepared), seeds: [1] }] }));
+  assert.equal(otherBatch.code, 'request_conflict'); delete h.faults.lookup_queue_request;
   // A lookup reply for another key and a read reply for another recipe/revision are refused.
   h.faults.lookup_queue_request = reply => ({ ...reply, batch: { ...reply.batch, requestKey: recipeQueue.mcpHostRequestKey('someone-else') } });
   assert.equal(errorOf(await call('lookup_enqueue', { requestKey: 'interval' })).code, 'invalid_response');

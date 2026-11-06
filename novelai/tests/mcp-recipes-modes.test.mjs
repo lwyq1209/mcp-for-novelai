@@ -230,7 +230,9 @@ async function realHost(t, { realBatch = false, frozenLimits = null, wrapStorage
 }
 
 async function connect(t, bridgeClient, { create = options => merged.createNovelAiMcpServer(options) } = {}) {
-  const server = create({ bridgeClient });
+  // 0.1.4: an unknown enqueue outcome is settled in the call; its sleeps advance a fake clock here instead of waiting.
+  const clock = { t: 0 };
+  const server = create({ bridgeClient, recipeQueue: { monotonicNow: () => clock.t, sleep: async ms => { clock.t += ms; } } });
   const client = new Client({ name: 'recipes-modes-test', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport); await client.connect(clientTransport);
@@ -606,7 +608,7 @@ test('P4 a put reply whose stored mode input, source, mask, mode or sample count
 });
 
 // ------------------------------------------------------------------------------------------------ P5
-test('P5 enqueue: mixed modes and post-processing seeds, counts or repeats are refused before dispatch and leave the key unused; image recipes freeze their source', async t => {
+test('P5 enqueue: mixed modes are refused before dispatch (key unused); post-processing seeds, counts or repeats are sent once, a fixed seed counts up; image recipes freeze their source', async t => {
   const h = await realHost(t);
   const { call, readRecipe } = await connect(t, h.bridge);
   const bytes = gradient(832, 1216), source = h.addHistory('history-p5', bytes, { width: 832, height: 1216 }), r = recipes(source);
@@ -623,22 +625,24 @@ test('P5 enqueue: mixed modes and post-processing seeds, counts or repeats are r
     assert.deepEqual(error.details.modes, [{ recipeId: i2i.recipeId, recipeRevision: 1, mode: 'i2i' }, { recipeId: upscale.recipeId, recipeRevision: 1, mode: 'upscale' }]);
     assert.match(error.message, /separate enqueue_recipes calls, each with its own requestKey/);
   });
-  await refused('up-seed', [{ ...ref(upscale), seeds: [5] }], error => { assert.equal(error.details.mode, 'upscale'); assert.match(error.message, /uses no seed/); });
-  await refused('up-count', [{ ...ref(upscale), count: 2 }]);
-  await refused('up-twice', [ref(upscale), ref(upscale)]);
-  await refused('dir-count', [{ ...ref(director), count: 3 }]);
   await refused('up-and-director', [ref(upscale), ref(director)], error => assert.deepEqual(error.details.modes.map(item => item.mode), ['upscale', 'director']));
-  await refused('i2i-fixed', [{ ...ref(i2i), count: 2 }], error => assert.match(error.message, /fixed seed/));
-  // The same keys work once the plan is right: nothing was recorded under them.
+  // The same key works once the plan is right: nothing was recorded under it.
   const mixedFixed = ok(await call('enqueue_recipes', { requestKey: 'mixed', items: [{ ...ref(i2i), seeds: [1, 2] }] }));
   assert.equal(mixedFixed.status, 'enqueued'); assert.deepEqual(mixedFixed.items.map(item => item.seed), [1, 2]);
+  // 0.1.4: a post-processing recipe with a seed, a count or listed twice is sent once (each image would be the same
+  // paid request); a fixed-seed i2i recipe for two images gets seed and seed + 1.
   const otherBytes = gradient(768, 1152), other = ok(await call('prepare_recipe', recipes(h.addHistory('history-p5-other', otherBytes, { width: 768, height: 1152 })).upscale()));
-  const up = ok(await call('enqueue_recipes', { requestKey: 'up-seed', items: [ref(upscale), ref(other)] }));
-  assert.equal(up.status, 'enqueued'); assert.deepEqual(up.items.map(item => item.seed), [null, null], 'post-processing images have no seed');
-  assert.equal(ok(await call('enqueue_recipes', { requestKey: 'dir-count', items: [ref(director)] })).status, 'enqueued');
+  const up = ok(await call('enqueue_recipes', { requestKey: 'up-seed', items: [{ ...ref(upscale), seeds: [5] }, ref(other), ref(upscale)] }));
+  assert.equal(up.status, 'enqueued'); assert.deepEqual(up.items.map(item => [item.recipeId, item.seed]), [[upscale.recipeId, null], [other.recipeId, null]], 'post-processing images have no seed');
+  const single = up.warnings.find(warning => warning.code === 'postprocess_single_image');
+  assert.deepEqual([single.recipeId, single.from, single.to], [upscale.recipeId, 2, 1]); assert.match(single.message, /sent once and its seeds are not used/);
+  const director3 = ok(await call('enqueue_recipes', { requestKey: 'dir-count', items: [{ ...ref(director), count: 3 }] }));
+  assert.equal(director3.batch.count, 1); assert.equal(director3.warnings[0].code, 'postprocess_single_image');
+  const fixed = ok(await call('enqueue_recipes', { requestKey: 'i2i-fixed', items: [{ ...ref(i2i), count: 2 }] }));
+  assert.deepEqual(fixed.items.map(item => item.seed), [1234, 1235]); assert.ok(fixed.warnings.some(warning => warning.code === 'fixed_seed_incremented'));
   // What the host froze: the source bytes the history reference points at (the batch no longer depends on the library).
   const frozen = h.jobs.map(entry => entry.args);
-  assert.deepEqual(frozen.map(args => args.mode), ['i2i', 'upscale', 'director']);
+  assert.deepEqual(frozen.map(args => args.mode), ['i2i', 'upscale', 'director', 'i2i']);
   assert.equal(frozen[0].snapshot.sourceImage.data, bytes.toString('base64'), 'one snapshot for one recipe, with the source bytes');
   assert.deepEqual(frozen[1].snapshots.map(snapshot => snapshot.sourceImage.data), [bytes.toString('base64'), otherBytes.toString('base64')], 'one snapshot per image for different recipes');
   assert.deepEqual(frozen[1].seeds, [0, 0], 'the host plans a placeholder seed for unseeded modes');
@@ -974,7 +978,7 @@ async function quietFrozenQueue(h, call, batchIds, dir) {
   }, 'the frozen queue to be quiet');
 }
 
-test('W2d the host refuses upscale/director seeds and repeats before writing a receipt; the MCP path never dispatches them; both leave the key unused', async t => {
+test('W2d the host refuses upscale/director seeds and repeats before writing a receipt (key unused); this server sends such a recipe once, without seeds', async t => {
   const h = await realHost(t, { realBatch: true, frozenLimits: {} });
   const { call, readRecipe } = await connect(t, h.bridge);
   const source = h.addHistory('history-w2d-post', gradient(832, 1216), { width: 832, height: 1216 }), r = recipes(source);
@@ -983,16 +987,16 @@ test('W2d the host refuses upscale/director seeds and repeats before writing a r
   for (const [label, items] of [['seed', [{ ...ref(upscale), seed: 5 }]], ['repeat', [ref(upscale), ref(upscale)]], ['director-seed', [{ ...ref(director), seed: 1 }]]]) {
     const requestKey = `host-${label}`, hostKey = recipeQueue.mcpHostRequestKey(requestKey);
     await assert.rejects(h.bridge.call('enqueue_queue_recipes', { requestKey: hostKey, items }), error => error.code === 'invalid_argument', label);
-    assert.deepEqual(json(await h.service.lookup_queue_request({ requestKey: hostKey })), { batch: null }, `${label}: no receipt was written`);
+    assert.deepEqual(json(await h.service.lookup_queue_request({ requestKey: hostKey })), { batch: null, inFlight: false }, `${label}: no receipt was written`);
     assert.equal(await exists(receiptFile(h, requestKey)), false, label);
     assert.equal(ok(await call('lookup_enqueue', { requestKey })).status, 'not_found', `${label}: the key is unused`);
   }
-  // Through this server: refused before dispatch, then the same key works for the right plan.
-  const before = h.count('enqueue_queue_recipes');
-  assert.equal(errorOf(await call('enqueue_recipes', { requestKey: 'host-seed', items: [{ ...ref(upscale), seeds: [5] }] })).code, 'invalid_arguments');
-  assert.equal(h.count('enqueue_queue_recipes'), before, 'never dispatched');
-  const accepted = ok(await call('enqueue_recipes', { requestKey: 'host-seed', items: [ref(upscale)] }));
+  // Through this server (0.1.4): the seed is dropped and the recipe sent once, with a warning; the host accepts that.
+  const accepted = ok(await call('enqueue_recipes', { requestKey: 'host-seed', items: [{ ...ref(upscale), seeds: [5] }] }));
   assert.equal(accepted.status, 'enqueued'); assert.deepEqual(accepted.items.map(item => item.seed), [null]);
+  assert.deepEqual(accepted.warnings.map(warning => warning.code), ['postprocess_single_image']);
+  const once = ok(await call('enqueue_recipes', { requestKey: 'host-repeat', items: [ref(director), { ...ref(director), count: 2 }] }));
+  assert.equal(once.batch.count, 1); assert.equal(once.count, 1); assert.deepEqual(once.warnings.map(warning => [warning.code, warning.from, warning.to]), [['postprocess_single_image', 3, 1]]);
 });
 
 test('W2d a full frozen queue is refused (queue_full) before the receipt: the MCP reports the key unused, without an unknown hold, and the same key enqueues once there is room', async t => {
@@ -1204,7 +1208,7 @@ test('frozen queue unreadable at load: a key without a receipt is refused before
   assert.equal(ok(await call('enqueue_recipes', kept)).status, 'already_enqueued');
 });
 
-test('refused(): details.status is rejected only when the confirming lookup finds not_found or a recorded rejection; otherwise it is unknown and the key is held until a lookup', async t => {
+test('refused(): details.status is rejected only when the confirming lookup finds not_found or a recorded rejection; otherwise it is unknown, and the same call settles it', async t => {
   const h = await realHost(t);
   const { call, readRecipe } = await connect(t, h.bridge);
   const t2i = ok(await call('prepare_recipe', { mode: 't2i', ...GEN, width: 832, height: 1216 }));
@@ -1222,13 +1226,9 @@ test('refused(): details.status is rejected only when the confirming lookup find
     assert.equal(refused.code, code, label); assert.equal(refused.details.keyStatus, keyStatus, label);
     assert.equal(refused.details.status, 'unknown', `${label}: not a confirmed rejection`); assert.equal(refused.details.enqueueSent, true);
     assert.match(refused.message, /lookup_enqueue/, label);
-    // Held: the same call sends nothing until a lookup clears it.
-    const sent = h.count('enqueue_queue_recipes');
-    const held = errorOf(await call('enqueue_recipes', plan));
-    assert.equal(held.code, 'queue_acceptance_unknown', `${label}: ${held.message}`); assert.equal(held.details.enqueueSent, false);
-    assert.equal(h.count('enqueue_queue_recipes'), sent, `${label}: nothing sent while held`);
+    // No hold (0.1.4): the lookup says nothing was recorded, and the same call again is safe and enqueues it.
     assert.equal(ok(await call('lookup_enqueue', { requestKey })).status, 'not_found', `${label}: the host never recorded it`);
-    assert.equal(ok(await call('enqueue_recipes', plan)).status, 'enqueued', `${label}: after the lookup the same key works`);
+    assert.equal(ok(await call('enqueue_recipes', plan)).status, 'enqueued', `${label}: the same key works`);
   }
   // A confirmed answer keeps status rejected: not_found (key unused) and a recorded rejection.
   h.faults.enqueue_queue_recipes = { before: storeFailed };

@@ -56,8 +56,8 @@ export function createToolContext({ bridgeClient = createAutostartBridge(createB
     roots: projectRoots(projectRoot),
     projectRootSource,
     tagOptions: Object.fromEntries(TAG_QUERY_OPTION_KEYS.filter(key => tagQuery?.[key] !== undefined).map(key => [key, tagQuery[key]])),
-    // One recipe queue per server: its unknown-outcome hold and settle clock are per process.
-    recipes: createRecipeQueue({ bridge, ...Object.fromEntries(['now', 'monotonicNow', 'settleMs'].filter(key => recipeQueue?.[key] !== undefined).map(key => [key, recipeQueue[key]])) }),
+    // One recipe queue per server: its per-key serialization is per process (tests may inject the settle clock).
+    recipes: createRecipeQueue({ bridge, ...Object.fromEntries(['monotonicNow', 'settleBudgetMs', 'pollMs', 'sleep'].filter(key => recipeQueue?.[key] !== undefined).map(key => [key, recipeQueue[key]])) }),
   };
 }
 
