@@ -29,7 +29,7 @@ export type DraftGroup = 'model' | 'prompt' | 'style' | 'chars' | 'refs' | 'size
 
 const PARAM_GROUP: Record<string, DraftGroup> = {
   model: 'model', positivePrompt: 'prompt', negativePrompt: 'prompt', stylePrompt: 'style', width: 'size', height: 'size',
-  seed: 'seed', seedMode: 'seed', fileNamePrefix: 'output',
+  seed: 'seed', seedMode: 'seed', fileNamePrefix: 'output', effort: 'model',
 };
 
 /** The group of one change field (as summarizeChanges names it: params.x, i2iParams.x, inpaintRecipe.x, a top-level key). */
@@ -74,7 +74,7 @@ export function fieldLabelKey(field: string): { key: UiStringKey; inpaint: boole
   return { key: KNOWN_FIELDS.has(head) ? known(head) : 'cv.f.other', inpaint: false, ...(KNOWN_FIELDS.has(head) ? {} : { name: head }) };
 }
 const KNOWN_FIELDS = new Set([
-  'positivePrompt', 'negativePrompt', 'stylePrompt', 'size', 'seed', 'model', 'steps', 'cfgScale', 'cfgRescale', 'sampler', 'noiseSchedule',
+  'positivePrompt', 'negativePrompt', 'stylePrompt', 'size', 'seed', 'model', 'effort', 'steps', 'cfgScale', 'cfgRescale', 'sampler', 'noiseSchedule',
   'ucPreset', 'qualityPreset', 'transparentBackground', 'variety', 'smea', 'fileNamePrefix', 'params', 'charCaptions', 'vibeImages',
   'preciseReferences', 'i2iParams', 'strength', 'noise', 'extraNoiseSeed', 'inpaintMask', 'inpaintModel', 'inpaintStrength', 'inpaintNoise',
   'inpaintPositivePrompt', 'inpaintRecipe', 'enhanceMagnitude', 'enhanceScale', 'upscaleScale', 'directorTool', 'augmentOptions', 'workbenchImage',

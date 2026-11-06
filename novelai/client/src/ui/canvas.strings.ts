@@ -458,6 +458,7 @@ export const CANVAS_STRINGS = {
   'cv.f.size': ['尺寸', 'Size'],
   'cv.f.seed': ['种子', 'Seed'],
   'cv.f.model': ['模型', 'Model'],
+  'cv.f.effort': ['生成档位（Effort）', 'Effort'],
   'cv.f.steps': ['步数', 'Steps'],
   'cv.f.cfgScale': ['引导', 'Guidance'],
   'cv.f.cfgRescale': ['引导缩放', 'Guidance rescale'],
