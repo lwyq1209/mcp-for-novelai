@@ -121,7 +121,7 @@ export const FROZEN_QUEUE_LIMITS = Object.freeze({ input: MAX_FROZEN_BATCH_INPUT
 /** Only batches the MCP server enqueued (its host keys start with `mcp-`, HOST_REQUEST_KEY_PREFIX in novelai/src/recipe-queue.mjs)
  * are compacted; a batch under any other key is left as it is. */
 export const FROZEN_COMPACTION_POLICY = Object.freeze({ requestKeyPrefix: 'mcp-', graceMs: 10 * 60 * 1000, unknownGraceMs: 7 * 24 * 60 * 60 * 1000 });
-const terminalStatus = (status: unknown) => status === 'succeeded' || status === 'cancelled' || status === 'blocked';
+const terminalStatus = (status: unknown) => status === 'succeeded' || status === 'partial' || status === 'cancelled' || status === 'blocked';
 /** Mirrors the compaction rule for callers that schedule it (unknown items wait longer). */
 export function frozenBatchCompactionDue(job: BatchJob): number | null {
   if (!terminalStatus(job.status) || typeof job.finishedAt !== 'string') return null;

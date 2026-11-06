@@ -43,7 +43,7 @@
 .qp-card-progress { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--ui-text-3); }
 .qp-card-progress .ui-progress { flex: 1; }
 .qp-flag { display: inline-flex; }
-.qp-flag--halted, .qp-flag--unknown { color: var(--ui-warn); }
+.qp-flag--unknown { color: var(--ui-warn); }
 .qp-flag--failed { color: var(--ui-danger); }
 .qp-status { gap: 5px; }
 

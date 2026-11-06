@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { batch, item } from './test-batch';
 import {
-  ETA_MIN_GAPS, QUEUE_ENDED_WINDOW, batchFlags, batchGroup, batchNotes, batchTitle, cancelImpact, defaultBatchId, etaMinutes,
+  ETA_MIN_GAPS, QUEUE_ENDED_WINDOW, STATUS_TEXT, STATUS_TONE, batchFlags, batchGroup, batchNotes, batchTitle, cancelImpact, defaultBatchId, etaMinutes,
   finishedImages, itemsTsv, queueList, queueStats, selectedBatchId, shortId, trackCompletion, type QueueBatch,
 } from './model';
 import { uiText } from '../ui/i18n';
@@ -18,10 +18,21 @@ describe('queue page model: groups, filter, ended window, selection', () => {
   // Host order: newest first.
   const all = [done, blocked, queuedNew, paused, queuedOld, running];
 
-  it('groups by status: running/pausing/cancelling, queued/paused, terminal (blocked is ended)', () => {
+  it('groups by status: running/pausing/cancelling, queued/paused, terminal (partial and the legacy blocked are ended)', () => {
     expect((['running', 'pausing', 'cancelling'] as const).map(batchGroup)).toEqual(['active', 'active', 'active']);
     expect((['queued', 'paused'] as const).map(batchGroup)).toEqual(['waiting', 'waiting']);
-    expect((['succeeded', 'cancelled', 'blocked'] as const).map(batchGroup)).toEqual(['ended', 'ended', 'ended']);
+    expect((['succeeded', 'partial', 'cancelled', 'blocked'] as const).map(batchGroup)).toEqual(['ended', 'ended', 'ended', 'ended']);
+  });
+  it('labels a partly done batch in both languages, in the warning tone, and lists it with the ended ones', () => {
+    expect(STATUS_TEXT.partial).toBe('q.s.partial');
+    expect(uiText('zh', STATUS_TEXT.partial)).toBe('部分完成');
+    expect(uiText('en', STATUS_TEXT.partial)).toBe('Partly done');
+    expect(STATUS_TONE.partial).toBe('warn');
+    const partial = batch('pp', 'partial', [item(0, 'succeeded'), item(1, 'failed'), item(2, 'succeeded')], { finishedAt: '2026-11-03T08:55:00.000Z' });
+    expect(partial.finishedAt).not.toBeNull();
+    expect(queueList([partial, ...all], 'ended').sections).toEqual([{ group: 'ended', batches: [partial, done, blocked] }]);
+    expect(queueList([partial, ...all], 'open').sections.flatMap(section => section.batches)).not.toContain(partial);
+    expect(batchFlags(partial)).toEqual(['failed']);
   });
   it('lists unfinished batches oldest first (queue order) and ended ones newest first; filters', () => {
     const list = queueList(all, 'all');
@@ -68,8 +79,8 @@ describe('queue page model: titles, flags, notes and the cancel impact', () => {
     expect(batchTitle(batch('a', 'queued', [], { mode: 'i2i' }), t)).toBe('图生图批次');
     expect(batchTitle(batch('a', 'queued', [], { mode: 'i2i' }), (key, params) => uiText('en', key, params))).toBe('Img2Img batch');
   });
-  it('flags an automatic pause, unknown results and failures', () => {
-    expect(batchFlags(batch('a', 'paused', [item(0, 'pending')], { error: { code: 'queue_halted', message: 'x' } }))).toEqual(['halted']);
+  it('flags unknown results and failures; a paused batch has no flag of its own (the queue never pauses one itself)', () => {
+    expect(batchFlags(batch('a', 'paused', [item(0, 'pending')], { error: { code: 'queue_halted', message: 'x' } }))).toEqual([]);
     expect(batchFlags(batch('a', 'succeeded', [item(0, 'unknown'), item(1, 'failed')]))).toEqual(['unknown', 'failed']);
     expect(batchFlags(batch('a', 'succeeded', [item(0, 'succeeded')]))).toEqual([]);
   });
@@ -77,13 +88,18 @@ describe('queue page model: titles, flags, notes and the cancel impact', () => {
     const kinds = (value: QueueBatch) => batchNotes(value).map(note => [note.kind, note.testId ?? null, note.code ?? null]);
     expect(kinds(batch('r', 'running', [item(0, 'running')]))).toEqual([['pause', null, null]]);
     expect(kinds(batch('r', 'pausing', [item(0, 'running')]))).toEqual([['pause', null, null]]);
-    expect(kinds(batch('h', 'paused', [item(0, 'pending')], { error: { code: 'queue_halted', message: 'x' } }))).toEqual([['halted', 'queue-halted-h', 'queue_halted']]);
+    // A legacy reason left on a stored batch is shown as the host's reason, never as an automatic pause.
+    expect(kinds(batch('h', 'paused', [item(0, 'pending')], { error: { code: 'queue_halted', message: 'x' } }))).toEqual([['error', 'queue-error-h', 'queue_halted']]);
     expect(kinds(batch('p', 'paused', [item(0, 'pending')]))).toEqual([['paused', null, null]]);
     expect(kinds(batch('p', 'paused', [item(0, 'pending')], { error: { code: 'recovered_paused', message: 'x' } }))).toEqual([['error', 'queue-error-p', 'recovered_paused']]);
     const blocked = batchNotes(batch('b', 'blocked', [item(0, 'skipped')], { error: { code: 'recipe_source_missing', message: 'gone' } }));
     expect(blocked.map(note => [note.kind, note.tone, note.testId])).toEqual([['error', 'danger', 'queue-error-b']]);
     expect(kinds(batch('c', 'cancelling', [item(0, 'running')], { cancelRequested: true, error: { code: 'cancel_unconfirmed', message: 'x' } }))).toEqual([['cancelling', null, null], ['error', 'queue-error-c', 'cancel_unconfirmed']]);
-    const mixed = batchNotes(batch('m', 'succeeded', [item(0, 'succeeded'), item(1, 'unknown'), item(2, 'failed'), item(3, 'failed')]));
+    // A partly done batch: its unknown and failed images, no batch reason; one ended early says why, as a warning.
+    const partial = batchNotes(batch('pp', 'partial', [item(0, 'failed', { error: { code: 'rate_limited', message: 'x' } }), item(1, 'succeeded')]));
+    expect(partial.map(note => [note.kind, note.tone, note.code])).toEqual([['failed', 'danger', 'rate_limited']]);
+    expect(batchNotes(batch('ps', 'partial', [item(0, 'succeeded'), item(1, 'skipped')], { error: { code: 'scheduler_stopped', message: 'x' } })).map(note => [note.kind, note.tone, note.code])).toEqual([['error', 'warn', 'scheduler_stopped']]);
+    const mixed = batchNotes(batch('m', 'partial', [item(0, 'succeeded'), item(1, 'unknown'), item(2, 'failed'), item(3, 'failed')]));
     expect(mixed.map(note => [note.kind, note.testId, note.count])).toEqual([['unknown', 'queue-unknown-m', 1], ['failed', 'queue-failed-m', 2]]);
     expect(mixed[1].item?.index).toBe(2);
     expect(kinds(batch('q', 'queued', [item(0, 'pending')]))).toEqual([['queued', null, null]]);

@@ -11,7 +11,7 @@ import { queueActions, type QueueAction } from '../workspace/queue-monitor';
 import { ItemGrid } from './ItemGrid';
 import { StatusTag, enqueuedText, isAgentBatch, sourceLabel } from './QueueList';
 import {
-  ACTION_SETTLE_MS, STATUS_TEXT, actionStateKey, batchCounts, batchNotes, batchProject, batchProjectId, batchTitle, cancelImpact, isHalted, itemsTsv, modeLabelKey,
+  ACTION_SETTLE_MS, QUEUE_ACTIONS_CONFIRMED, STATUS_TEXT, actionStateKey, batchCounts, batchNotes, batchProject, batchProjectId, batchTitle, cancelImpact, itemsTsv, modeLabelKey,
   progressTone, shortId, type BatchNote, type QueueBatch,
 } from './model';
 import { isBatchTerminal } from '../workspace/batch-types';
@@ -27,7 +27,7 @@ export interface BatchDetailProps {
   lang: UiLang;
   language: AppLanguage;
   /** Tests: render the cancel confirmation open. */
-  initialConfirm?: boolean | 'cancel' | 'resume';
+  initialConfirm?: boolean | 'cancel';
   /** The page chose this batch by itself (default or fallback): the buttons settle first, as after a state change. */
   settleOnMount?: boolean;
   /** The batch's project is still being read (seen through an event only): never shown as 无. */
@@ -44,8 +44,8 @@ const ACTION: Record<QueueAction, { label: 'q.pause' | 'q.resume' | 'q.cancel'; 
 export function BatchDetail({ api, batch, hasToken, eta, onAction, t, lang, language, initialConfirm = false, settleOnMount = false, projectPending = false }: BatchDetailProps) {
   const [busy, setBusy] = useState<QueueAction | null>(null);
   const [failure, setFailure] = useState<unknown>(null);
-  // The confirmation open now: cancel, or resuming a batch the queue paused itself (queue_halted).
-  const [confirming, setConfirming] = useState<'cancel' | 'resume' | null>(initialConfirm === true ? 'cancel' : initialConfirm || null);
+  // The confirmation open now: only cancel asks first (resuming a paused batch is a plain action, like pause).
+  const [confirming, setConfirming] = useState<'cancel' | null>(initialConfirm ? 'cancel' : null);
   // Said in place when a confirmation closed itself because the batch changed meanwhile.
   const [closedNote, setClosedNote] = useState<'' | 'ended' | 'changed'>('');
   const alive = useRef(true);
@@ -55,7 +55,6 @@ export function BatchDetail({ api, batch, hasToken, eta, onAction, t, lang, lang
   const title = batchTitle(batch, t);
   const project = batchProject(batch);
   const projectId = batchProjectId(batch);
-  const halted = isHalted(batch) && batch.status === 'paused';
 
   // After the batch's state or its buttons change, the buttons stay off for ACTION_SETTLE_MS and the change is said
   // beside them (review rework 4b2 P1): a click aimed at 暂停后续 never lands on the 继续 that took its place.
@@ -84,13 +83,12 @@ export function BatchDetail({ api, batch, hasToken, eta, onAction, t, lang, lang
   }, [stateKey, busy]);
 
   // A confirmation whose question no longer applies closes itself and says why: the batch ended (nothing was
-  // cancelled or resumed), or it is no longer paused by the queue's stop protection.
+  // cancelled), or cancel is no longer offered.
   useEffect(() => {
     if (!confirming || busy) return;
     if (isBatchTerminal(batch.status)) { setConfirming(null); setClosedNote('ended'); }
     else if (confirming === 'cancel' && !actions.includes('cancel')) { setConfirming(null); setClosedNote('changed'); }
-    else if (confirming === 'resume' && !halted) { setConfirming(null); setClosedNote('changed'); }
-  }, [batch.status, stateKey, confirming, busy, halted]);
+  }, [batch.status, stateKey, confirming, busy]);
 
   const run = async (action: QueueAction) => {
     setBusy(action); setFailure(null); setClosedNote('');
@@ -101,8 +99,7 @@ export function BatchDetail({ api, batch, hasToken, eta, onAction, t, lang, lang
   const press = (action: QueueAction) => {
     if (settling || busy) return;
     setClosedNote('');
-    if (action === 'cancel') setConfirming('cancel');
-    else if (action === 'resume' && halted) setConfirming('resume');
+    if (QUEUE_ACTIONS_CONFIRMED.includes(action)) setConfirming('cancel');
     else void run(action);
   };
   const openCheck = () => openInLibrary({ view: projectId ? { type: 'project', id: `history:${projectId}` } : { type: 'category', category: 'history' } });
@@ -123,7 +120,7 @@ export function BatchDetail({ api, batch, hasToken, eta, onAction, t, lang, lang
             // review rework 4b2): a native disabled would drop the focus to the page. No token is a lasting state: disabled.
             return <Button key={action} variant={spec.variant} icon={spec.icon} busy={busy === action} disabled={action === 'resume' && !hasToken}
               softDisabled={busy !== null || settling}
-              title={action === 'pause' ? t('q.pauseTip') : action === 'resume' ? (hasToken ? t(halted ? 'q.resumeHaltedTip' : 'q.resumeTip') : t('q.resumeNoToken')) : undefined}
+              title={action === 'pause' ? t('q.pauseTip') : action === 'resume' ? (hasToken ? t('q.resumeTip') : t('q.resumeNoToken')) : undefined}
               data-testid={`queue-${action}-${batch.batchId}`} data-queue-action={action}
               onClick={() => press(action)}>{t(spec.label)}</Button>;
           })}
@@ -169,22 +166,6 @@ export function BatchDetail({ api, batch, hasToken, eta, onAction, t, lang, lang
       <ConfirmBatchLine batch={batch} t={t} />
       <CancelConfirmText batch={batch} t={t} />
     </Dialog>
-    <Dialog open={confirming === 'resume'} onClose={() => { if (!busy) setConfirming(null); }} title={t('q.resumeHalted.title')} tone="warn" icon="play" busy={busy === 'resume'}
-      footer={<>
-        <Button onClick={() => setConfirming(null)} disabled={busy === 'resume'}>{t('q.resumeHalted.keep')}</Button>
-        <Button variant="primary" busy={busy === 'resume'} disabled={!halted || !hasToken} onClick={() => void run('resume')} data-testid="queue-resume-confirm">{t('q.resumeHalted.confirm')}</Button>
-      </>}>
-      <ConfirmBatchLine batch={batch} t={t} />
-      <ResumeHaltedText t={t} />
-    </Dialog>
-  </div>;
-}
-
-/** What resuming a batch the queue paused itself means: the stop protection is lifted for later agent batches. */
-export function ResumeHaltedText({ t }: { t: UiText }) {
-  return <div className="qp-confirm" data-testid="queue-resume-halted-text">
-    <p className="qp-confirm-charge"><Icon name="alert" size={14} />{t('q.resumeHalted.body')}</p>
-    <p>{t('q.resumeHalted.recipes')}</p>
   </div>;
 }
 
@@ -206,7 +187,7 @@ export function CancelConfirmText({ batch, t }: { batch: QueueBatch; t: UiText }
 }
 
 const NOTE_ICON: Record<BatchNote['kind'], IconName> = {
-  pause: 'info', paused: 'pause', queued: 'clock', cancelling: 'stop', halted: 'pause', error: 'alert', unknown: 'alert', failed: 'x',
+  pause: 'info', paused: 'pause', queued: 'clock', cancelling: 'stop', error: 'alert', unknown: 'alert', failed: 'x',
 };
 
 /** One in-place note: what happened + what next, the raw code in small monospace after it. */
@@ -217,7 +198,6 @@ export function BatchNoteView({ note, t, language, onCheck }: { note: BatchNote;
     case 'paused': text = t('q.note.paused'); break;
     case 'queued': text = t('q.note.queued'); break;
     case 'cancelling': text = t('q.note.cancelling'); break;
-    case 'halted': text = t('q.note.halted'); break;
     case 'unknown': text = t('q.note.unknown', { n: note.count ?? 0 }); break;
     case 'failed': {
       const reason = note.item?.error ? hostErrorText(note.item.error, language) : '';

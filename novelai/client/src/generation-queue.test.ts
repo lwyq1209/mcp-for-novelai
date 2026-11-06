@@ -115,7 +115,8 @@ describe("manual generation in the window", () => {
     h.batch(batchOf("b1", 1, "running", [], 0));
     const error = { code: "generation_failed", message: "Image generation failed (HTTP 400): Prompt too long.", reason: "generation.failed_t2i", params: { status: 400, httpZh: "（HTTP 400）", httpEn: " (HTTP 400)", detail: "Prompt too long." } };
     h.item({ batchId: "b1", requestKey: "manual-b1", itemIndex: 0, mode: "t2i", status: "failed", items: [], actualSeed: null, error });
-    h.batch({ ...batchOf("b1", 1, "blocked", ["failed"]), error: { code: "child_stopped", message: "x" } });
+    // The batch ends partly done (2026-12: a failed image no longer stops it with a batch reason).
+    h.batch(batchOf("b1", 1, "partial", ["failed"]));
     await waitUntil(() => expect(toasts.filter(([, key]) => key === "manual-settled:b1")).toHaveLength(2));
     stop();
     // Every toast of this click carries the key, so the toast host shows them as one (Toast.tsx replaces in place).

@@ -77,13 +77,16 @@ export function nextActiveBatch(batches: readonly QueueBatch[], shownId: string 
 
 /** What decides a detail's buttons: its status, whether a cancel is requested, and the buttons offered. */
 export const actionStateKey = (batch: Pick<BatchJob, 'status' | 'cancelRequested'>, actions: readonly string[]) => `${batch.status}|${batch.cancelRequested ? 1 : 0}|${actions.join(',')}`;
+/** The actions that ask first: only cancel (it may stop a charged image). Resume is plain, like pause: the queue never
+ * pauses a batch by itself any more, so resuming lifts nothing but the user's own pause. */
+export const QUEUE_ACTIONS_CONFIRMED: readonly string[] = ['cancel'];
 /** Buttons stay off this long after the batch's state (or its buttons) changed, so a click aimed at the old button
  * never lands on the new one (review rework 4b2 P1). */
 export const ACTION_SETTLE_MS = 600;
 
 /** Capture runs (capture-fixture.ts BATCHES): the batch each queue scene shows. */
 export const CAPTURE_SELECTION: Partial<Record<CaptureRequest['page'], string>> = {
-  queue: 'b1', 'shell-queue': 'b1', 'queue-halted': 'b4', 'queue-unknown': 'b7', 'queue-blocked': 'b5', 'queue-failed': 'b8',
+  queue: 'b1', 'shell-queue': 'b1', 'queue-partial': 'b7', 'queue-unknown': 'b7', 'queue-blocked': 'b5', 'queue-failed': 'b8',
 };
 export const captureShowsEmpty = (capture: CaptureRequest | null | undefined) => capture?.page === 'queue-empty';
 
@@ -111,11 +114,11 @@ export function queueStats(batches: readonly QueueBatch[], now: Date = new Date(
 // ── Labels ─────────────────────────────────────────────────────────────────
 export const STATUS_TEXT: Record<BatchStatus, UiStringKey> = {
   queued: 'q.s.queued', running: 'q.s.running', pausing: 'q.s.pausing', paused: 'q.s.paused', cancelling: 'q.s.cancelling',
-  succeeded: 'q.s.succeeded', cancelled: 'q.s.cancelled', blocked: 'q.s.blocked',
+  succeeded: 'q.s.succeeded', partial: 'q.s.partial', cancelled: 'q.s.cancelled', blocked: 'q.s.blocked',
 };
 export type StatusTone = 'neutral' | 'agent' | 'ok' | 'warn' | 'danger';
 export const STATUS_TONE: Record<BatchStatus, StatusTone> = {
-  queued: 'neutral', running: 'agent', pausing: 'warn', paused: 'warn', cancelling: 'warn', succeeded: 'ok', cancelled: 'neutral', blocked: 'danger',
+  queued: 'neutral', running: 'agent', pausing: 'warn', paused: 'warn', cancelling: 'warn', succeeded: 'ok', partial: 'warn', cancelled: 'neutral', blocked: 'danger',
 };
 export const MODE_TEXT: Record<BatchMode, UiStringKey> = { t2i: 'mode.t2i', i2i: 'mode.i2i', inpaint: 'mode.inpaint', enhance: 'mode.enhance', upscale: 'mode.upscale', director: 'mode.director' };
 export const MODE_ICON: Record<BatchMode, IconName> = { t2i: 'sparkle', i2i: 'image', inpaint: 'brush', enhance: 'wand', upscale: 'expand', director: 'palette' };
@@ -148,12 +151,10 @@ export function batchCounts(batch: QueueBatch) {
   const pending = batch.items.filter(item => NOT_STARTED.includes(item.status)).length;
   return { ...progress, inFlight, pending, ended: progress.succeeded + progress.failed + progress.unknown + progress.cancelled + progress.skipped };
 }
-export const isHalted = (batch: Pick<BatchJob, 'error'>) => batch.error?.code === 'queue_halted';
-export type BatchFlag = 'halted' | 'unknown' | 'failed';
-/** The small marks beside a card's progress: an automatic pause, unknown results, failures. */
+export type BatchFlag = 'unknown' | 'failed';
+/** The small marks beside a card's progress: unknown results, failures. */
 export function batchFlags(batch: QueueBatch): BatchFlag[] {
   const counts = batchCounts(batch), flags: BatchFlag[] = [];
-  if (isHalted(batch) && batch.status === 'paused') flags.push('halted');
   if (counts.unknown > 0) flags.push('unknown');
   if (counts.failed > 0) flags.push('failed');
   return flags;
@@ -164,24 +165,24 @@ export function progressTone(batch: QueueBatch): 'agent' | 'accent' | 'warn' {
 }
 
 // ── Notes ──────────────────────────────────────────────────────────────────
-export type NoteKind = 'pause' | 'paused' | 'queued' | 'cancelling' | 'halted' | 'error' | 'unknown' | 'failed';
+export type NoteKind = 'pause' | 'paused' | 'queued' | 'cancelling' | 'error' | 'unknown' | 'failed';
 export type NoteTone = 'neutral' | 'agent' | 'warn' | 'danger';
 export interface BatchNote { kind: NoteKind; tone: NoteTone; testId?: string; code?: string; count?: number; item?: BatchItem; error?: BatchJob['error'] }
 /**
- * The notes of a batch detail, in order: what the state means and what to do next. The host's own stop reason (other
- * than queue_halted, which has its own wording) is shown through hostErrorText with its code.
+ * The notes of a batch detail, in order: what the state means and what to do next. The host's own batch reason is
+ * shown through hostErrorText with its code; a failed or unknown image never pauses or stops anything else, so it
+ * only shows in the unknown/failed notes.
  */
 export function batchNotes(batch: QueueBatch): BatchNote[] {
   const notes: BatchNote[] = [];
   const counts = batchCounts(batch);
-  const halted = isHalted(batch);
   if (batch.status === 'running' && !batch.cancelRequested) notes.push({ kind: 'pause', tone: 'neutral' });
   else if (batch.status === 'pausing') notes.push({ kind: 'pause', tone: 'warn' });
   else if (batch.status === 'cancelling' || (batch.cancelRequested && !isBatchTerminal(batch.status))) notes.push({ kind: 'cancelling', tone: 'warn' });
   else if (batch.status === 'queued') notes.push({ kind: 'queued', tone: 'neutral' });
-  else if (batch.status === 'paused' && !halted && !batch.error) notes.push({ kind: 'paused', tone: 'warn' });
-  if (halted) notes.push({ kind: 'halted', tone: 'warn', testId: `queue-halted-${batch.batchId}`, code: 'queue_halted' });
-  else if (batch.error) notes.push({ kind: 'error', tone: batch.status === 'blocked' ? 'danger' : 'warn', testId: `queue-error-${batch.batchId}`, code: plain(batch.error.code) || undefined, error: batch.error });
+  else if (batch.status === 'paused' && !batch.error) notes.push({ kind: 'paused', tone: 'warn' });
+  // Only a legacy blocked batch stopped because of its reason; any other (partial included) went on regardless.
+  if (batch.error) notes.push({ kind: 'error', tone: batch.status === 'blocked' ? 'danger' : 'warn', testId: `queue-error-${batch.batchId}`, code: plain(batch.error.code) || undefined, error: batch.error });
   if (counts.unknown > 0) notes.push({ kind: 'unknown', tone: 'warn', testId: `queue-unknown-${batch.batchId}`, count: counts.unknown, item: batch.items.find(item => item.status === 'unknown') });
   if (counts.failed > 0) {
     const item = batch.items.find(item => item.status === 'failed');

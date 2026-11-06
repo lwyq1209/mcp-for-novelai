@@ -13,9 +13,12 @@ const batch = (batchId: string, status: BatchJob["status"], items: BatchItem[], 
   createdAt: "2026-11-02T10:00:00.000Z", updatedAt: "2026-11-02T10:00:00.000Z", finishedAt: null, error: null, cancelRequested: status === "cancelling", items, ...extra });
 
 const RUNNING = batch("run-1", "running", [item(0, "succeeded"), item(1, "running")]);
-const HALTED = batch("halt-2", "paused", [item(0, "pending")], { error: { code: "queue_halted", message: "前一批次失败或结果未知；后续批次暂停，需检查后显式恢复。" } });
+// A batch the user paused (the queue never pauses one by itself any more).
+const PAUSED = batch("pause-2", "paused", [item(0, "pending")], { pausedBy: "user" });
+// Stored by an older version, which stopped a batch at its first unsuccessful image; still read.
 const BLOCKED = batch("block-3", "blocked", [item(0, "succeeded"), item(1, "unknown", { error: { code: "queue_acceptance_unknown", message: "unknown" } }), item(2, "skipped")], { finishedAt: "2026-11-02T10:05:00.000Z", error: { code: "child_unknown", message: "子任务结果未知，批次已停止。" } });
-const FAILED = batch("fail-4", "succeeded", [item(0, "succeeded"), item(1, "failed")], { finishedAt: "2026-11-02T10:06:00.000Z" });
+// Ran to its end past a failed image: partly done.
+const FAILED = batch("fail-4", "partial", [item(0, "failed", { error: { code: "rate_limited", message: "HTTP 429" } }), item(1, "succeeded")], { finishedAt: "2026-11-02T10:06:00.000Z" });
 
 function port(handlers: Partial<Record<string, (args: any) => any>> = {}) {
   const listeners = new Set<(batch: BatchJob) => void>();
@@ -42,25 +45,25 @@ describe("queue monitor", () => {
   });
 
   it("lists with list_queue and routes pause, resume and cancel to the host queue methods with only the batchId", async () => {
-    const h = port({ list_queue: () => ({ batches: [RUNNING, HALTED], storage: {} }), pause_queue: ({ batchId }) => ({ ...RUNNING, batchId, status: "pausing", updatedAt: "2026-11-02T10:01:00.000Z" }),
-      resume_queue: ({ batchId }) => ({ ...HALTED, batchId, status: "queued", error: null, updatedAt: "2026-11-02T10:02:00.000Z" }), cancel_queue: ({ batchId }) => ({ ...RUNNING, batchId, status: "cancelling", cancelRequested: true, updatedAt: "2026-11-02T10:03:00.000Z" }) });
+    const h = port({ list_queue: () => ({ batches: [RUNNING, PAUSED], storage: {} }), pause_queue: ({ batchId }) => ({ ...RUNNING, batchId, status: "pausing", updatedAt: "2026-11-02T10:01:00.000Z" }),
+      resume_queue: ({ batchId }) => ({ ...PAUSED, batchId, status: "queued", error: null, updatedAt: "2026-11-02T10:02:00.000Z" }), cancel_queue: ({ batchId }) => ({ ...RUNNING, batchId, status: "cancelling", cancelRequested: true, updatedAt: "2026-11-02T10:03:00.000Z" }) });
     const monitor = createQueueMonitor(h);
     const remove = monitor.connect();
     await waitUntil(() => expect(monitor.getView().loaded).toBe(true));
     expect(h.call).toHaveBeenCalledWith("list_queue", {});
-    expect(monitor.getView().batches.map(value => value.batchId)).toEqual(["run-1", "halt-2"]);
+    expect(monitor.getView().batches.map(value => value.batchId)).toEqual(["run-1", "pause-2"]);
     await monitor.pause("run-1");
-    await monitor.resume("halt-2");
+    await monitor.resume("pause-2");
     await monitor.cancel("run-1");
-    expect(h.call.mock.calls.slice(1)).toEqual([["pause_queue", { batchId: "run-1" }], ["resume_queue", { batchId: "halt-2" }], ["cancel_queue", { batchId: "run-1" }]]);
-    expect(monitor.getView().batches.map(value => [value.batchId, value.status])).toEqual([["run-1", "cancelling"], ["halt-2", "queued"]]);
+    expect(h.call.mock.calls.slice(1)).toEqual([["pause_queue", { batchId: "run-1" }], ["resume_queue", { batchId: "pause-2" }], ["cancel_queue", { batchId: "run-1" }]]);
+    expect(monitor.getView().batches.map(value => [value.batchId, value.status])).toEqual([["run-1", "cancelling"], ["pause-2", "queued"]]);
     // Host events: a later state replaces, an earlier one is ignored, a new batch comes first.
     h.emit({ ...RUNNING, status: "cancelled", updatedAt: "2026-11-02T10:04:00.000Z" });
     h.emit({ ...RUNNING, status: "running", updatedAt: "2026-11-02T10:00:30.000Z" });
     h.emit({ ...FAILED, batchId: "new-5" });
-    expect(monitor.getView().batches.map(value => [value.batchId, value.status])).toEqual([["new-5", "succeeded"], ["run-1", "cancelled"], ["halt-2", "queued"]]);
+    expect(monitor.getView().batches.map(value => [value.batchId, value.status])).toEqual([["new-5", "partial"], ["run-1", "cancelled"], ["pause-2", "queued"]]);
     remove();
-    h.emit({ ...HALTED, status: "succeeded", updatedAt: "2026-11-02T11:00:00.000Z" });
+    h.emit({ ...PAUSED, status: "succeeded", updatedAt: "2026-11-02T11:00:00.000Z" });
     expect(monitor.getView().batches[2].status).toBe("queued");
   });
 
@@ -132,10 +135,10 @@ describe("queue monitor", () => {
     expect(queueActions({ status: "running", cancelRequested: false })).toEqual(["pause", "cancel"]);
     expect(queueActions({ status: "pausing", cancelRequested: false })).toEqual(["cancel"]);
     expect(queueActions({ status: "paused", cancelRequested: false })).toEqual(["resume", "cancel"]);
-    for (const status of ["cancelling", "succeeded", "cancelled", "blocked"] as const) expect(queueActions({ status, cancelRequested: status === "cancelling" })).toEqual([]);
+    for (const status of ["cancelling", "succeeded", "partial", "cancelled", "blocked"] as const) expect(queueActions({ status, cancelRequested: status === "cancelling" })).toEqual([]);
     expect(queueProgress(BLOCKED)).toEqual({ total: 3, succeeded: 1, failed: 0, unknown: 1, cancelled: 0, skipped: 1, images: 1 });
-    expect(queueRunning([HALTED, BLOCKED])).toBe(false);
-    expect(queueRunning([HALTED, RUNNING])).toBe(true);
+    expect(queueRunning([PAUSED, BLOCKED])).toBe(false);
+    expect(queueRunning([PAUSED, RUNNING])).toBe(true);
     expect(queueRunning([{ ...RUNNING, status: "pausing" }])).toBe(true);
   });
 });

@@ -320,7 +320,7 @@ describe('manual generation through the shared queue', () => {
     await h.settled();
     expect(fixture.post.mock.calls.map(urlOf).filter(url => url.endsWith('/ai/upscale'))).toHaveLength(2);
     const modes = (await h.listed()).map(value => [value.mode, value.status]);
-    expect(modes).toEqual([['upscale', 'succeeded'], ['inpaint', 'succeeded'], ['inpaint', 'blocked'], ['i2i', 'succeeded']]);
+    expect(modes).toEqual([['upscale', 'succeeded'], ['inpaint', 'succeeded'], ['inpaint', 'partial'], ['i2i', 'succeeded']]);
     expect((await h.listed()).every(value => value.source?.kind === 'manual')).toBe(true);
     expect(useAppStore.getState().currentImage?.id).toBe(fixture.history.at(-1).id);
   });

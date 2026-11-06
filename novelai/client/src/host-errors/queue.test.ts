@@ -6,9 +6,34 @@ const placeholders = (text: string) => [...text.matchAll(/\{([A-Za-z][A-Za-z0-9]
 
 describe("host errors in the interface language (step 4a)", () => {
   it("a batch state renders by its code, also a stored one whose message is still Chinese", () => {
-    const stored = { code: "queue_halted", message: "前一批次失败或结果未知；后续批次暂停，需检查后显式恢复。" };
-    expect(hostErrorText(stored, "en-US")).toBe("An earlier batch failed or has an unknown result; the agent batches after it are paused until you resume them.");
-    expect(hostErrorText(stored, "zh-CN")).toBe("前一批次失败或结果未知；之后的 Agent 批次已暂停，核对后可显式继续。");
+    const stored = { code: "scheduler_stopped", message: "队列调度遇到异常，已停止后续提交；请核对已生成的图片。" };
+    expect(hostErrorText(stored, "en-US")).toBe("An internal error of the queue ended this batch early; its remaining images were skipped. Other batches are not affected; check the images already created.");
+    expect(hostErrorText(stored, "zh-CN")).toBe("队列内部出错，这个批次提前结束，剩下的图片没有生成；其他批次不受影响。请核对已生成的图片。");
+    // A legacy automatic pause stays readable, worded as the past: the queue no longer pauses other batches.
+    const halted = { code: "queue_halted", message: "前一批次失败或结果未知；后续批次暂停，需检查后显式恢复。" };
+    expect(hostErrorText(halted, "en-US")).toBe("An older version paused this batch after an earlier batch failed or had an unknown result; the queue no longer pauses other batches for that.");
+    expect(hostErrorText(halted, "zh-CN")).toBe("旧版本在前一批失败或结果未知后暂停了这个批次；现在的队列不会因此暂停其他批次。");
+  });
+
+  it("an image's own outcome says the batch went on, in both languages, and never that the queue stopped or paused", () => {
+    const codes = ["rate_limited", "child_lookup_failed", "child_status_unavailable", "scheduler_error", "submission_unconfirmed", "restart_unconfirmed"];
+    for (const code of codes) {
+      const zh = hostErrorText({ code, message: "untranslated host message" }, "zh-CN"), en = hostErrorText({ code, message: "untranslated host message" }, "en-US");
+      expect(QUEUE_ERROR_TEXTS[code], code).toBeDefined();
+      expect(zh, code).toMatch(/[\u4e00-\u9fff]/);
+      expect(en, code).not.toMatch(/[\u4e00-\u9fff]/);
+      expect(en, code).not.toBe("untranslated host message");
+      expect(`${zh} ${en}`, code).not.toMatch(/批次已停止|停止后续|后续批次暂停|stopped submitting|the batch stopped|paused until/);
+    }
+    for (const code of ["rate_limited", "child_lookup_failed", "child_status_unavailable", "scheduler_error"]) {
+      expect(QUEUE_ERROR_TEXTS[code]["zh-CN"], code).toContain("批次接着出后面的图");
+      expect(QUEUE_ERROR_TEXTS[code]["en-US"], code).toContain("the batch went on");
+    }
+    expect(hostErrorText({ code: "rate_limited", message: "x" }, "en-US")).toContain("HTTP 429");
+    expect(hostErrorText({ code: "rate_limited", message: "x" }, "zh-CN")).toContain("约 60 秒");
+    expect(hostErrorText({ code: "child_status_unavailable", message: "x" }, "zh-CN")).toContain("约 90 秒");
+    // The legacy reasons of old stopped batches stay readable.
+    for (const code of ["child_stopped", "child_rejected", "restart_blocked", "recovered_paused"]) expect(hostErrorText({ code, message: "旧" }, "en-US"), code).toMatch(/older version/);
   });
 
   it("the frozen queue and the recipe store name the entry they do not use", () => {

@@ -25,7 +25,7 @@ const origin = (capturedAt: number): CanvasOrigin => ({ workspaceId: 'novelai-wi
 
 async function runtime() { const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'nai-queue-retention-'))); cleanups.push(() => fs.rm(dir, { recursive: true, force: true })); return dir; }
 type Host = Awaited<ReturnType<typeof host>>;
-/** `outcome` decides each image: succeeded at once (default), unknown (the batch blocks) or held (busy). */
+/** `outcome` decides each image: succeeded at once (default), unknown (the batch ends partial) or held (busy). */
 async function host({ runtimeDir: given, days = 30 as number | null }: { runtimeDir?: string; days?: number | null } = {}) {
   const runtimeDir = given ?? await runtime();
   const state = { busy: false, clock: Date.now(), submitted: 0, days, outcome: 'succeeded' as 'succeeded' | 'unknown', removed: [] as string[] };
@@ -129,25 +129,25 @@ describe('queue retention: cleaning ended agent batches', () => {
     expect(await h.exists(h.receiptFile('mcp-never'))).toBe(true); expect(await h.tombstoneLines()).toEqual([]);
   });
 
-  it('never cleans a queued, running or paused batch however old; a blocked or cancelled one only past the period', async () => {
+  it('never cleans a queued, running or paused batch however old; a partial or cancelled one only past the period', async () => {
     const h = await host(), now = Date.now();
-    const blocked = await (async () => { h.state.outcome = 'unknown'; const recipe = await h.put('blocked'); const accepted = await h.enqueue('mcp-blocked', [item(recipe, 1), item(recipe, 2)]); await h.settled(accepted.batchId, 'blocked'); h.state.outcome = 'succeeded'; return accepted; })();
+    const partial = await (async () => { h.state.outcome = 'unknown'; const recipe = await h.put('partial'); const accepted = await h.enqueue('mcp-partial', [item(recipe, 1), item(recipe, 2)]); await h.settled(accepted.batchId, 'partial'); h.state.outcome = 'succeeded'; return accepted; })();
     h.state.busy = true;
-    // The blocked batch halted the agent batches behind it: the next one is saved paused; resuming it lifts the halt.
+    // The partial batch paused nothing: the next one is queued as usual.
     const queued = await h.enqueue('mcp-queued', [item(await h.put('queued'), 1)]);
-    expect(queued).toMatchObject({ status: 'paused', error: { code: 'queue_halted' } });
-    await h.service.resume_queue({ batchId: queued.batchId });
+    expect(queued).toMatchObject({ status: 'queued', error: null });
     const cancelled = await h.enqueue('mcp-cancelled', [item(await h.put('cancelled'), 1)]); await h.service.cancel_queue({ batchId: cancelled.batchId }); await h.settled(cancelled.batchId, 'cancelled');
     const paused = await h.enqueue('mcp-paused', [item(await h.put('paused'), 1)]); await h.service.pause_queue({ batchId: paused.batchId });
     h.state.clock = now + 10 * DAY;
-    expect(await h.service.runRetention(), 'blocked and cancelled ended less than 30 days ago').toMatchObject({ cleaned: 0 });
+    expect(await h.service.runRetention(), 'partial and cancelled ended less than 30 days ago').toMatchObject({ cleaned: 0 });
     h.state.clock = now + 1000 * DAY;
     expect(await h.service.runRetention()).toMatchObject({ cleaned: 2 });
     expect((await h.service.list_queue({})).batches.map((value: any) => value.status).sort()).toEqual(['paused', 'queued']);
-    expect(await h.service.lookup_queue_request({ requestKey: 'mcp-blocked' })).toMatchObject({ batch: { batchId: blocked.batchId, status: 'blocked', cleaned: true, itemCounts: { unknown: 1, skipped: 1 }, error: { code: 'child_stopped' } } });
+    expect(await h.service.lookup_queue_request({ requestKey: 'mcp-partial' })).toMatchObject({ batch: { batchId: partial.batchId, status: 'partial', cleaned: true, itemCounts: { unknown: 2, skipped: 0 }, error: null } });
     expect(await h.service.lookup_queue_request({ requestKey: 'mcp-cancelled' })).toMatchObject({ batch: { batchId: cancelled.batchId, status: 'cancelled', cleaned: true, itemCounts: { cancelled: 1 } } });
     for (const [key, batch] of [['mcp-paused', paused], ['mcp-queued', queued]] as const) expect((await h.service.lookup_queue_request({ requestKey: key })).batch).toMatchObject({ batchId: batch.batchId, status: key === 'mcp-paused' ? 'paused' : 'queued' });
-    expect(h.state.submitted).toBe(1);
+    // Both images of the partial batch were sent once each; nothing of the others.
+    expect(h.state.submitted).toBe(2);
   });
 
   it('never cleans a manual batch (the window\'s own, kept only while the app runs)', async () => {
@@ -371,18 +371,18 @@ describe('recovery from the library (review rework 2): records rolled back or re
   const recordFiles = (runtimeDir: string) => ({ dir: path.join(runtimeDir, QUEUE_TOMBSTONE_FILE.directory), anchorDir: path.join(runtimeDir, 'queue-cleaned-anchor') });
   const copyRecords = async (runtimeDir: string, to: string) => { const { dir, anchorDir } = recordFiles(runtimeDir); await fs.cp(dir, path.join(to, 'a'), { recursive: true }); await fs.cp(anchorDir, path.join(to, 'b'), { recursive: true }); };
   const putRecords = async (runtimeDir: string, from: string) => { const { dir, anchorDir } = recordFiles(runtimeDir); await fs.rm(dir, { recursive: true, force: true }); await fs.rm(anchorDir, { recursive: true, force: true }); await fs.cp(path.join(from, 'a'), dir, { recursive: true }); await fs.cp(path.join(from, 'b'), anchorDir, { recursive: true }); };
-  /** Batches a, b (2 images each) and z (no image: blocked) cleaned first; n (2 images) cleaned later. */
+  /** Batches a, b (2 images each) and z (no image: partial) cleaned first; n (2 images) cleaned later. */
   async function cleanedHistory() {
     const h = await host(), a = await endedBatch(h, 'mcp-a'), b = await endedBatch(h, 'mcp-b');
-    h.state.outcome = 'unknown'; const zRecipe = await h.put('recipe of z'); const z = await h.enqueue('mcp-z', [item(zRecipe, 5)]); await h.settled(z.batchId, 'blocked'); h.state.outcome = 'succeeded';
+    h.state.outcome = 'unknown'; const zRecipe = await h.put('recipe of z'); const z = await h.enqueue('mcp-z', [item(zRecipe, 5)]); await h.settled(z.batchId, 'partial'); h.state.outcome = 'succeeded';
     // The first cleaning (a, b, z); the records as they were then are kept (T0).
     h.state.clock = Math.max(a.finishedAt, b.finishedAt, await h.finishedAt(z.batchId)) + 31 * DAY;
     await h.service.runRetention();
     const t0 = await fs.mkdtemp(path.join(os.tmpdir(), 'nai-records-t0-')); cleanups.push(() => fs.rm(t0, { recursive: true, force: true }));
     await copyRecords(h.runtimeDir, t0);
-    // n afterwards (the blocked z halted the agent queue: n is saved paused and resumed), cleaned by a second cleaning.
+    // n afterwards (it runs at once: z paused nothing), cleaned by a second cleaning.
     const nRecipe = await h.put('recipe of n'), nAccepted = await h.enqueue('mcp-n', [item(nRecipe, 10), item(nRecipe, 11)]);
-    await h.service.resume_queue({ batchId: nAccepted.batchId }); await h.settled(nAccepted.batchId);
+    await h.settled(nAccepted.batchId);
     const n = { recipe: nRecipe, batch: nAccepted, finishedAt: await h.finishedAt(nAccepted.batchId) };
     h.state.clock = n.finishedAt + 31 * DAY; await h.service.runRetention();
     expect((await h.tombstoneLines()).filter(line => line.kind === 'batch').map(line => line.batchId).sort()).toEqual([a.batch.batchId, b.batch.batchId, z.batchId, n.batch.batchId].sort());

@@ -34,11 +34,13 @@ export const QUEUE_STRINGS = {
   'q.s.paused': ['已暂停', 'Paused'],
   'q.s.cancelling': ['取消中', 'Cancelling'],
   'q.s.succeeded': ['已完成', 'Done'],
+  // partial: the batch ran to its end, but some images failed or have an unknown result (none is resent).
+  'q.s.partial': ['部分完成', 'Partly done'],
   'q.s.cancelled': ['已取消', 'Cancelled'],
-  'q.s.blocked': ['已阻断', 'Blocked'],
+  // blocked: only batches stored by older versions, which stopped a batch at its first unsuccessful image.
+  'q.s.blocked': ['已中止', 'Stopped'],
   'q.flag.unknown': ['结果未知', 'Unknown result'],
   'q.flag.failed': ['有图片失败', 'Some images failed'],
-  'q.flag.halted': ['自动暂停', 'Paused itself'],
 
   // ── Batch title, meta and progress ────────────────────────────────────────
   'q.src.manualRun': ['手动 · 本次运行', 'Manual · this run'],
@@ -70,12 +72,6 @@ export const QUEUE_STRINGS = {
   'q.cancel.confirm': ['取消批次', 'Cancel batch'],
   'q.cancel.keep': ['不取消', 'Keep it'],
   // Review rework (4b2 P1): confirmations name their batch and close themselves when the batch changed meanwhile.
-  'q.resumeHaltedTip': ['这个批次是队列自动暂停的，继续前会先请你确认', 'The queue paused this batch itself; you confirm before it resumes'],
-  'q.resumeHalted.title': ['继续这个自动暂停的批次？', 'Resume this batch the queue paused?'],
-  'q.resumeHalted.body': ['前一批失败或结果未知（可能已扣费）。继续会解除自动暂停保护，之后新入队的 Agent 批次也会直接开始。', 'An earlier batch failed or has an unknown result (it may have been charged). Resuming lifts the automatic pause, so agent batches enqueued after this start right away too.'],
-  'q.resumeHalted.recipes': ['失败或结果未知的图片不会重发。', 'Failed or unknown images are not resent.'],
-  'q.resumeHalted.confirm': ['继续并解除保护', 'Resume and lift the pause'],
-  'q.resumeHalted.keep': ['先不继续', 'Not now'],
   'q.confirmClosedEnded': ['确认框打开期间这个批次已经结束，没有执行操作。', 'This batch ended while the confirmation was open; nothing was done.'],
   'q.confirmClosedChanged': ['确认框打开期间这个批次的状态变了，没有执行操作。', 'This batch changed while the confirmation was open; nothing was done.'],
   'q.actsLabel': ['批次操作', 'Batch actions'],
@@ -91,7 +87,6 @@ export const QUEUE_STRINGS = {
   'q.note.paused': ['已暂停。点「继续」接着出图。', 'Paused. Resume to continue.'],
   'q.note.queued': ['排在队列里，轮到它时自动开始。', 'Waiting in the queue; it starts on its turn.'],
   'q.note.cancelling': ['正在取消：正在生成的那一张结束后批次停下。', 'Cancelling: the batch stops once the current image ends.'],
-  'q.note.halted': ['前一批失败或结果未知，这个批次自动暂停了。核对后再点「继续」。', 'An earlier batch failed or has an unknown result, so this batch paused itself. Check it, then resume.'],
   'q.note.unknown': ['{n} 张结果未知，可能已出图并扣费。不会自动重发；重做之前，请先在素材库里核对这个批次出的图。', '{n} images have an unknown result and may have been generated and charged. They won’t be resent; before redoing them, check this batch’s images in the library.'],
   'q.note.unknown.one': ['{n} 张结果未知，可能已出图并扣费。不会自动重发，请先在素材库里核对。', '{n} image has an unknown result and may have been generated and charged. It won’t be resent; check the library first.'],
   'q.note.failed': ['{n} 张失败，不会自动重试。', '{n} images failed and won’t be retried.'],

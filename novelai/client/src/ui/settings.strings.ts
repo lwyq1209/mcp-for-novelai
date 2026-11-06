@@ -135,8 +135,8 @@ export const SETTINGS_STRINGS = {
   'set.q.invalid': ['{n} 个批次的记录没通过校验，保留原样，没有清理。', '{n} batches failed the record check and were kept as they are.'],
   'set.q.invalid.one': ['{n} 个批次的记录没通过校验，保留原样，没有清理。', '{n} batch failed the record check and was kept as it is.'],
   'set.q.rules': ['固定规则', 'Fixed rules'],
-  'set.q.r1': ['一张图失败或结果未知时，后面的 Agent 批次自动暂停，等你核对。', 'When an image fails or its result is unknown, later agent batches pause until you check.'],
-  'set.q.r2': ['失败或结果未知的图不会自动重发。', 'Failed or unknown images are never resent automatically.'],
+  'set.q.r1': ['一张图失败或结果未知时只标记这一张，批次接着出后面的图，其他批次不受影响。', 'A failed or unknown image marks only that image; its batch goes on with the rest, and other batches are not affected.'],
+  'set.q.r2': ['失败或结果未知的图不会自动重发；只有 NovelAI 回复请求过多（没有出图）时，会在约 60 秒内自动再发。', 'Failed or unknown images are never resent automatically; only when NovelAI answers that there are too many requests (nothing was generated) is the image sent again for about 60 seconds.'],
   'set.q.r3': ['磁盘上限：每批 64 MiB，整个队列 512 MiB。', 'Disk limits: 64 MiB per batch, 512 MiB for the whole queue.'],
 
   // ── Canvas ────────────────────────────────────────────────────────────────

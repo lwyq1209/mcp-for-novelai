@@ -1,5 +1,5 @@
 import type { AssetItem, AssetKind } from '../asset-library/types';
-import type { BatchItem, BatchJob, BatchMode, BatchSource, BatchStatus } from '../workspace/batch-types';
+import { isBatchTerminal, type BatchItem, type BatchJob, type BatchMode, type BatchSource, type BatchStatus } from '../workspace/batch-types';
 import type { MaterialComponent, MaterialEntry, MaterialTarget } from '../workspace/material-library-types';
 import type { LibraryApi } from './api';
 import type { DeleteReceipt, ReceiptRow, TrashEntry, TrashPage } from './impacts';
@@ -133,16 +133,19 @@ const ARTISTS: Array<[string, ArtTheme]> = [
   ['artist:shirokuma', 'studio'], ['artist:tokyo-ame', 'rain'], ['artist:kissa', 'cafe'], ['artist:shiori', 'library'],
 ];
 
-// Queue batches (data.js BATCHES); day: 0 today, 1 yesterday, 2 = Nov 1 of the prototype.
-const BATCHES: Array<{ id: string; status: BatchStatus; agent: AgentKey; group: string; mode: BatchMode; total: number; done: number; failed: number; unknown: number; interval: number; day: number; time: string; halted?: boolean }> = [
+// Queue batches (data.js BATCHES); day: 0 today, 1 yesterday, 2 = Nov 1 of the prototype. layout (optional) places the
+// ended images one letter each: s succeeded, u unknown (unconfirmed submission), U unknown (status unreadable), f
+// failed (refused), r failed (rate limited); without it the succeeded come first, then unknown, then failed.
+const BATCHES: Array<{ id: string; status: BatchStatus; agent: AgentKey; group: string; mode: BatchMode; total: number; done: number; failed: number; unknown: number; interval: number; day: number; time: string; layout?: string; pausedBy?: 'user' }> = [
   { id: 'b1', status: 'running', agent: 'claude', group: 'cafe', mode: 't2i', total: 12, done: 7, failed: 0, unknown: 0, interval: 0, day: 0, time: '17:28' },
   { id: 'b2', status: 'queued', agent: 'manual', group: 'manual', mode: 't2i', total: 4, done: 0, failed: 0, unknown: 0, interval: 0, day: 0, time: '17:41' },
   { id: 'b3', status: 'queued', agent: 'codex', group: 'rooftop', mode: 'i2i', total: 6, done: 0, failed: 0, unknown: 0, interval: 2, day: 0, time: '17:43' },
-  { id: 'b4', status: 'paused', halted: true, agent: 'pi', group: 'styletest', mode: 't2i', total: 8, done: 0, failed: 0, unknown: 0, interval: 0, day: 0, time: '16:50' },
+  { id: 'b4', status: 'paused', pausedBy: 'user', agent: 'pi', group: 'styletest', mode: 't2i', total: 8, done: 0, failed: 0, unknown: 0, interval: 0, day: 0, time: '16:50' },
   { id: 'b5', status: 'blocked', agent: 'claude', group: 'cafe', mode: 'inpaint', total: 2, done: 0, failed: 0, unknown: 0, interval: 0, day: 0, time: '16:31' },
   { id: 'b6', status: 'succeeded', agent: 'codex', group: 'rooftop', mode: 't2i', total: 3, done: 3, failed: 0, unknown: 0, interval: 0, day: 0, time: '11:17' },
-  { id: 'b7', status: 'succeeded', agent: 'pi', group: 'styletest', mode: 't2i', total: 8, done: 7, failed: 0, unknown: 1, interval: 0, day: 1, time: '22:10' },
-  { id: 'b8', status: 'succeeded', agent: 'cursor', group: 'summer', mode: 't2i', total: 5, done: 3, failed: 2, unknown: 0, interval: 1, day: 2, time: '15:18' },
+  // A batch that went on past an unreadable image and a rate-limited one (queue-partial, queue-unknown).
+  { id: 'b7', status: 'partial', agent: 'pi', group: 'styletest', mode: 't2i', total: 8, done: 6, failed: 1, unknown: 1, interval: 0, day: 1, time: '22:10', layout: 'sssUsrss' },
+  { id: 'b8', status: 'partial', agent: 'cursor', group: 'summer', mode: 't2i', total: 5, done: 3, failed: 2, unknown: 0, interval: 1, day: 2, time: '15:18' },
   { id: 'b9', status: 'cancelled', agent: 'manual', group: 'manual', mode: 'upscale', total: 1, done: 0, failed: 0, unknown: 0, interval: 0, day: 2, time: '13:00' },
 ];
 const GROUP_BATCH: Record<string, string> = { cafe: 'b1', rooftop: 'b6', styletest: 'b7', summer: 'b8' };
@@ -588,35 +591,43 @@ export function createCaptureFixture(lang: CaptureLang, now: Date, options: { ar
   const batches: BatchJob[] = BATCHES.map((value, b) => {
     const created = localDay(now, value.day, value.time).getTime();
     const images = historyByBatch(value.id);
-    const terminal = ['succeeded', 'cancelled', 'blocked'].includes(value.status);
+    const terminal = isBatchTerminal(value.status);
+    const layout = value.layout ?? `${'s'.repeat(value.done)}${'u'.repeat(value.unknown)}${'f'.repeat(value.failed)}`;
+    let shown = 0;
     const items: BatchItem[] = Array.from({ length: value.total }, (_, index) => {
       let status: BatchItem['status'] = 'pending';
-      if (index < value.done) status = 'succeeded';
-      else if (index < value.done + value.unknown) status = 'unknown';
-      else if (index < value.done + value.unknown + value.failed) status = 'failed';
+      const ended = layout[index];
+      if (ended === 's') status = 'succeeded';
+      else if (ended === 'u' || ended === 'U') status = 'unknown';
+      else if (ended === 'f' || ended === 'r') status = 'failed';
       else if (value.status === 'running' && index === value.done) status = 'running';
       else if (value.status === 'cancelled') status = 'cancelled';
-      else if (value.status === 'blocked' || value.status === 'succeeded') status = 'skipped';
+      else if (terminal) status = 'skipped';
       const plannedSeed = 2_000_000 + b * 10_007 + index * 131;
       const started = status !== 'pending' && status !== 'skipped' && status !== 'cancelled';
-      const image = status === 'succeeded' ? images[index] : undefined;
+      // The batch's images in order, also when an unsuccessful one sits between them.
+      const image = status === 'succeeded' ? images[shown++] : undefined;
       return {
         index, plannedSeed, actualSeed: status === 'succeeded' ? plannedSeed : null, requestKey: `fixture-${value.id}-${index}`,
         jobId: started ? `job-${value.id}-${index}` : null, status,
         results: status === 'succeeded' ? [{ index: 0, id: image?.id ?? `${value.id}-${index}`, width: image?.payload.width ?? 832, height: image?.payload.height ?? 1216, model: MODEL, actualSeed: plannedSeed }] : [],
-        error: status === 'failed' ? { code: 'provider_error', message: 'The provider refused the request.' } : status === 'unknown' ? { code: 'submission_unconfirmed', message: 'Whether the image was submitted could not be confirmed.' } : null,
+        error: ended === 'f' ? { code: 'provider_error', message: 'The provider refused the request.' }
+          : ended === 'r' ? { code: 'rate_limited', message: 'NovelAI answered HTTP 429 for about 60 seconds; the image was not generated.' }
+          : ended === 'u' ? { code: 'submission_unconfirmed', message: 'Whether the image was submitted could not be confirmed.' }
+          : ended === 'U' ? { code: 'child_status_unavailable', message: 'The running image could not be read for about 90 seconds.' } : null,
       };
     });
     const source: BatchSource = value.agent === 'manual' ? { kind: 'manual', persistent: false } : { kind: 'agent', client: { name: AGENT_CLIENTS[value.agent], version: null } };
     const finished = created + Math.max(1, value.done + value.failed + value.unknown) * MINUTE;
-    const error = value.halted ? { code: 'queue_halted', message: 'An earlier batch failed or has an unknown result; the agent batches after it are paused until resumed.' }
-      : value.status === 'blocked' ? { code: 'recipe_source_missing', message: 'The source image was deleted, so this batch can’t continue.' } : null;
+    // b5 is a batch stored by an older version, which stopped at its reason (blocked stays readable).
+    const error = value.status === 'blocked' ? { code: 'recipe_source_missing', message: 'The source image was deleted, so this batch can’t continue.' } : null;
     return {
       batchId: value.id, workspaceId: 'fixture', originWorkspaceId: 'fixture', submittedRevision: 1, checkpointWorkspaceId: 'fixture', checkpointRevision: 1,
       requestKey: `fixture-${value.id}`, execution: 'queued', mode: value.mode, count: value.total, intervalSeconds: value.interval, seedMode: 'random',
       status: value.status, activeJobId: value.status === 'running' ? `job-${value.id}-${value.done}` : null, activeIndex: value.status === 'running' ? value.done : null,
       createdAt: iso(created), updatedAt: iso(value.status === 'running' ? Math.max(created, nowMs - MINUTE) : terminal ? finished : created),
       finishedAt: terminal ? iso(finished) : null, error, cancelRequested: false, items, source,
+      ...(value.pausedBy ? { pausedBy: value.pausedBy } : {}),
       // The project the agent enqueued into (the host adds output to listed batches; manual batches have none).
       ...(value.agent !== 'manual' ? (() => { const project = GROUPS.find(group => group.id === value.group)!; return { output: { historyGroup: L(project.name), historyGroupId: project.id, historyGroupName: L(project.name) } }; })() : {}),
     } as BatchJob;

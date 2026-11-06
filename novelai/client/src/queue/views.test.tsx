@@ -16,10 +16,10 @@ import { useAppStore } from '../store';
 import { uiText } from '../ui/i18n';
 import type { BatchItem } from '../workspace/batch-types';
 import { createQueueMonitor, type QueueMonitorView } from '../workspace/queue-monitor';
-import { BatchDetail, CancelConfirmText, ConfirmBatchLine, ResumeHaltedText } from './BatchDetail';
+import { BatchDetail, CancelConfirmText, ConfirmBatchLine } from './BatchDetail';
 import { QueuePage, QueueView } from './QueuePage';
 import { batch, item } from './test-batch';
-import type { QueueBatch } from './model';
+import { QUEUE_ACTIONS_CONFIRMED, type QueueBatch } from './model';
 
 afterEach(() => assetQueryClient.clear());
 const now = new Date();
@@ -46,7 +46,7 @@ describe('queue page on the sample batches (SSR)', () => {
     for (const id of ['b1', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7', 'b8', 'b9']) expect(html).toContain(`data-testid="queue-batch-${id}"`);
     expect(html).toMatch(/data-testid="queue-batch-b1" data-status="running"/);
     const text = textOf(html);
-    for (const value of ['进行中', '等待中', '已结束', '生成中', '排队', '已暂停', '已阻断', '已完成', '已取消', 'Claude Code', 'Codex', '手动 · 本次运行', '7 / 12 张', '全部', '未结束']) expect(text).toContain(value);
+    for (const value of ['进行中', '等待中', '已结束', '生成中', '排队', '已暂停', '已中止', '部分完成', '已完成', '已取消', 'Claude Code', 'Codex', '手动 · 本次运行', '7 / 12 张', '全部', '未结束']) expect(text).toContain(value);
     expect(text).toContain(zh('q.summary', { a: 1, b: 3, c: 0 }).slice(0, 8));
     expect(html).toContain('data-testid="queue-detail-b1"');
     expect(html).toContain('data-testid="queue-pause-b1"');
@@ -62,16 +62,34 @@ describe('queue page on the sample batches (SSR)', () => {
     expect(html).toContain('ui-tag--agent');
   });
 
-  it('shows the automatic pause (queue_halted) with Resume, and no token disables Resume with the reason (18)', () => {
+  it('shows a partly done batch that went on past a failed and an unknown image, and a user pause with Resume; no token disables Resume (18)', () => {
     setLanguage('zh-CN');
     const { batches } = createCaptureFixture('zh', now);
-    const html = page(loaded(batches), { capture: { page: 'queue-halted', lang: 'zh' } });
-    expect(html).toContain('data-testid="queue-detail-b4"');
-    expect(html).toContain('data-testid="queue-halted-b4"');
-    expect(textOf(html)).toContain(zh('q.note.halted'));
-    expect(html).toContain('queue_halted');
-    expect(html).not.toMatch(/data-testid="queue-resume-b4"[^>]*disabled/);
-    const noToken = page(loaded(batches), { capture: { page: 'queue-halted', lang: 'zh' }, hasToken: false });
+    const html = page(loaded(batches), { capture: { page: 'queue-partial', lang: 'zh' } });
+    expect(html).toContain('data-testid="queue-detail-b7"');
+    expect(html).toMatch(/data-testid="queue-detail-b7" data-status="partial"/);
+    expect(textOf(html)).toContain(zh('q.s.partial'));
+    // Images after the unsuccessful ones were still generated; nothing about an automatic pause.
+    expect(html).toContain('data-testid="queue-item-b7-3" data-status="unknown"');
+    expect(html).toContain('data-testid="queue-item-b7-5" data-status="failed"');
+    expect(html).toContain('data-testid="queue-item-b7-7" data-status="succeeded"');
+    expect(html).toContain('data-testid="queue-unknown-b7"');
+    expect(html).toContain('data-testid="queue-failed-b7"');
+    expect(html).toContain('rate_limited');
+    // The first failure's reason in the interface language, through the host error catalog; English in an English page.
+    expect(textOf(html)).toContain('NovelAI 回复请求过多（HTTP 429');
+    setLanguage('en-US');
+    expect(textOf(page(loaded(createCaptureFixture('en', now).batches), { capture: { page: 'queue-partial', lang: 'en' }, lang: 'en' }))).toContain('Image 6: NovelAI answered that there are too many requests (HTTP 429');
+    setLanguage('zh-CN');
+    expect(textOf(html)).toContain(zh('q.note.failedFirst', { index: 6, reason: '' }).trim());
+    expect(html).not.toContain('queue_halted');
+    expect(html).not.toMatch(/queue-(pause|resume|cancel)-b7/);
+    const paused = page(loaded(batches), { selected: 'b4' });
+    expect(paused).toContain('data-testid="queue-detail-b4"');
+    expect(textOf(paused)).toContain(zh('q.note.paused'));
+    expect(paused).not.toMatch(/data-testid="queue-resume-b4"[^>]*disabled/);
+    expect(paused).toContain('title="' + zh('q.resumeTip') + '"');
+    const noToken = page(loaded(batches), { selected: 'b4', hasToken: false });
     expect(noToken).toMatch(/data-testid="queue-resume-b4"[^>]*disabled=""/);
     expect(noToken).toContain('data-testid="queue-resume-token-b4"');
     expect(noToken).toContain('data-testid="queue-no-token"');
@@ -84,7 +102,7 @@ describe('queue page on the sample batches (SSR)', () => {
     const unknown = page(loaded(batches), { capture: { page: 'queue-unknown', lang: 'en' }, lang: 'en' });
     expect(unknown).toContain('data-testid="queue-unknown-b7"');
     expect(textOf(unknown)).toContain(en('q.note.unknown', { n: 1 }));
-    expect(unknown).toContain('data-testid="queue-item-b7-7" data-status="unknown"');
+    expect(unknown).toContain('data-testid="queue-item-b7-3" data-status="unknown"');
     const failed = page(loaded(batches), { capture: { page: 'queue-failed', lang: 'en' }, lang: 'en' });
     expect(failed).toContain('data-testid="queue-failed-b8"');
     expect(textOf(failed)).toContain(en('q.note.failed', { n: 2 }));
@@ -200,7 +218,7 @@ describe('queue page code', () => {
   it('keeps the dev-tools test ids', () => {
     const dir = path.resolve(__dirname);
     const code = ['QueuePage.tsx', 'QueueList.tsx', 'BatchDetail.tsx', 'ItemGrid.tsx'].map(name => readFileSync(path.join(dir, name), 'utf8')).join('\n');
-    for (const id of ['queue-page', 'queue-batch-', 'queue-detail-', 'queue-${action}-', 'queue-cancel-confirm', 'queue-item-', 'queue-empty', 'queue-halted-', 'queue-error-', 'queue-unknown-', 'queue-failed-']) {
+    for (const id of ['queue-page', 'queue-batch-', 'queue-detail-', 'queue-${action}-', 'queue-cancel-confirm', 'queue-item-', 'queue-empty', 'queue-error-', 'queue-unknown-', 'queue-failed-']) {
       expect(code.includes(id) || readFileSync(path.join(dir, 'model.ts'), 'utf8').includes(id), id).toBe(true);
     }
   });
@@ -224,20 +242,23 @@ describe('review rework (4b2 P1): the shown batch stays, buttons settle, confirm
     expect(settling).toMatch(/<div[^>]*role="group"[^>]*tabindex="-1"[^>]*data-testid="queue-acts-r1"/);
   });
 
-  it('resuming a batch the queue paused itself asks first, saying the protection is lifted and it may have been charged', () => {
+  it('resuming a paused batch is a plain action like pause: no confirmation, also for a legacy queue_halted reason', () => {
     setLanguage('zh-CN');
-    const halted = batch('h1', 'paused', [item(0, 'pending')], { error: { code: 'queue_halted', message: 'x' } });
-    // The dialog renders in a portal (not in SSR): its parts, and the wiring in the source.
-    expect(textOf(renderToStaticMarkup(<ResumeHaltedText t={zh} />))).toContain('前一批失败或结果未知（可能已扣费）。继续会解除自动暂停保护，之后新入队的 Agent 批次也会直接开始。');
-    const line = textOf(renderToStaticMarkup(<ConfirmBatchLine batch={halted} t={zh} />));
-    expect(line).toContain('Claude Code');
-    expect(line).toContain('h1');
     const source = readFileSync(path.join(__dirname, 'BatchDetail.tsx'), 'utf8');
-    expect(source).toContain("else if (action === 'resume' && halted) setConfirming('resume');");
-    expect(source).toContain('data-testid="queue-resume-confirm"');
+    // Only cancel asks first; the resume confirmation and its texts are gone.
+    expect(source).not.toContain('queue-resume-confirm');
+    expect(source).not.toMatch(/resumeHalted|isHalted/);
+    for (const key of ['q.resumeHaltedTip', 'q.resumeHalted.title', 'q.resumeHalted.body', 'q.flag.halted', 'q.note.halted']) expect(zh(key as never)).toBe(key);
     // Opening a confirmation whose batch ended closes it and says nothing was done.
     expect(source).toContain("if (isBatchTerminal(batch.status)) { setConfirming(null); setClosedNote('ended'); }");
-    expect(detail(halted)).toContain('title="' + zh('q.resumeHaltedTip') + '"');
+    const legacy = batch('h1', 'paused', [item(0, 'pending')], { error: { code: 'queue_halted', message: 'x' } });
+    const html = detail(legacy);
+    expect(html).toContain('title="' + zh('q.resumeTip') + '"');
+    expect(html).toContain('data-testid="queue-error-h1"');
+    expect(textOf(html)).not.toMatch(/之后的 Agent 批次已暂停|自动暂停/);
+    // A click runs every action but cancel at once.
+    expect(QUEUE_ACTIONS_CONFIRMED).toEqual(['cancel']);
+    expect(source).toContain("if (QUEUE_ACTIONS_CONFIRMED.includes(action)) setConfirming('cancel');\n    else void run(action);");
   });
 
   it('the cancel confirmation names the batch, its source and a short id; its button is off once the batch ended', () => {
