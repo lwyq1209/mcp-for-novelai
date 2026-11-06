@@ -41,12 +41,32 @@ describe("official Anlas pricing", () => {
 
   it("applies image-to-image strength to the official base price", () => {
     const quote = calculateImageGenerationAnlas({
-      params: DEFAULT_PARAMS,
+      params: { ...DEFAULT_PARAMS, model: "nai-diffusion-4-5-full" },
       account: paidAccount,
       action: "img2img",
       strength: 0.7,
     });
     expect(quote.amount).toBe(14);
+  });
+
+  // The official web client's price (build b94bdee-production, 2026-11-06, chunk 274ff5q_u23hy.js): every V5 model
+  // costs 1.5× the formula; V5 Full Medium effort is (base + step·23) / 1.75 whatever its 14 steps.
+  it("prices V5 at 1.5× the formula and V5 Full Medium effort about 42 % below High at 23 steps", () => {
+    const at = (params: Partial<typeof DEFAULT_PARAMS>, extra: Partial<Parameters<typeof calculateImageGenerationAnlas>[0]> = {}) =>
+      calculateImageGenerationAnlas({ params: { ...DEFAULT_PARAMS, ...params }, account: paidAccount, ...extra }).amount;
+    expect(at({ steps: 28 }, { action: "img2img", strength: 0.7 })).toBe(21);
+    expect(at({ steps: 23 })).toBe(26);
+    expect(at({ steps: 23, effort: "medium" })).toBe(15);
+    // Medium ignores the stored steps (it always runs 14) and applies only on V5 Full (or its inpainting model).
+    expect(at({ steps: 50, effort: "medium" })).toBe(15);
+    expect(at({ steps: 23, effort: "medium", model: "nai-diffusion-5-curated" })).toBe(26);
+    expect(at({ steps: 23, effort: "medium" }, { action: "infill", executionModel: "nai-diffusion-5-full-inpainting" })).toBe(15);
+    expect(at({ steps: 23, effort: "medium" }, { action: "infill", executionModel: "nai-diffusion-4-5-full-inpainting" })).toBe(26);
+  });
+
+  it("keeps Medium effort within the Opus allowance at 14 steps", () => {
+    const quote = calculateImageGenerationAnlas({ params: { ...DEFAULT_PARAMS, steps: 40, effort: "medium" }, account: opusAccount });
+    expect(quote.amount).toBe(0);
   });
 
   it("charges V4 vibe encoding as a one-time fee, not per batch image", () => {

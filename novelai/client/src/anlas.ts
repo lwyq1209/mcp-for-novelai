@@ -1,6 +1,9 @@
+import { maxEnhanceOutputSize } from "./nai-dimensions";
+import { naiEffortOf } from "./nai-effort";
 import {
   MAX_NAI_UPSCALE_INPUT_PIXELS,
   isNAIV4PlusModel,
+  isNAIV5Model,
   supportsNAIPreciseReference,
   supportsNAIVibeTransfer,
   type AccountSummary,
@@ -16,8 +19,16 @@ import {
   type WorkingImage,
 } from "./types";
 
+/**
+ * The official web client's own price (https://novelai.net/image, build b94bdee-production, fetched 2026-11-06, chunk
+ * 274ff5q_u23hy.js, the function its generate button shows): ceil(base·px + step·px·steps), × 1.5 for every V5 model;
+ * V5 Full Medium effort is (base·px + step·px·23) / 1.75 whatever its 14 steps (about 42 % below High at 23 steps).
+ */
 const BASE_PIXEL_COEFFICIENT = 2951823174884865e-21;
 const STEP_PIXEL_COEFFICIENT = 5753298233447344e-22;
+const V5_PRICE_MULTIPLIER = 1.5;
+const MEDIUM_PRICED_STEPS = 23;
+const MEDIUM_PRICE_DIVISOR = 1.75;
 const OPUS_FREE_MAX_PIXELS = 1024 * 1024;
 
 function isActiveOpus(account?: AccountSummary) {
@@ -79,6 +90,7 @@ export function calculateImageGenerationAnlas({
   strength = 1,
   forcePaid = false,
   alreadyEncodedVibes = 0,
+  executionModel,
 }: {
   params: GenerateParams;
   account?: AccountSummary;
@@ -89,12 +101,16 @@ export function calculateImageGenerationAnlas({
   forcePaid?: boolean;
   /** How many of the vibe references are already encoded+cached (no re-charge). */
   alreadyEncodedVibes?: number;
+  /** The model that runs (inpaint: its inpainting model), for V5 Full's Medium effort; default params.model. */
+  executionModel?: string;
 }): AnlasQuoteResult {
   const samples = positiveInt(batchCount, 1);
   const width = positiveInt(params.width, 512);
   const height = positiveInt(params.height, 512);
   const pixels = Math.max(width * height, 65_536);
-  const steps = positiveInt(params.steps, 28);
+  const medium = naiEffortOf(params, executionModel ?? params.model) === "medium";
+  // Medium always runs 14 steps (src/nai-effort.ts), which is what the Opus allowance counts.
+  const steps = medium ? 14 : positiveInt(params.steps, 28);
   const normalizedStrength = action === "generate" ? 1 : clamp01(strength, 1);
   const v4Plus = isNAIV4PlusModel(params.model);
   const vibeCount = supportsNAIVibeTransfer(params.model)
@@ -114,10 +130,13 @@ export function calculateImageGenerationAnlas({
     details.push("Opus active: base text-to-image generation is free for this size/step request.");
   } else {
     const smeaMultiplier = !v4Plus && params.smeaDyn ? 1.4 : !v4Plus && params.smea ? 1.2 : 1;
-    const officialBase = Math.ceil(BASE_PIXEL_COEFFICIENT * pixels + STEP_PIXEL_COEFFICIENT * pixels * steps);
+    const officialBase = medium
+      ? (BASE_PIXEL_COEFFICIENT * pixels + STEP_PIXEL_COEFFICIENT * pixels * MEDIUM_PRICED_STEPS) / MEDIUM_PRICE_DIVISOR
+      : Math.ceil(BASE_PIXEL_COEFFICIENT * pixels + STEP_PIXEL_COEFFICIENT * pixels * steps);
+    const modelMultiplier = isNAIV5Model(params.model) ? V5_PRICE_MULTIPLIER : 1;
     // NovelAI caps a single image's base generation cost at 140 Anlas.
-    basePerSample = Math.min(140, Math.max(2, Math.ceil(officialBase * smeaMultiplier * normalizedStrength)));
-    details.push(`Base image price: ${basePerSample} Anlas each by the official frontend formula.`);
+    basePerSample = Math.min(140, Math.max(2, Math.ceil(officialBase * smeaMultiplier * modelMultiplier * normalizedStrength)));
+    details.push(`Base image price: ${basePerSample} Anlas each by the official frontend formula${medium ? " (V5 Full Medium effort)" : ""} (an estimate).`);
   }
 
   let total = basePerSample * samples;
@@ -264,6 +283,14 @@ export function calculateFeatureAnlasQuote({
     };
   }
   if (feature === "i2i") {
+    if (i2iParams?.upscaledEnhance) {
+      // Enhance Max✨: priced at the size it returns (about 2×, more than 1024×1024), so Opus pays for it too.
+      const output = maxEnhanceOutputSize(positiveInt(params.width, 512), positiveInt(params.height, 512));
+      const quote = calculateImageGenerationAnlas({
+        params: { ...params, ...output }, account, extras, alreadyEncodedVibes, batchCount: 1, action: "img2img", strength: i2iParams.strength ?? 1, forcePaid: true, executionModel: "",
+      });
+      return quote.ok ? { ...quote, details: [...(quote.details ?? []), `Enhance Max✨ is priced at its expected ${output.width}x${output.height} result and costs Anlas on Opus too.`] } : quote;
+    }
     return calculateImageGenerationAnlas({
       params,
       account,
@@ -289,6 +316,7 @@ export function calculateFeatureAnlasQuote({
       batchCount: 1,
       action: "infill",
       strength: inpaintStrength ?? 1,
+      executionModel: inpaintModel ?? `${model}-inpainting`,
     });
   }
   return calculateImageGenerationAnlas({ params, account, extras, batchCount, action: "generate", alreadyEncodedVibes });
