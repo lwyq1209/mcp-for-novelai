@@ -111,6 +111,10 @@ describe("Enhance Max✨", () => {
     const big = maxEnhanceInputSize(1600, 1600);
     expect(big.width * big.height).toBeLessThan(NAI_MAX_ENHANCE_INPUT_LIMIT);
     expect(big).toEqual({ width: 1536, height: 1536, resized: true });
+    // A side already at 64 cannot shrink with the other: only the long side is shortened.
+    const strip = maxEnhanceInputSize(49152, 64);
+    expect(strip).toEqual({ width: 39296, height: 64, resized: true });
+    expect(strip.width * strip.height).toBeLessThan(NAI_MAX_ENHANCE_INPUT_LIMIT);
     // The official `T`: each side floored to 16 and doubled, fitted into 3,145,728 pixels in steps of 32.
     expect(maxEnhanceOutputSize(512, 768)).toEqual({ width: 1024, height: 1536 });
     expect(maxEnhanceOutputSize(832, 1216)).toEqual({ width: 1440, height: 2144 });

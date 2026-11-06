@@ -151,6 +151,11 @@ export function maxEnhanceInputSize(width: unknown, height: unknown): NAIImageSi
       width: Math.max(NAI_MIN_DIMENSION, Math.floor((fitted.width * ratio) / NAI_DIMENSION_STEP) * NAI_DIMENSION_STEP),
       height: Math.max(NAI_MIN_DIMENSION, Math.floor((fitted.height * ratio) / NAI_DIMENSION_STEP) * NAI_DIMENSION_STEP),
     };
+    // A side already at the minimum cannot shrink with the other: shorten the long side alone.
+    if (size.width * size.height >= NAI_MAX_ENHANCE_INPUT_LIMIT) {
+      const long = Math.floor((NAI_MAX_ENHANCE_INPUT_LIMIT - 1) / Math.min(size.width, size.height) / NAI_DIMENSION_STEP) * NAI_DIMENSION_STEP;
+      size = size.width >= size.height ? { width: long, height: size.height } : { width: size.width, height: long };
+    }
   }
   return { ...size, resized: size.width !== Number(width) || size.height !== Number(height) };
 }
