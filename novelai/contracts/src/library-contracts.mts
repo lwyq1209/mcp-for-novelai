@@ -90,6 +90,10 @@ export const GenerateParamsSchema = Type.Object({
   noiseSchedule: text, seed: Type.Number(), seedMode: values(['fixed', 'random']),
   ucPreset: values([0, 1, 2, 3]), qualityPreset: values(['standard', 'light', 'none']), qualityToggle: Type.Boolean(),
   transparentBackground: Type.Boolean(), smea: Type.Boolean(), smeaDyn: Type.Boolean(), variety: Type.Boolean(), fileNamePrefix: text,
+  // V5 Full Effort (NovelAI 2026-10-08). Absent = high, the model as it always ran. medium runs the distilled
+  // nai-diffusion-5-full-medium(-inpainting) checkpoint with fixed steps, sampler and UC (client src/nai-effort.ts);
+  // it applies only where the execution model is V5 Full or its inpainting model.
+  effort: optional(values(['high', 'medium'])),
 });
 export type GenerateParams = Static<typeof GenerateParamsSchema>;
 export const GenerationOriginSchema = Type.Object({

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sourceSha256": "ce070454734c6b9400ed23b2dbb7c12e31dbc07c090057800012320ab78e6882",
+  "sourceSha256": "ad7f9bff3a105c1541e78aee05109c3b7bdd64da02a920424225e3ec5e37883a",
   "schemas": {
     "libraryPayloads": {
       "tag": {
@@ -2094,6 +2094,12 @@
               },
               "fileNamePrefix": {
                 "type": "string"
+              },
+              "effort": {
+                "enum": [
+                  "high",
+                  "medium"
+                ]
               }
             },
             "additionalProperties": true
@@ -2635,6 +2641,12 @@
                   },
                   "fileNamePrefix": {
                     "type": "string"
+                  },
+                  "effort": {
+                    "enum": [
+                      "high",
+                      "medium"
+                    ]
                   }
                 },
                 "additionalProperties": true
@@ -3294,6 +3306,12 @@
             },
             "fileNamePrefix": {
               "type": "string"
+            },
+            "effort": {
+              "enum": [
+                "high",
+                "medium"
+              ]
             }
           }
         },
@@ -5811,6 +5829,12 @@
                     },
                     "fileNamePrefix": {
                       "type": "string"
+                    },
+                    "effort": {
+                      "enum": [
+                        "high",
+                        "medium"
+                      ]
                     }
                   },
                   "additionalProperties": true
@@ -6420,6 +6444,12 @@
                         },
                         "fileNamePrefix": {
                           "type": "string"
+                        },
+                        "effort": {
+                          "enum": [
+                            "high",
+                            "medium"
+                          ]
                         }
                       },
                       "additionalProperties": true
