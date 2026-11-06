@@ -7,7 +7,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { resolveUpdateSource, TEST_ENV, TEST_MODE_MARKER, type UpdateSource } from "./source";
 import { installTarget, type InstallDeps, type RunResult } from "./install";
-import { removeOldStateFolders, startupUpdate, type StartupUpdate } from "./journal";
+import { removeOldStateFolders, removeStaleStaging, startupUpdate, type StartupUpdate } from "./journal";
 import { createUpdater, type Updater, type UpdateProgress } from "./updater";
 import { startHelper } from "./helper-start";
 import { fetchLatestRelease, type LatestRelease } from "../ipc/update";
@@ -104,6 +104,10 @@ export function createAppUpdater(options: AppUpdaterOptions): AppUpdater {
     : { result: null, confirm() {}, cleanup() {} };
   if (options.packaged && !startup.inProgress) {
     removeOldStateFolders(updatesDir);
+    // A version staged and never handed over (a crash or quit while it waited), or a staging folder a crash left
+    // half-extracted more than a day ago.
+    const removed = removeStaleStaging({ updatesDir, target: located?.target ?? null, platform: process.platform });
+    if (removed.length) options.log(`[update] removed ${removed.length} staging folder(s) an earlier update left`);
   }
   const fetchLatest = () => fetchLatestRelease(source.latestApiUrl);
   const handOver = restartHandOver({ testBuild, env: options.env, argv: options.argv, customDataRoot: options.customDataRoot, dataRoot: options.dataRoot });

@@ -25,13 +25,13 @@ import { CHECKSUMS_FILE, CHECKSUMS_MAX_BYTES, ManifestError, SIGNATURE_FILE, SIG
 import type { UpdateSource } from "./source";
 import { createHash } from "node:crypto";
 import { InstallError, installSupport, installTarget, macCertificateSha256, safePathArgument, stageLinuxUpdate, stageMacUpdate, type InstallDeps, type InstallUnsupportedReason, type StagedUpdate } from "./install";
-import { DOWNLOADS_DIR, STATE_FILES, UPDATING_MARKER_MS, removePending, removeUpdatingMarker, writePending, writeUpdatingMarker, type PendingUpdate } from "./journal";
+import { DOWNLOADS_DIR, STATE_FILES, UPDATING_MARKER_MS, removePending, removeStagedRecord, removeUpdatingMarker, writePending, writeStagedRecord, writeUpdatingMarker, type PendingUpdate } from "./journal";
 import { POSIX_HELPER_SCRIPT } from "./helper-posix";
 import { helperEnvironment, linuxAppEnvironment } from "./environment";
 import { WINDOWS_HELPER_SCRIPT } from "./helper-windows";
 
 export type UpdatePhase = "idle" | "checking" | "downloading" | "verifying" | "preparing" | "ready" | "installing" | "failed";
-export type UpdateErrorCode = "verify_failed" | "download_failed" | "no_update" | "install_unsupported" | "install_failed" | "check_failed" | "cancelled";
+export type UpdateErrorCode = "verify_failed" | "download_failed" | "no_update" | "install_unsupported" | "install_failed" | "check_failed" | "cancelled" | "unpack_failed";
 
 export interface UpdateProgress {
   phase: UpdatePhase;
@@ -140,6 +140,7 @@ export function createUpdater(options: UpdaterOptions): Updater {
   async function removeStaged() {
     const staging = prepared?.staged?.staging;
     prepared = null;
+    removeStagedRecord(options.updatesDir);
     if (staging) await options.installDeps.fs.rm(staging, { recursive: true, force: true }).catch(() => undefined);
   }
 
@@ -231,10 +232,13 @@ export function createUpdater(options: UpdaterOptions): Updater {
       if (error instanceof InstallError) {
         options.log(`[update] ${manifest.asset}: ${error.code}: ${error.message}`);
         if (error.code === "not_writable" || error.code === "install_unsupported") return fail("install_unsupported", error.message, false, error.reason ?? "not_writable", version);
+        // A full disk, a missing tool, a timeout: nothing about the release; the next try extracts it again.
+        if (error.code === "extract_failed") return fail("unpack_failed", error.message, true, error.code, version);
         return fail("verify_failed", error.message, false, error.code, version);
       }
       return fail("install_failed", message(error), true, undefined, version);
     }
+    if (prepared.staged) writeStagedRecord(options.updatesDir, { staging: prepared.staged.staging, target: prepared.target, platform: options.platform });
     if (signal.aborted) { await removeStaged(); return set({ phase: "idle" }); }
     controller = null;
     options.log(`[update] ${manifest.version} is downloaded, verified and ready`);
@@ -340,6 +344,7 @@ export function createUpdater(options: UpdaterOptions): Updater {
     }
     options.log(`[update] ${options.currentVersion} → ${version}: the helper runs; the app quits now`);
     prepared = null; // the helper owns the staged version now
+    removeStagedRecord(options.updatesDir);
     options.quit();
     return progress;
   }
@@ -373,7 +378,7 @@ export function createUpdater(options: UpdaterOptions): Updater {
     },
     disposeSync() {
       const staging = progress.phase === "installing" ? null : prepared?.staged?.staging;
-      if (staging) { try { fs.rmSync(staging, { recursive: true, force: true }); } catch { /* best effort */ } }
+      if (staging) { try { fs.rmSync(staging, { recursive: true, force: true }); } catch { /* best effort */ } removeStagedRecord(options.updatesDir); }
     },
   };
 }

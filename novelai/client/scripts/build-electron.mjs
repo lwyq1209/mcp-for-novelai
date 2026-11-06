@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Electron build of the client (npm run build:electron; npm run build runs it after the renderer):
-//  1. empties dist-electron/ and dist-mcp/, so no file of an older build is packaged;
+//  1. empties dist-electron/ and dist-mcp/, so no file of an older build is packaged (also an update rehearsal marker,
+//     step 5, that an interrupted rehearsal left; the afterPack hook refuses to package such a stray marker);
 //  2. compiles the main process with tsc (tsconfig.electron.json; this also copies
 //     shared/runtime/data-paths.cjs to dist-electron/shared/runtime/);
 //  3. bundles the MCP tag modules (../src/tag-details.mjs and what it imports) into

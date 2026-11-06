@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { activeUpdatingMarker, failureReason, readPending, removableStaging, removeOldStateFolders, removeUpdatingMarker, startupUpdate, writePending, writeUpdatingMarker, type PendingUpdate } from "./journal";
+import { activeUpdatingMarker, failureReason, readPending, removableStaging, removeOldStateFolders, removeStaleStaging, removeUpdatingMarker, startupUpdate, writePending, writeStagedRecord, writeUpdatingMarker, type PendingUpdate } from "./journal";
 
 let root: string, updates: string;
 beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), "nai-update-journal-")); updates = path.join(root, "updates"); });
@@ -155,3 +155,21 @@ describe("the updating marker (runtime/updating.json)", () => {
   });
 });
 
+describe("staging folders an earlier run left", () => {
+  it("removes the recorded one at once and others with the helper's name after a day, never the pending one or other folders", () => {
+    const parent = path.join(root, "Applications"), target = path.join(parent, "app");
+    fs.mkdirSync(target, { recursive: true });
+    const recorded = path.join(parent, ".mcp-for-novelai-update-rec"), fresh = path.join(parent, ".mcp-for-novelai-update-new"), old = path.join(parent, ".mcp-for-novelai-update-old");
+    const pendingOne = path.join(parent, ".mcp-for-novelai-update-xyz"), other = path.join(parent, "Other.app");
+    for (const dir of [recorded, fresh, old, pendingOne, other]) fs.mkdirSync(path.join(dir, "new"), { recursive: true });
+    const dayAgo = (Date.now() - 2 * 24 * 60 * 60 * 1000) / 1000;
+    for (const dir of [old, pendingOne, other]) fs.utimesSync(dir, dayAgo, dayAgo);
+    try { fs.symlinkSync(other, path.join(parent, ".mcp-for-novelai-update-link")); } catch { /* Windows without the privilege */ }
+    writePending(updates, pending());
+    writeStagedRecord(updates, { staging: recorded, target, platform: process.platform });
+    const removed = removeStaleStaging({ updatesDir: updates, target, platform: process.platform === "win32" ? "win32" : "linux" });
+    expect(removed.sort()).toEqual([old, recorded].sort());
+    for (const dir of [fresh, pendingOne, other]) expect(fs.existsSync(dir), dir).toBe(true);
+    expect(fs.existsSync(path.join(updates, "staged.json"))).toBe(false);
+  });
+});

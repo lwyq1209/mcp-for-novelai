@@ -70,6 +70,7 @@ export function updateUiState(progress: UpdateProgressInfo | null, availableVers
     else if (error.code === 'check_failed') { note = { key: 'set.ab.checkFailed', params: { reason: error.message }, tone: 'danger' }; pill = { key: 'top.updateFailed', params: {} }; }
     else if (error.code === 'no_update') note = { key: 'set.ab.noUpdate', params: {}, tone: 'neutral' };
     else if (error.code === 'install_failed') { note = { key: 'set.ab.installFailed', params: { reason: error.message }, tone: 'danger' }; pill = { key: 'top.updateFailed', params: {} }; }
+    else if (error.code === 'unpack_failed') { note = { key: 'set.ab.unpackFailed', params: {}, tone: 'danger' }; pill = { key: 'top.updateFailed', params: {} }; }
   }
   else if (unsupportedReason) note = { key: 'set.ab.unsupported', params: { reason: unsupportedReason }, tone: 'neutral' };
   return {

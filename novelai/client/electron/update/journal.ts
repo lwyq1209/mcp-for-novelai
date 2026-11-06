@@ -45,6 +45,8 @@ export const UPDATING_MARKER = "updating.json";
 export const UPDATING_MARKER_MS = 5 * 60_000;
 /** A helper that has not written its pid this long after the marker is taken as never started. */
 export const HELPER_PID_GRACE_MS = 30_000;
+/** <data root>/updates/<STAGED_FILE>: the staging folder of a version downloaded and staged but not handed over yet. */
+export const STAGED_FILE = "staged.json";
 
 const isText = (value: unknown, max = 4096): value is string => typeof value === "string" && value.length > 0 && value.length <= max && !/[\0\r\n]/.test(value);
 
@@ -206,6 +208,44 @@ export function activeUpdatingMarker(dataRoot: string, { now = Date.now(), isAli
   try { const text = fs.readFileSync(path.join(dataRoot, "updates", value.id, STATE_FILES.helperPid), "utf8").trim(); helperPid = /^\d+$/.test(text) ? Number(text) : null; } catch { helperPid = null; }
   if (helperPid === null) return now - started <= HELPER_PID_GRACE_MS ? value as UpdatingMarker : null;
   return isAlive(helperPid) ? value as UpdatingMarker : null;
+}
+
+/** The staging folder of a staged version that was not handed over (a crash or quit while ready). */
+export function writeStagedRecord(updatesDir: string, record: { staging: string; target: string; platform: string }) {
+  try { fs.mkdirSync(updatesDir, { recursive: true, mode: 0o700 }); fs.writeFileSync(path.join(updatesDir, STAGED_FILE), `${JSON.stringify(record)}\n`, { mode: 0o600 }); } catch { /* best effort */ }
+}
+export function removeStagedRecord(updatesDir: string) { try { fs.rmSync(path.join(updatesDir, STAGED_FILE), { force: true }); } catch { /* best effort */ } }
+
+/**
+ * At start: removes staging folders the app left next to `target` — the one staged.json names (a crash or quit while a
+ * version was staged), and any other `.mcp-for-novelai-update-*` folder there older than `maxAgeMs` (a crash while one
+ * was being extracted) — never the one pending.json names, and only real folders (no links) with the helper's name.
+ */
+export function removeStaleStaging({ updatesDir, target, platform, maxAgeMs = 24 * 60 * 60 * 1000, now = Date.now() }: { updatesDir: string; target: string | null; platform: NodeJS.Platform; maxAgeMs?: number; now?: number }) {
+  if (!target) return [] as string[];
+  const p = platform === "win32" ? path.win32 : path.posix;
+  const parent = p.dirname(target);
+  const keep = readPending(updatesDir)?.staging ?? null;
+  const removed: string[] = [];
+  const removeIfOurs = (dir: string, force: boolean) => {
+    if (dir === keep || p.dirname(dir) !== parent || !p.basename(dir).startsWith(STAGING_PREFIX)) return;
+    try {
+      const info = fs.lstatSync(dir);
+      if (!info.isDirectory() || info.isSymbolicLink()) return;
+      if (!force && now - info.mtimeMs <= maxAgeMs) return;
+      fs.rmSync(dir, { recursive: true, force: true });
+      removed.push(dir);
+    } catch { /* gone or unreadable */ }
+  };
+  try {
+    const record = JSON.parse(fs.readFileSync(path.join(updatesDir, STAGED_FILE), "utf8"));
+    if (typeof record?.staging === "string" && record.target === target) removeIfOurs(record.staging, true);
+  } catch { /* no record */ }
+  removeStagedRecord(updatesDir);
+  let names: string[] = [];
+  try { names = fs.readdirSync(parent); } catch { names = []; }
+  for (const name of names) if (name.startsWith(STAGING_PREFIX)) removeIfOurs(p.join(parent, name), false);
+  return removed;
 }
 
 /** Removes state folders of earlier attempts (not the one in pending.json) older than `maxAgeMs`. */

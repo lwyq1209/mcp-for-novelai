@@ -1082,7 +1082,7 @@ export interface UpdateProgressInfo {
   version?: string;
   received?: number;
   total?: number | null;
-  error?: { code: "verify_failed" | "download_failed" | "no_update" | "install_unsupported" | "install_failed" | "check_failed" | "cancelled"; message: string; retryable: boolean; reason?: string };
+  error?: { code: "verify_failed" | "download_failed" | "no_update" | "install_unsupported" | "install_failed" | "check_failed" | "cancelled" | "unpack_failed"; message: string; retryable: boolean; reason?: string };
   queueBusy?: boolean;
   /** Whether this installation can update itself; reason when not (then only Download is offered). */
   install?: { supported: boolean; reason?: string };

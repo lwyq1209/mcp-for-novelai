@@ -118,6 +118,7 @@ describe.runIf(process.platform !== "win32")("Update and restart", () => {
     const marker = JSON.parse(fs.readFileSync(path.join(root, "data", "runtime", "updating.json"), "utf8"));
     expect(marker).toMatchObject({ schema: 1, id: pending.id, pid: 4242, from: "0.1.3", to: "0.1.4" });
     expect(Date.parse(marker.expiresAt) - Date.parse(marker.startedAt)).toBe(5 * 60_000);
+    expect(fs.existsSync(path.join(root, "data", "updates", "staged.json"))).toBe(false);
     expect(fs.existsSync(path.join(pending.staging!, "new", "mcp-for-novelai", "mcp-for-novelai"))).toBe(true);
     expect(fs.readFileSync(path.join(root, "data", "updates", "downloads", "MCP-for-NovelAI-0.1.4-linux-x64.tar.gz")).equals(asset)).toBe(true);
   });
@@ -130,6 +131,8 @@ describe.runIf(process.platform !== "win32")("Update and restart", () => {
     expect(h.quits).toBe(0);
     expect(h.launches).toEqual([]);
     expect(staging().length).toBe(1);
+    // Recorded, so a crash while it waits does not leave it behind for good (removeStaleStaging).
+    expect(JSON.parse(fs.readFileSync(path.join(root, "data", "updates", "staged.json"), "utf8")).staging).toBe(path.join(root, "apps", staging()[0]));
     // A click while it is still busy does nothing.
     expect((await h.updater.start()).queueBusy).toBe(true);
     h.busy.value = false;
@@ -207,6 +210,14 @@ describe.runIf(process.platform !== "win32")("Update and restart", () => {
     expect(h.quits).toBe(0);
     expect(h.launches).toEqual([]);
     expect(h.holds).toEqual([]);
+    expect(staging()).toEqual([]);
+  });
+
+  it("calls a package that cannot be extracted (a full disk) unpack_failed, which can be tried again", async () => {
+    const failing: InstallDeps = { ...tarDeps, run: async () => ({ code: 2, stdout: "", stderr: "No space left on device" }) };
+    const h = harness({ installDeps: failing });
+    const result = await h.updater.start();
+    expect([result.phase, result.error?.code, result.error?.retryable]).toEqual(["failed", "unpack_failed", true]);
     expect(staging()).toEqual([]);
   });
 

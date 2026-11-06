@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 // electron-builder configuration (package.json "build"), as the release workflow (.github/workflows/release.yml) and
@@ -49,6 +51,21 @@ describe("packaging configuration", () => {
     const script = readFileSync("scripts/build-electron.mjs", "utf8");
     expect(script).toMatch(/if \(process\.env\.NAI_UPDATE_TEST_BUILD === '1'\) \{\n  await writeFile\(path\.join\(client, 'dist-electron', 'update-test-mode\.json'\)/);
     expect(script.match(/writeFile\(path\.join\(client, 'dist-electron', 'update-test-mode\.json'\)/g)?.length).toBe(1);
+  });
+
+  it("refuses to package a stray rehearsal marker an interrupted rehearsal left, on every platform (P3-11)", async () => {
+    const { refuseStrayRehearsalMarker } = await import("../scripts/mac-sign-hook.cjs");
+    const project = mkdtempSync(path.join(tmpdir(), "nai-marker-"));
+    try {
+      expect(() => refuseStrayRehearsalMarker(project, {})).not.toThrow();
+      mkdirSync(path.join(project, "dist-electron"));
+      writeFileSync(path.join(project, "dist-electron", "update-test-mode.json"), "{}");
+      expect(() => refuseStrayRehearsalMarker(project, {})).toThrow(/update rehearsal marker/);
+      expect(() => refuseStrayRehearsalMarker(project, { NAI_UPDATE_TEST_BUILD: "1" })).not.toThrow();
+    } finally { rmSync(project, { recursive: true, force: true }); }
+    // It runs before the platform check, so Windows and Linux packages are covered too.
+    const hook = readFileSync("scripts/mac-sign-hook.cjs", "utf8");
+    expect(hook.indexOf("refuseStrayRehearsalMarker(context.packager.projectDir)")).toBeLessThan(hook.indexOf("electronPlatformName !== 'darwin'"));
   });
 
   it("keeps the app in app.asar but unpacks sharp's native addon and libvips (Linux ships libvips-cpp.so.<version>, which smart unpacking misses)", () => {

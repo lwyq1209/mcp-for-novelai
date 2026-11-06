@@ -42,6 +42,11 @@ describe('the self-update in the window', () => {
     expect(updateUiState({ ...failed, error: { ...failed.error, code: 'install_unsupported' as const, reason: 'asset_missing' } }, '0.1.4').canInstall).toBe(false);
   });
 
+  it('lets an update file that could not be unpacked (a full disk) be tried again', () => {
+    expect(updateUiState({ phase: 'failed', version: '0.1.4', error: { code: 'unpack_failed', message: 'x', retryable: true, reason: 'extract_failed' }, install: { supported: true } }, '0.1.4'))
+      .toMatchObject({ canInstall: true, retry: true, note: { key: 'set.ab.unpackFailed', tone: 'danger' } });
+  });
+
   it('has a text for every reason code in both languages', () => {
     for (const reason of ['signature_invalid', 'manifest_invalid', 'version_mismatch', 'checksum_mismatch', 'redirect_refused', 'signature_mismatch', 'package_invalid', 'extract_failed', 'network', 'stalled', 'http_status', 'too_large',
       'translocated', 'read_only', 'not_writable', 'per_machine', 'not_installed', 'sandbox_helper', 'not_packaged', 'asset_missing', 'unknown_layout', 'app_running', 'not_movable', 'move_failed', 'launch_failed', 'new_app_exited', 'not_started', 'installer_failed', 'other_instance', 'signature_changed', 'installer_changed', 'missing', 'stopped_waiting', undefined])
