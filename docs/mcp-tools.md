@@ -197,6 +197,9 @@ warnings. Check the readback before enqueueing.
   optional `cfgRescale`, sampler, noise schedule (`karras` on V5), `ucPreset` 0–3, `qualityPreset`
   (`standard`, `light` on V5 only, `none`), style, positive and negative prompts, `seed` (or `null` for a random seed
   drawn at enqueue), optional characters (V4 and later: up to 6, V5 up to 32) and `transparentBackground` (V5 only).
+- `effort` (t2i, i2i, inpaint; optional, default `high`): V5 Full's Effort toggle. `medium` runs NovelAI's distilled
+  Medium model and exists only for `nai-diffusion-5-full` (see [V5 Full Effort](#v5-full-effort-medium)).
+- enhance: `scale` 1, 2 or `"max"` (Max✨, V5 models only; see [Enhance Max✨](#enhance-max)).
 - Image modes take a `source`: a history image `{kind: "history", historyId, historyRevision, assetId}` from
   `asset_library`, or an imported image `{kind: "study", studyId, studyRevision}`. `inpaint` also takes a `mask`
   built from shapes (rectangles, ellipses, polygons, strokes) and alpha layers; `preview: true` returns the source
@@ -205,6 +208,51 @@ warnings. Check the readback before enqueueing.
 - `canvas: {workspaceId, expectedRevision, draftId?}` freezes the live canvas (or a staged draft) at exactly that
   revision instead of inline fields.
 - To revise, pass `recipeId` with its current `expectedRevision` and every field again; a new revision is saved.
+
+### V5 Full Effort (Medium)
+
+NovelAI's V5 Full has two effort levels (2026-10-08, [NovelAI docs](https://docs.novelai.net/en/image/effort/)). High
+is the model as it always ran. Medium is a distilled model that costs about 42 % less at default settings. What a
+Medium request sends was read from NovelAI's own web client (build of 2026-11-06):
+
+| | Medium |
+| --- | --- |
+| Model id sent | `nai-diffusion-5-full-medium`; inpaint `nai-diffusion-5-full-medium-inpainting` |
+| Steps, sampler | 14, `k_euler_ancestral` |
+| CFG rescale | 0 (not supported); `cfgScale` still applies |
+| Undesired content | the Heavy preset (`ucPreset` 0), prefixed with `nsfw, ` unless the positive prompt contains `nsfw`; no negative prompt and no character negative prompts are sent |
+| Inpaint strength below 1 | `img2img {strength, color_correct: true}`, as on High |
+
+- `prepare_recipe` with `effort: "medium"`: `steps`, `sampler`, `ucPreset` and `negativePrompt` may be left out (and
+  `cfgRescale` and character `negativePrompt`s). A value you give is replaced, never refused, and each replacement is a
+  warning `effort_medium_fixed`, for example `effort medium fixes steps to 14; your 28 was replaced.` The stored recipe
+  holds the values that run.
+- Refused (`invalid_arguments`, `details.reason: "effort_not_supported"`): Medium on any other model (V5 Curated has no
+  Medium) and in enhance, upscale or director. `effort: "high"` is accepted everywhere and changes nothing.
+- The readback shows the model id sent (`effective.model`), `effective.effort` (`level`, and for Medium the fixed values
+  with the full UC text) and `authored.effort`.
+- On the canvas the effort is the parameter `params.effort` (`"medium"`, or absent for High; also
+  `inpaintRecipe.effort`). It applies where the model that runs is V5 Full: the txt2img/img2img model, or the inpaint
+  model for inpaint. `draft_edit` sets it with `params.effort: "high" | "medium"`. A canvas capture of a Medium canvas
+  is the Medium request; its readback says which canvas values Medium replaced (`effort_medium_fixed`), and a Medium
+  setting on a model without it is reported as `effort_not_applied` (and listed in `unusedInputs`).
+- Enhance always runs High.
+
+### Enhance Max✨
+
+V5 Curated and V5 Full have a third enhance size, Max✨, which uses NovelAI's new upscaler (from the official web
+client, build of 2026-11-06):
+
+- The request is an img2img with `upscaled_enhance: true` and the source at its own size. The source must be a multiple
+  of 64 and under 0.8 × 3,145,728 = 2,516,582 pixels; `prepare_recipe` adjusts any other source to the closest such
+  size instead of refusing it (warning `enhance_max_source_adjusted`).
+- NovelAI returns the image about twice as large, at most about 3.1 MP. The readback gives the size NovelAI's client
+  expects (`effective.enhance.expectedOutput`: each side floored to 16 and doubled, fitted into 3,145,728 pixels in
+  steps of 32; for 832×1216 that is 1440×2144); the saved image keeps the size NovelAI actually returns.
+- **Max✨ costs Anlas on Opus too** (warning `enhance_max_paid`): its result is always larger than 1024×1024.
+- `magnitude` sets the strength as for 1× and 2×. On another model `scale: "max"` is refused
+  (`details.reason: "max_enhance_not_supported"`). 1× and 2× are unchanged. NovelAI's own client also offers 1.5×; this
+  app does not.
 
 ### `enqueue_recipes`
 
@@ -265,7 +313,8 @@ The canvas is the app's manual workbench. The canvas tools read it and stage vis
 - `read_prompt_review {workspaceId, expectedRevision, mode, draftId?}` returns the full effective request built by the
   same code that sends it — prompts with the automatic quality and UC text, characters and positions, sampling,
   readiness and inputs the mode does not use. A detached t2i `patch` can be previewed without staging it.
-- `draft_edit` stages a visible proposal at the exact current revision (the user sees it on the canvas);
+- `draft_edit` stages a visible proposal at the exact current revision (the user sees it on the canvas). It also sets
+  V5 Full's effort (`params.effort`) and Enhance Max✨ (`enhanceScale: "max"`);
   `apply_edit` applies it only if nothing changed in between; `undo_edit` undoes the last MCP edit only while its
   result is still unchanged. A newer revision is a conflict: read the workspace again.
 - To generate what the canvas holds: read it, stage a draft if it needs changes, freeze it with

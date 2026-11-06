@@ -2,6 +2,27 @@
 
 All notable changes to MCP for NovelAI are recorded here. Versions follow [Semantic Versioning](https://semver.org).
 
+## Unreleased
+
+### Added
+
+- **V5 Full Effort**: the canvas has a High / Medium switch beside V5 Full (and V5 Full inpainting). Medium runs
+  NovelAI's distilled model (`nai-diffusion-5-full-medium`, inpaint `nai-diffusion-5-full-medium-inpainting`), about
+  42 % cheaper at default settings, with 14 steps, Euler Ancestral, the Heavy UC preset and no negative prompt or CFG
+  rescale; those controls show their fixed values while Medium is on. Images made with Medium name their model in the
+  library, and their metadata is recognised on import.
+- `prepare_recipe` takes `effort: "high" | "medium"` for V5 Full txt2img, img2img and inpaint. Medium's fixed fields may
+  be left out; given values are replaced and reported as `effort_medium_fixed` warnings. The readback shows the model id
+  sent and the fixed UC text.
+- **Enhance Max✨** (V5 models): the image is sent at its own size and comes back about twice as large (at most about
+  3.1 MP) through NovelAI's new upscaler. Canvas Enhance offers it beside 1× and 2×; `prepare_recipe` takes
+  `scale: "max"` and `draft_edit` `enhanceScale: "max"`. Max costs Anlas on Opus too.
+
+### Changed
+
+- The local Anlas estimate prices V5 models at 1.5× the formula, as NovelAI's own client does (it was lower before).
+- Imported V5 Curated images (metadata `Source` "NovelAI Diffusion V5 DB276663") are recognised as Curated, not Full.
+
 ## 0.1.3 - 2026-11-06
 
 ### Added
