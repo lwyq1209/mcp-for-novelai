@@ -20,8 +20,9 @@ export const CAPTURE_PAGES = [
   'library-host-scrolled', 'library-host-detail',
   // Step 4b2: the queue page (prototype 17–19), the settings page (22–29) and the first-run guide (30–33). The queue
   // shows the sample batches; settings and the guide read this run's own data root through the real host IPC, with a
-  // sample account, agent activity and update where the prototype shows them.
-  'queue', 'queue-halted', 'queue-unknown', 'queue-blocked', 'queue-failed', 'queue-empty',
+  // sample account, agent activity and update where the prototype shows them. queue-partial (0.1.4) replaced
+  // queue-halted: a batch no longer pauses itself; it goes on past a failed or unknown image and ends partly done.
+  'queue', 'queue-partial', 'queue-unknown', 'queue-blocked', 'queue-failed', 'queue-empty',
   'settings-account', 'settings-mcp', 'settings-mcp-cursor', 'settings-mcp-codex', 'settings-mcp-pi', 'settings-mcp-other',
   'settings-queue', 'settings-canvas', 'settings-storage', 'settings-appearance', 'settings-about', 'settings-about-update',
   'onboarding-1', 'onboarding-2', 'onboarding-2-connected', 'onboarding-3',

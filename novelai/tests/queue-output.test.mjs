@@ -64,7 +64,8 @@ test('acceptance identity includes the requested output, and is unchanged withou
 test('the compact batch carries the output, string fields only', () => {
   const batch = { batchId: BATCH, requestKey: 'mcp-x', execution: 'queued', status: 'queued', count: 1, recipePlanHash: 'a'.repeat(64), intervalSeconds: 0, items: [],
     output: { historyGroup: 'p', historyGroupId: 'g-1', historyGroupName: 'P', fileNamePrefix: 'p', extra: 'dropped', other: 1 } };
-  const compact = { batchId: BATCH, requestKey: 'mcp-x', execution: 'queued', source: { kind: 'agent', client: null }, status: 'queued', stopReason: null, count: 1, recipePlanHash: 'a'.repeat(64), intervalSeconds: 0, activeJobId: null, items: [] };
+  const compact = { batchId: BATCH, requestKey: 'mcp-x', execution: 'queued', source: { kind: 'agent', client: null }, status: 'queued', stopReason: null, count: 1, recipePlanHash: 'a'.repeat(64), intervalSeconds: 0, activeJobId: null,
+    itemCounts: { pending: 0, running: 0, succeeded: 0, failed: 0, unknown: 0, cancelled: 0, skipped: 0 }, items: [] };
   assert.deepEqual(businessCompact(batch), { ...compact, output: { historyGroup: 'p', historyGroupId: 'g-1', historyGroupName: 'P', fileNamePrefix: 'p' } });
   const { output: _output, ...plain } = batch;
   assert.equal(Object.hasOwn(businessCompact(plain), 'output'), false);

@@ -32,6 +32,10 @@ export interface BatchDependencies {
   log?(message: string): void;
   /** Tests only: the delay of a deferred state write (default BATCH_STATE_FLUSH_MS). */
   stateFlushMs?: number;
+  /** Tests only: the pauses before each resend after HTTP 429 (default RATE_LIMIT_RETRY.delaysMs). */
+  rateLimitDelaysMs?: readonly number[];
+  /** Tests only: how long a failing read-only lookup or status read is tried again (default CHILD_READ_RETRY_MS). */
+  childReadRetryMs?: number;
   /** Batches retire() removed (queue retention): the window's queue view drops them. */
   onRemoved?(batchIds: string[]): void;
   /**
@@ -78,8 +82,8 @@ export const BATCH_EVENT_THROTTLE = Object.freeze({ items: 20, intervalMs: 250 }
 /**
  * Frozen-queue state writes (durable): a state the payment safety depends on is written before the call that needs it
  * returns — the planned image marked as possibly sent (providerOutcome unknown) before the request, an image's settled
- * outcome (ended child, or NovelAI's answer received), every stop, pause, cancel, resume and ending, the halt of the
- * batches behind a failure and the state recovered after a restart. Progress that changes nothing a restart relies on
+ * outcome (ended child, NovelAI's answer received, or an image marked failed or unknown without one), a resend after
+ * HTTP 429, every pause, cancel, resume and ending and the state recovered after a restart. Progress that changes nothing a restart relies on
  * (the running image's job ID while it runs, the gap between two images) is written later, merged into the next
  * write, and at the latest after this delay. A restart reads the not yet written progress as the earlier state, which
  * recovers exactly as the later one would (an image marked possibly sent stays unknown and is never resent).
@@ -87,6 +91,24 @@ export const BATCH_EVENT_THROTTLE = Object.freeze({ items: 20, intervalMs: 250 }
 export const BATCH_STATE_FLUSH_MS = 2000;
 /** One background round compacts at most this many batches; a capacity-driven reclaim at most 8. */
 export const BATCH_COMPACTION_ROUND_LIMIT = 50, BATCH_RECLAIM_LIMIT = 8;
+/**
+ * NovelAI answered HTTP 429 to an image (a refusal before any work, e.g. "Concurrent generation is locked"; the response
+ * was received, nothing was generated): the same image is sent again with its frozen recipe after each of these pauses
+ * (about 60 s in all), then it fails as rate_limited and the batch goes on. Only a received 429 counts; a timeout, a
+ * dropped connection or any unknown outcome is never resent.
+ */
+export const RATE_LIMIT_RETRY = Object.freeze({ delaysMs: Object.freeze([2000, 4000, 8000, 16_000, 30_000]) as readonly number[] });
+/** A read-only lookup or status read of the generation service that fails is tried again for this long (growing
+ * pauses) before the image is marked unknown (never resent) and the batch goes on. */
+export const CHILD_READ_RETRY_MS = 90_000;
+/** Recent image times kept for the time-left estimate (position). */
+export const IMAGE_TIME_SAMPLES = 20;
+/** Refusals of the generation service before any request was sent: the image failed, nothing was sent. */
+const REFUSED_BEFORE_SENDING = new Set(['invalid_arguments', 'invalid_configuration', 'unsupported_mode', 'unsupported_reference', 'unsupported_configuration', 'invalid_image', 'unavailable']);
+/** The child request key of an image's current attempt: its own key, then one per resend after a 429 (`-r1`, `-r2` …). */
+const childRequestKey = (item: Pick<BatchItem, 'requestKey' | 'rateLimitRetries'>) => item.rateLimitRetries ? `${item.requestKey}-r${item.rateLimitRetries}` : item.requestKey;
+/** Where a batch stands in the shared FIFO (position): unfinished images and batches before it, and the time left. */
+export interface BatchPosition { ahead: { images: number; batches: number }; etaSeconds: number | null; imageSeconds: number | null }
 const terminalChild = new Set(['succeeded', 'failed', 'cancelled', 'unknown']);
 function fail(code: string, message: string): never { throw new BatchError(code, message); }
 function record(raw: unknown) {
@@ -196,7 +218,17 @@ export function createBatchService(deps: BatchDependencies) {
     const value = deps.pendingItemLimit();
     return value === null || (Number.isSafeInteger(value) && value >= 1) ? value : QUEUED_PENDING_ITEM_LIMIT;
   };
-  let storageError: BatchError | null = null, storageReady = !storage, sequence = 0, draining = false, queueHalted = false;
+  let storageError: BatchError | null = null, storageReady = !storage, sequence = 0, draining = false;
+  const rateLimitDelays = () => deps.rateLimitDelaysMs ?? RATE_LIMIT_RETRY.delaysMs;
+  const childReadRetryMs = () => deps.childReadRetryMs ?? CHILD_READ_RETRY_MS;
+  /** How long recent images took (submit to end, ms; succeeded only, newest last), for the time-left estimate. */
+  const durations: number[] = [];
+  const medianImageMs = () => { if (!durations.length) return null; const sorted = [...durations].sort((a, b) => a - b), middle = sorted.length >> 1; return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2; };
+  const sampleDuration = (item: BatchItem) => {
+    if (item.status !== 'succeeded') return;
+    const took = Date.parse(item.finishedAt ?? '') - Date.parse(item.startedAt ?? '');
+    if (Number.isFinite(took) && took >= 0) { durations.push(took); if (durations.length > IMAGE_TIME_SAMPLES) durations.shift(); }
+  };
   /** A frozen-queue storage failure stops the durable (agent) batches; a manual batch is never stored and runs on. */
   const stoppedByStorage = (entry: Entry) => Boolean(storageError) && !entry.manual;
   let accepting = Promise.resolve();
@@ -259,12 +291,12 @@ export function createBatchService(deps: BatchDependencies) {
   };
   // A terminal batch can never submit again (resume only accepts paused), so its
   // frozen recipes, including image bytes, leave main-process memory now.
-  const finish = (entry: Entry, status: 'succeeded' | 'cancelled' | 'blocked') => { entry.public.status = status; entry.public.activeIndex = null; entry.public.activeJobId = null; entry.public.finishedAt = new Date().toISOString(); entry.snapshots = undefined; if (entry.manual) entry.manual.source = undefined; emit(entry); scheduleCompaction(); };
+  const finish = (entry: Entry, status: 'succeeded' | 'partial' | 'cancelled') => { entry.public.status = status; entry.public.activeIndex = null; entry.public.activeJobId = null; entry.public.finishedAt = new Date().toISOString(); delete entry.public.pausedBy; entry.snapshots = undefined; if (entry.manual) entry.manual.source = undefined; emit(entry); scheduleCompaction(); };
   const pendingItems = (entry: Entry, status: 'cancelled' | 'skipped') => { for (const item of entry.public.items) if (item.status === 'pending') item.status = status; };
-  const block = (entry: Entry, code: string, message: string) => {
-    entry.public.error = { code, message };
-    for (const item of entry.public.items) if (['submitting','running'].includes(item.status)) { item.status = 'unknown'; item.error = { code, message }; }
-    pendingItems(entry, 'skipped'); finish(entry, 'blocked');
+  /** Every image had its turn: succeeded when all of them did, else partial (failed and unknown images are never resent). */
+  const complete = (entry: Entry) => {
+    if (entry.public.error?.code !== 'scheduler_stopped') entry.public.error = null;
+    finish(entry, entry.public.items.every(item => item.status === 'succeeded') ? 'succeeded' : 'partial');
   };
   const pauseFor = (entry: Entry, code: string, message: string) => {
     if (isBatchTerminal(entry.public.status)) return;
@@ -413,14 +445,6 @@ export function createBatchService(deps: BatchDependencies) {
     cancelFlush(entry);
     await persist(entry);
   }
-  async function haltFollowers(entry: Entry) {
-    // A failure halts the agent batches only: a manual click still runs, and a manual failure stops nothing else.
-    if (entry.manual) return;
-    queueHalted = true;
-    for (const other of entries.values()) if (other !== entry && !other.manual && other.public.execution === 'queued' && !isBatchTerminal(other.public.status)) {
-      other.pauseRequested = true; other.public.status = 'paused'; other.public.error = { code: 'queue_halted', message: 'An earlier batch failed or has an unknown result; the agent batches after it are paused until resumed.' }; emit(other); await durable(other);
-    }
-  }
   function updateChild(item: BatchItem, job: BatchChildJob) {
     item.jobId = job.jobId;
     item.actualSeed = job.actualSeed;
@@ -432,6 +456,12 @@ export function createBatchService(deps: BatchDependencies) {
     const results = job.results.map(({ index, id, width, height, model, actualSeed }) => ({ index, id, width, height, model, actualSeed }));
     if (results.length || !item.results.length) item.results = results;
     item.error = job.error ? { code: job.error.code, message: job.error.message, ...(job.error.reason ? { reason: job.error.reason } : {}), ...(job.error.params ? { params: { ...job.error.params } } : {}), ...upstreamField(job.error.upstream) } : null;
+    if (terminalChild.has(job.status) && !item.finishedAt) { item.finishedAt = new Date().toISOString(); sampleDuration(item); }
+  }
+  /** An image settled without a (readable) child: only this image is marked; it is never resent. */
+  function settleItem(item: BatchItem, status: 'failed' | 'unknown', error: NonNullable<BatchItem['error']>, providerOutcome: NonNullable<BatchItem['providerOutcome']> = status === 'failed' ? 'not_submitted' : 'unknown') {
+    item.status = status; item.error = error; item.finishedAt = new Date().toISOString();
+    item.providerOutcome = item.providerOutcome === 'response_received' ? 'response_received' : providerOutcome;
   }
   async function cancelChild(entry: Entry, jobId: string) {
     if (entry.cancelSent.has(jobId)) return;
@@ -439,114 +469,192 @@ export function createBatchService(deps: BatchDependencies) {
     try { await deps.generation.cancel({ workspaceId: entry.public.originWorkspaceId, jobId }); }
     catch { entry.public.error = { code: 'cancel_unconfirmed', message: 'The cancellation could not be confirmed; waiting for this image to end, and no further image starts.' }; emit(entry); }
   }
-  async function track(entry: Entry, item: BatchItem, initial: BatchChildJob) {
-    let job = initial;
-    const belongs = (value: BatchChildJob) => value.requestKey === item.requestKey && value.originWorkspaceId === entry.public.originWorkspaceId && value.submittedRevision === entry.public.submittedRevision && value.mode === entry.public.mode;
+  /** A pause, a cancel or the closing app ends what the batch waits for (an interval, a busy generator, a retry). */
+  const interrupted = (entry: Entry) => entry.pauseRequested || entry.public.cancelRequested || disposed || stoppedByStorage(entry);
+  /** Waits `milliseconds` in steps of at most 100 ms; false when interrupted first (only when `interruptible`). */
+  async function pauseBetween(entry: Entry, milliseconds: number, interruptible = true) {
+    const until = Date.now() + milliseconds;
+    while (Date.now() < until) {
+      if (disposed || (interruptible && interrupted(entry))) return false;
+      await wait(Math.min(100, until - Date.now()));
+    }
+    return true;
+  }
+  /**
+   * A read-only call to the generation service (lookup), tried again with a growing pause while it fails, for up to
+   * childReadRetryMs. Never a submit. `interruptible`: a pause or cancel ends the waiting early (interrupted).
+   */
+  async function readWithRetry<T>(entry: Entry, read: () => T | Promise<T>, interruptible: boolean): Promise<{ ok: true; value: T } | { ok: false; interrupted: boolean }> {
+    const started = Date.now(), total = childReadRetryMs();
+    let delay = Math.min(1000, Math.max(1, total / 8));
+    for (;;) {
+      try { return { ok: true, value: await read() }; } catch { /* tried again below */ }
+      const left = total - (Date.now() - started);
+      if (left <= 0 || disposed) return { ok: false, interrupted: disposed };
+      if (!(await pauseBetween(entry, Math.min(delay, left), interruptible))) return { ok: false, interrupted: true };
+      delay = Math.min(delay * 2, 15_000);
+    }
+  }
+  /**
+   * Follows the child until it ends. A status read that keeps failing is tried again with a growing pause; after
+   * childReadRetryMs without any readable state the image is marked unknown (abandoned: never resent) and the batch
+   * goes on. The generator stays reserved meanwhile, so the next image waits for it (isBusy) and two never run at once.
+   */
+  async function track(entry: Entry, item: BatchItem, initial: BatchChildJob): Promise<{ job: BatchChildJob; abandoned: boolean }> {
+    let job = initial, failingSince: number | null = null, pause = 100;
+    const key = childRequestKey(item);
+    const belongs = (value: BatchChildJob) => value.requestKey === key && value.originWorkspaceId === entry.public.originWorkspaceId && value.submittedRevision === entry.public.submittedRevision && value.mode === entry.public.mode;
     while (true) {
       if (!belongs(job)) throw new BatchError('child_identity_mismatch', 'The child job does not belong to this frozen batch item.');
       // The image's outcome is settled once its child ended or NovelAI answered; until then the job ID and progress can wait.
       updateChild(item, job); emit(entry); await durable(entry, terminalChild.has(job.status) || item.providerOutcome === 'response_received' ? 'now' : 'later');
-      if (terminalChild.has(job.status)) return;
-      if (disposed || stoppedByStorage(entry)) return;
+      if (terminalChild.has(job.status)) return { job, abandoned: false };
+      if (disposed || stoppedByStorage(entry)) return { job, abandoned: false };
       if (entry.public.cancelRequested) await cancelChild(entry, job.jobId);
-      await wait(100);
+      await wait(failingSince === null ? 100 : pause);
       const observed = latestChildren.get(job.jobId);
       if (observed) job = mergeChild(job, observed);
+      if (terminalChild.has(job.status)) continue;
       // Read after event delivery as well: completion can occur before submit's
       // response returns or while a subscriber was disconnected. Merge rather
       // than replace so a stale/equal-time read cannot erase stronger evidence.
-      try { job = mergeChild(job, await deps.generation.read({ workspaceId: entry.public.originWorkspaceId, jobId: job.jobId })); }
-      catch {
-        entry.public.error = { code: 'child_status_unavailable', message: 'The current image cannot be read right now; the slot is kept and nothing more is submitted.' };
-        entry.pauseRequested = true;
-        entry.public.status = entry.public.cancelRequested ? 'cancelling' : 'pausing'; emit(entry); await durable(entry);
+      try { job = mergeChild(job, await deps.generation.read({ workspaceId: entry.public.originWorkspaceId, jobId: job.jobId })); failingSince = null; pause = 100; }
+      catch (error) {
+        if (error instanceof BatchError && error.code === 'child_identity_mismatch') throw error;
+        failingSince ??= Date.now(); pause = Math.min(pause * 2, 5000);
+        if (Date.now() - failingSince >= childReadRetryMs()) {
+          settleItem(item, 'unknown', { code: 'child_status_unavailable', message: 'This image could not be read for a while; whether it was generated and saved is unknown. It is not resent; the batch went on.' });
+          emit(entry); await durable(entry);
+          return { job, abandoned: true };
+        }
       }
     }
+  }
+  /** NovelAI certainly answered HTTP 429 (a refusal before any work, e.g. "Concurrent generation is locked"): nothing was generated. */
+  const rateLimited = (job: BatchChildJob) => job.status === 'failed' && job.providerOutcome === 'response_received' && job.error?.statusCode === 429 && !job.results?.length;
+  /** After an image settled: the next one waits for the interval; with nothing left the batch ends. */
+  async function nextImage(entry: Entry, settled: 'now' | 'later') {
+    entry.public.activeIndex = null; entry.public.activeJobId = null;
+    if (entry.public.cancelRequested) { pendingItems(entry, 'cancelled'); finish(entry, 'cancelled'); await durable(entry); return; }
+    if (!entry.public.items.some(value => value.status === 'pending')) { complete(entry); await durable(entry); return; }
+    entry.nextAt = Date.now() + entry.public.intervalSeconds * 1000;
+    // The gap between two images (after a child the outcome is already on disk): merged into the next image's possibly-sent mark.
+    emit(entry); await durable(entry, settled);
+  }
+  /**
+   * One turn of a batch: its next pending image, from the possibly-sent mark to its outcome. An image that fails, is
+   * refused or has an unknown outcome marks only itself (never resent) and the batch goes on with the rest after its
+   * interval; no batch ever stops another. 'stop' when the batch ended, paused or cannot go on now.
+   */
+  async function turn(entry: Entry): Promise<'next' | 'stop'> {
+    if (entry.public.cancelRequested) { pendingItems(entry, 'cancelled'); finish(entry, 'cancelled'); await durable(entry); return 'stop'; }
+    if (entry.pauseRequested) { entry.public.status = 'paused'; emit(entry); await durable(entry); return 'stop'; }
+    const item = entry.public.items.find((value) => value.status === 'pending');
+    if (!item) { complete(entry); await durable(entry); return 'stop'; }
+    while (Date.now() < entry.nextAt && !interrupted(entry)) await wait(Math.min(100, entry.nextAt - Date.now()));
+    if (interrupted(entry)) return 'next';
+    // The accepted recipe is independent of all later editor changes.
+    // Wait only for the real local generation reservation, not renderer UI (two images never run at once).
+    // A queue hold (the app is about to restart for its update) waits here too: nothing is submitted meanwhile.
+    while ((deps.isBusy?.() || deps.holdReason?.()) && !interrupted(entry)) await wait(100);
+    if (interrupted(entry)) return 'next';
+    const childRequest = { workspaceId: entry.public.originWorkspaceId, expectedRevision: entry.public.submittedRevision, requestKey: childRequestKey(item), mode: entry.public.mode };
+    // Written together with the possibly-sent mark below (nothing is sent before it; a restart reads this item as unknown).
+    entry.public.activeIndex = item.index; item.status = 'submitting'; item.startedAt = new Date().toISOString(); item.finishedAt = null; emit(entry);
+    const found = await readWithRetry(entry, () => deps.generation.lookup(childRequest), true);
+    if (!found.ok) {
+      if (found.interrupted) { item.status = 'pending'; item.startedAt = null; entry.public.activeIndex = null; return 'next'; }
+      settleItem(item, 'unknown', { code: 'child_lookup_failed', message: 'Whether this image was already submitted could not be confirmed for a while; it is marked unknown and never resent. The batch went on.' });
+      await nextImage(entry, 'now'); return 'next';
+    }
+    let child = found.value;
+    if (!child) {
+      if (interrupted(entry)) { item.status = 'pending'; item.startedAt = null; entry.public.activeIndex = null; return 'next'; }
+      let snapshot = structuredClone(entry.snapshots![entry.snapshots!.length === 1 ? 0 : item.index]);
+      snapshot.params = { ...snapshot.params, seed: item.plannedSeed, seedMode: 'fixed' };
+      snapshot.batchCount = 1;
+      if (entry.manual?.prepare) snapshot = entry.manual.prepare(snapshot, item.index);
+      // Once submit is invoked, a crash can occur after provider entry but
+      // before the child reply. Persist that uncertainty before the call (always written at once, never merged).
+      item.providerOutcome = 'unknown'; emit(entry); await durable(entry, 'now');
+      // A queued item names its durable batch so the saved history can be found again by batch or request key.
+      const queue = { batchId: entry.public.batchId, requestKey: entry.public.requestKey, itemIndex: item.index };
+      // A manual item's source (captured at the click) travels beside its snapshot: the same bytes for every image.
+      // A manual click with a random seed keeps seedMode random in its saved records (the seed is planned here).
+      try { child = await deps.generation.submit({ ...childRequest, snapshot, queue, ...(entry.manual ? { manual: true as const, ...(entry.manual.source ? { manualSource: entry.manual.source } : {}), ...(item.authoredSeedMode === 'random' ? { historySeedMode: 'random' as const } : {}) } : {}) }); }
+      catch (error) {
+        // An accepted submit may have lost its response. A read-only lookup (tried again while it fails) can recover
+        // it; never invoke submit a second time here.
+        const again = await readWithRetry(entry, () => deps.generation.lookup(childRequest), false);
+        child = again.ok ? again.value : null;
+        if (!child) {
+          if (again.ok && errorCode(error) === 'workspace_busy') {
+            item.status = 'pending'; item.providerOutcome = 'not_submitted'; item.startedAt = null; entry.public.activeIndex = null;
+            entry.public.status = 'queued'; emit(entry); await durable(entry); await wait(100); return 'next';
+          }
+          if (again.ok && REFUSED_BEFORE_SENDING.has(errorCode(error))) {
+            // A manual item keeps the refusal's own reason (the window shows it, as its manual generation did).
+            settleItem(item, 'failed', { code: errorCode(error), message: entry.manual && error instanceof Error && error.message ? error.message : 'The image was refused before any request was sent.', ...(entry.manual ? reasonOf(error) : {}) });
+            item.providerOutcome = 'not_submitted';
+          } else settleItem(item, 'unknown', { code: 'submission_unconfirmed', message: 'Whether this image was submitted could not be confirmed; it was not resent. The batch went on.' });
+          await nextImage(entry, 'now'); return 'next';
+        }
+      }
+    }
+    entry.public.activeJobId = child.jobId;
+    entry.public.status = entry.public.cancelRequested ? 'cancelling' : entry.pauseRequested ? 'pausing' : 'running';
+    const tracked = await track(entry, item, child);
+    if (disposed || stoppedByStorage(entry)) return 'stop';
+    if (!tracked.abandoned && !entry.public.cancelRequested && (item.status as BatchItem['status']) === 'failed' && rateLimited(tracked.job)) {
+      const attempt = item.rateLimitRetries ?? 0, delays = rateLimitDelays();
+      if (attempt < delays.length) {
+        // Nothing was generated: the same image (same frozen recipe and seed) is sent again under its own child key.
+        Object.assign(item, { status: 'pending', providerOutcome: 'not_submitted', jobId: null, actualSeed: null, results: [], error: null, startedAt: null, finishedAt: null, rateLimitRetries: attempt + 1 });
+        entry.public.activeIndex = null; entry.public.activeJobId = null; entry.nextAt = Date.now() + delays[attempt];
+        entry.public.status = entry.pauseRequested ? 'pausing' : 'running';
+        emit(entry); await durable(entry); return 'next';
+      }
+      item.error = { ...item.error!, code: 'rate_limited', message: `NovelAI answered HTTP 429 (too many requests) to this image ${attempt + 1} times; it was sent again automatically for about ${Math.round(delays.reduce((sum, value) => sum + value, 0) / 1000)} s, was not generated and is not sent again.` };
+      emit(entry); await durable(entry);
+    }
+    await nextImage(entry, tracked.abandoned ? 'now' : 'later');
+    return 'next';
+  }
+  /**
+   * An unexpected error while a batch ran. The image it was handling is marked (failed when nothing was sent, else
+   * unknown; never resent) and the batch goes on; without such an image only this batch ends early (partial), its
+   * remaining images skipped. Other batches are never affected.
+   */
+  async function contain(entry: Entry) {
+    const active = entry.public.activeIndex === null ? null : entry.public.items[entry.public.activeIndex];
+    if (active && ['submitting', 'running'].includes(active.status)) {
+      const sent = active.providerOutcome !== 'not_submitted';
+      settleItem(active, sent ? 'unknown' : 'failed', { code: 'scheduler_error', message: sent ? 'The queue hit an internal error while this image ran; whether it was generated is unknown. It is not resent; the batch went on.' : 'The queue hit an internal error before this image was sent; it was not sent and the batch went on.' });
+      await nextImage(entry, 'now'); return;
+    }
+    entry.public.error = { code: 'scheduler_stopped', message: 'The queue hit an internal error and ended this batch early; its remaining images were skipped. Other batches are not affected.' };
+    pendingItems(entry, 'skipped'); complete(entry); await durable(entry);
   }
   async function pump(entry: Entry) {
     if (entry.working || disposed || isBatchTerminal(entry.public.status)) return;
     entry.working = true;
     try {
       while (!disposed && !stoppedByStorage(entry) && !isBatchTerminal(entry.public.status)) {
-        if (entry.public.cancelRequested) { pendingItems(entry, 'cancelled'); finish(entry, 'cancelled'); await durable(entry); return; }
-        if (entry.pauseRequested) { entry.public.status = 'paused'; emit(entry); await durable(entry); return; }
-        const item = entry.public.items.find((value) => value.status === 'pending');
-        if (!item) {
-          if (entry.public.items.every(value => value.status === 'succeeded')) finish(entry, 'succeeded');
-          else block(entry, 'child_stopped', 'Some images of this batch did not succeed; it is not reported as succeeded and submits nothing more.');
-          await durable(entry); return;
-        }
-        while (Date.now() < entry.nextAt && !entry.pauseRequested && !entry.public.cancelRequested && !disposed) await wait(Math.min(100, entry.nextAt - Date.now()));
-        if (entry.pauseRequested || entry.public.cancelRequested || disposed) continue;
-        // The accepted recipe is independent of all later editor changes.
-        // Wait only for the real local generation reservation, not renderer UI.
-        // A queue hold (the app is about to restart for its update) waits here too: nothing is submitted meanwhile.
-        while ((deps.isBusy?.() || deps.holdReason?.()) && !entry.pauseRequested && !entry.public.cancelRequested && !disposed && !stoppedByStorage(entry)) await wait(100);
-        if (entry.pauseRequested || entry.public.cancelRequested || disposed) continue;
-        const childRequest = { workspaceId: entry.public.originWorkspaceId, expectedRevision: entry.public.submittedRevision, requestKey: item.requestKey, mode: entry.public.mode };
-        // Written together with the possibly-sent mark below (nothing is sent before it; a restart reads this item as not sent).
-        entry.public.activeIndex = item.index; item.status = 'submitting'; emit(entry);
-        let child: BatchChildJob | null;
-        try { child = await deps.generation.lookup(childRequest); }
-        catch { item.status = 'pending'; pauseFor(entry, 'child_lookup_failed', 'Whether the next image was already submitted could not be confirmed, so it was not submitted; check, then resume.'); await durable(entry); return; }
-        if (!child) {
-          if (entry.public.cancelRequested || entry.pauseRequested || disposed || stoppedByStorage(entry)) { item.status = 'pending'; entry.public.activeIndex = null; continue; }
-          let snapshot = structuredClone(entry.snapshots![entry.snapshots!.length === 1 ? 0 : item.index]);
-          snapshot.params = { ...snapshot.params, seed: item.plannedSeed, seedMode: 'fixed' };
-          snapshot.batchCount = 1;
-          if (entry.manual?.prepare) snapshot = entry.manual.prepare(snapshot, item.index);
-          // Once submit is invoked, a crash can occur after provider entry but
-          // before the child reply. Persist that uncertainty before the call (always written at once, never merged).
-          item.providerOutcome = 'unknown'; emit(entry); await durable(entry, 'now');
-          // A queued item names its durable batch so the saved history can be found again by batch or request key.
-          const queue = { batchId: entry.public.batchId, requestKey: entry.public.requestKey, itemIndex: item.index };
-          // A manual item's source (captured at the click) travels beside its snapshot: the same bytes for every image.
-          // A manual click with a random seed keeps seedMode random in its saved records (the seed is planned here).
-          try { child = await deps.generation.submit({ ...childRequest, snapshot, queue, ...(entry.manual ? { manual: true as const, ...(entry.manual.source ? { manualSource: entry.manual.source } : {}), ...(item.authoredSeedMode === 'random' ? { historySeedMode: 'random' as const } : {}) } : {}) }); }
-          catch (error) {
-            // An accepted submit may have lost its response. One read-only
-            // lookup can recover it; never invoke submit a second time here.
-            try { child = await deps.generation.lookup(childRequest); } catch { child = null; }
-            if (!child) {
-              if (errorCode(error) === 'workspace_busy') {
-                item.status = 'pending'; item.providerOutcome = 'not_submitted'; entry.public.activeIndex = null;
-                entry.public.status = 'queued'; emit(entry); await durable(entry); await wait(100); continue;
-              }
-              if (new Set(['invalid_arguments', 'invalid_configuration', 'unsupported_mode', 'unsupported_reference', 'unsupported_configuration', 'invalid_image', 'unavailable']).has(errorCode(error))) {
-                // A manual item keeps the refusal's own reason (the window shows it, as its manual generation did).
-                item.status = 'failed'; item.providerOutcome = 'not_submitted'; item.error = { code: errorCode(error), message: entry.manual && error instanceof Error && error.message ? error.message : 'The image was refused before any request was sent.', ...(entry.manual ? reasonOf(error) : {}) };
-                block(entry, 'child_rejected', 'An image was refused before any request was sent; the remaining images did not run.'); await durable(entry); await haltFollowers(entry); return;
-              }
-              item.status = 'unknown'; item.providerOutcome = 'unknown'; item.error = { code: 'submission_unconfirmed', message: 'Whether this image was submitted could not be confirmed; it was not resent.' };
-              block(entry, 'submission_unconfirmed', 'Whether an image was submitted could not be confirmed; the batch stopped. Check the history.'); await durable(entry); await haltFollowers(entry); return;
-            }
+        try { if (await turn(entry) === 'stop') return; }
+        catch {
+          if (disposed || stoppedByStorage(entry)) return;
+          try { await contain(entry); }
+          catch {
+            // Even recording the error failed (and it was no storage failure): this batch ends here in memory, so the
+            // FIFO can never spin on it.
+            if (!isBatchTerminal(entry.public.status) && !stoppedByStorage(entry)) { pendingItems(entry, 'skipped'); finish(entry, 'partial'); }
+            return;
           }
         }
-        entry.public.activeJobId = child.jobId;
-        entry.public.status = entry.public.cancelRequested ? 'cancelling' : entry.pauseRequested ? 'pausing' : 'running';
-        await track(entry, item, child);
-        if (disposed || stoppedByStorage(entry)) return;
-        entry.public.activeIndex = null; entry.public.activeJobId = null;
-        if (entry.public.cancelRequested) { pendingItems(entry, 'cancelled'); finish(entry, 'cancelled'); await durable(entry); return; }
-        // A manual batch goes on after an image whose outcome is unknown (as the window's manual generation did); a
-        // refused, failed or cancelled image stops the rest of it. It never halts another batch.
-        if (entry.manual && (item.status as BatchItem['status']) === 'unknown' && !entry.public.cancelRequested && entry.public.items.some(value => value.status === 'pending')) { entry.nextAt = Date.now() + entry.public.intervalSeconds * 1000; emit(entry); continue; }
-        if (!['succeeded'].includes(item.status)) { block(entry, 'child_stopped', 'An image failed, was cancelled or has an unknown result; the remaining images did not run and nothing is resent.'); await durable(entry); await haltFollowers(entry); return; }
-        if (!entry.public.items.some((value) => value.status === 'pending')) {
-          // A manual batch may end after an image of unknown outcome: it ends stopped, never reported as succeeded.
-          if (entry.public.items.every(value => value.status === 'succeeded')) finish(entry, 'succeeded');
-          else block(entry, 'child_stopped', 'Some images of this batch did not succeed; it is not reported as succeeded and submits nothing more.');
-          await durable(entry); return;
-        }
-        entry.nextAt = Date.now() + entry.public.intervalSeconds * 1000;
-        // The gap between two images: merged into the next image's possibly-sent mark.
-        emit(entry); await durable(entry, 'later');
       }
-    } catch {
-      if (!stoppedByStorage(entry)) { block(entry, 'scheduler_stopped', 'The scheduler hit an error and stopped submitting; check the images already created.'); await durable(entry); await haltFollowers(entry); }
     } finally {
       entry.working = false;
-      if (disposed && !isBatchTerminal(entry.public.status) && !entry.public.activeJobId) { pauseFor(entry, 'scheduler_closed', 'The scheduler closed; the remaining images did not run.'); if (!storageError) await durable(entry); }
+      if (disposed && !isBatchTerminal(entry.public.status) && !entry.public.activeJobId) { pauseFor(entry, 'scheduler_closed', 'The app was closing; the remaining images continue after the next start.'); if (!storageError) await durable(entry); }
     }
   }
   function prepareEntry(raw: unknown, args: BatchRequest, manual = false): Entry {
@@ -589,7 +697,7 @@ export function createBatchService(deps: BatchDependencies) {
     // source (step 4a) is absent on batches stored before it; it never changes after the enqueue.
     const immutable = ['batchId','execution','originWorkspaceId','expectedRevision','submittedRevision','requestKey','mode','count','intervalSeconds','seedMode','scenePlanHash','draftId','createdAt','source'];
     for (const key of immutable) if (JSON.stringify((job as any)[key]) !== JSON.stringify((input.initial as any)[key])) return storageFailed();
-    if (job.count !== args.count || job.originWorkspaceId !== args.workspaceId || job.requestKey !== args.requestKey || job.mode !== args.mode || job.expectedRevision !== args.expectedRevision || job.submittedRevision !== args.expectedRevision || !['queued','running','pausing','paused','cancelling','succeeded','cancelled','blocked'].includes(job.status) || typeof job.cancelRequested !== 'boolean' || !Number.isFinite(Date.parse(job.updatedAt)) || !Array.isArray(job.items) || job.items.length !== args.count || !Array.isArray(input.initial.items) || input.initial.items.length !== args.count) return storageFailed();
+    if (job.count !== args.count || job.originWorkspaceId !== args.workspaceId || job.requestKey !== args.requestKey || job.mode !== args.mode || job.expectedRevision !== args.expectedRevision || job.submittedRevision !== args.expectedRevision || !['queued','running','pausing','paused','cancelling','succeeded','partial','cancelled','blocked'].includes(job.status) || (job.pausedBy !== undefined && job.pausedBy !== 'user') || typeof job.cancelRequested !== 'boolean' || !Number.isFinite(Date.parse(job.updatedAt)) || !Array.isArray(job.items) || job.items.length !== args.count || !Array.isArray(input.initial.items) || input.initial.items.length !== args.count) return storageFailed();
     if ((job.activeIndex !== null && (!Number.isSafeInteger(job.activeIndex) || job.activeIndex < 0 || job.activeIndex >= job.count)) || (job.activeJobId !== null && (typeof job.activeJobId !== 'string' || !job.activeJobId)) || (job.error !== null && (!record(job.error) || typeof job.error.code !== 'string' || typeof job.error.message !== 'string'))) return storageFailed();
     for (const [index, item] of job.items.entries()) {
       const original = input.initial.items[index];
@@ -598,6 +706,9 @@ export function createBatchService(deps: BatchDependencies) {
       // An item with child evidence cannot be restored as unsent, even when the
       // JSON remains valid after a damaged status field. Never replay it.
       if (['pending', 'submitting'].includes(item.status) && (item.jobId !== null || item.actualSeed !== null || item.results.length)) return storageFailed();
+      // Fields added in 0.1.4 (absent on older records): image times and the resends after HTTP 429.
+      const time = (value: unknown) => value === undefined || value === null || (typeof value === 'string' && Number.isFinite(Date.parse(value)));
+      if (!time(item.startedAt) || !time(item.finishedAt) || (item.rateLimitRetries !== undefined && (!Number.isSafeInteger(item.rateLimitRetries) || item.rateLimitRetries < 1 || item.rateLimitRetries > 16))) return storageFailed();
       for (const result of item.results) if (!record(result) || typeof result.id !== 'string' || !result.id || !Number.isSafeInteger(result.index) || result.index < 0 || !Number.isFinite(result.width) || result.width <= 0 || !Number.isFinite(result.height) || result.height <= 0 || typeof result.model !== 'string') return storageFailed();
     }
     const activeItems = job.items.filter(item => ['submitting', 'running'].includes(item.status));
@@ -628,21 +739,25 @@ export function createBatchService(deps: BatchDependencies) {
         if (saved[0].jobId) item.jobId = saved[0].jobId;
       }
     }
-    const uncertain = restored.items.some(item => ['submitting','running'].includes(item.status)), stopped = restored.items.some(item => ['failed','unknown','cancelled','skipped'].includes(item.status));
     if (!isBatchTerminal(restored.status)) {
+      // A restart goes on where the batch was (0.1.4): only the image that was in flight and not found saved is
+      // marked unknown (never resent); the rest continues on its own. A batch the user paused stays paused; a pause
+      // the queue made itself (closing app, storage failure, an older version's stop after a failure) does not.
+      const now = new Date().toISOString();
+      for (const item of restored.items) if (['submitting', 'running'].includes(item.status)) {
+        if (item.providerOutcome !== 'response_received') item.providerOutcome = 'unknown';
+        item.status = 'unknown'; item.finishedAt = now; item.error = { code: 'restart_unconfirmed', message: 'The app closed while this image was running; whether it was submitted or saved is unknown. It is not resent; the rest of the batch went on.' };
+      }
       restored.activeIndex = null; restored.activeJobId = null;
-      if (!uncertain && !stopped && restored.items.every(item => item.status === 'succeeded')) {
-        // Every image was saved: the batch ended successfully while the app was closing.
-        restored.status = 'succeeded'; restored.error = null; restored.finishedAt = new Date().toISOString();
-      } else if (uncertain || stopped) {
-        for (const item of restored.items) {
-          if (['submitting','running'].includes(item.status)) { if (item.providerOutcome !== 'response_received') item.providerOutcome = 'unknown'; item.status = 'unknown'; item.error = { code: 'restart_unconfirmed', message: 'The app closed while this image was running; whether it was submitted or saved is unknown. It is not resent.' }; }
-          else if (item.status === 'pending') { item.status = 'skipped'; item.error = { code: 'restart_blocked', message: 'An image of this batch did not succeed; the images not yet submitted do not continue.' }; }
-        }
-        restored.status = 'blocked'; restored.error = { code: 'restart_unconfirmed', message: 'This batch has an image with an unknown or unsuccessful outcome; check the history. It cannot be resumed to resend.' }; restored.finishedAt = new Date().toISOString();
-      } else if (restored.cancelRequested) {
-        restored.status = 'cancelled'; for (const item of restored.items) if (item.status === 'pending') item.status = 'cancelled';
-      } else { restored.status = 'paused'; restored.error = { code: 'recovered_paused', message: 'The frozen recipes were recovered; the images not yet submitted wait for an explicit resume and do not start on launch.' }; }
+      if (restored.cancelRequested) {
+        for (const item of restored.items) if (item.status === 'pending') item.status = 'cancelled';
+        restored.status = 'cancelled'; restored.finishedAt = now; delete restored.pausedBy;
+      } else if (!restored.items.some(item => item.status === 'pending')) {
+        // Every image had its turn while the app was closing.
+        restored.status = restored.items.every(item => item.status === 'succeeded') ? 'succeeded' : 'partial'; restored.error = null; restored.finishedAt = now; delete restored.pausedBy;
+      } else if (restored.pausedBy === 'user' && ['paused', 'pausing'].includes(restored.status)) {
+        restored.status = 'paused'; restored.error = null;
+      } else { restored.status = 'queued'; restored.error = null; delete restored.pausedBy; }
     }
     for (const item of restored.items) if (item.status === 'unknown' && item.providerOutcome !== 'response_received') item.providerOutcome = 'unknown';
     // Ended batches never submit again, so only resumable ones keep their recipes in memory.
@@ -650,8 +765,8 @@ export function createBatchService(deps: BatchDependencies) {
   }
   const ready = storage ? storage.load().then(async records => {
     const restored = records.map(({ input, job }) => recover(input, job));
-    // Stored unfinished (P2-1 review rework): whatever the restart made of it (blocked with its finishedAt, paused,
-    // cancelled, succeeded) is written now, so it is fixed on disk and an ended one can be cleaned later.
+    // Stored unfinished (P2-1 review rework): whatever the restart made of it (queued again, paused, cancelled, ended
+    // with its finishedAt) is written now, so it is fixed on disk and an ended one can be cleaned later.
     const storedUnfinished = new Set(records.filter(({ job }) => !isBatchTerminal(job.status)).map(({ job }) => job.batchId));
     const keys = new Set<string>();
     for (const entry of restored) {
@@ -665,7 +780,12 @@ export function createBatchService(deps: BatchDependencies) {
       if (storedUnfinished.has(entry.public.batchId)) await durable(entry); else entry.persistedState = stateKeyOf(entry.public);
       emit(entry);
     }
+    // The time-left estimate starts from the images the stored batches timed (newest last).
+    const timed = restored.flatMap(entry => entry.public.items).filter(item => item.status === 'succeeded' && item.startedAt && item.finishedAt).sort((a, b) => Date.parse(a.finishedAt!) - Date.parse(b.finishedAt!));
+    for (const item of timed.slice(-IMAGE_TIME_SAMPLES)) sampleDuration(item);
     scheduleCompaction();
+    // Unfinished batches go on after a start, also one by an agent's MCP server (0.1.4).
+    queueMicrotask(kick);
   }).catch(error => storageFailed(error)) : Promise.resolve();
   void ready.catch(() => {}); // Callers await ready; no unhandled rejection before IPC is attached.
   async function drain() {
@@ -705,7 +825,6 @@ export function createBatchService(deps: BatchDependencies) {
         const pendingLimit = pendingItemLimit();
         if (pendingLimit !== null && pendingQueuedItems() + args.count > pendingLimit) throw withReason(new BatchError('queue_full', `The queue holds at most ${pendingLimit} unfinished images (Settings, total queue limit); finish or cancel some first.`), 'queue.pending_limit', { limit: pendingLimit });
         const entry = prepareEntry(raw, args); entry.sequence = ++sequence;
-        if (queueHalted) { entry.pauseRequested = true; entry.public.status = 'paused'; entry.public.error = { code: 'queue_halted', message: 'An earlier batch failed or has an unknown result; this new batch was saved paused until resumed.' }; }
         const input: FrozenBatchInput = { schemaVersion: 1, batchId: entry.public.batchId, sequence: entry.sequence, request: structuredClone(args), fingerprint: entry.fingerprint, payloadHash: entry.payloadHash!, snapshots: structuredClone(entry.snapshots!), initial: structuredClone(entry.public) };
         if (Buffer.byteLength(JSON.stringify(input), 'utf8') > MAX_FROZEN_BATCH_INPUT_BYTES) return fail('queue_input_too_large', 'The frozen input of one batch exceeds 64 MiB; use fewer images or smaller sources.');
         try { entry.sequence = await requireStorage().create(input); sequence = Math.max(sequence, entry.sequence); }
@@ -766,6 +885,43 @@ export function createBatchService(deps: BatchDependencies) {
       }
       return ahead;
     },
+    /**
+     * Where this batch stands (read_queue): the unfinished images and batches ahead of it in the FIFO that will run
+     * before it (not paused; of a batch pausing only its running image), and the seconds until it ends, estimated from
+     * the median time of the recent images this queue finished (imageSeconds) plus the intervals: null without a
+     * timed image or while this batch is paused; 0 once it ended. null for a batch this process does not have.
+     */
+    position(batchId: string): BatchPosition | null {
+      const target = entries.get(batchId); if (!target) return null;
+      if (isBatchTerminal(target.public.status)) return { ahead: { images: 0, batches: 0 }, etaSeconds: 0, imageSeconds: medianImageMs() === null ? null : Math.round(medianImageMs()! / 100) / 10 };
+      const sample = medianImageMs(), now = Date.now();
+      const open = (item: BatchItem) => ['pending', 'submitting', 'running'].includes(item.status);
+      // Time left of one batch: its running image's rest, its pending images and the intervals before them.
+      const left = (entry: Entry, onlyActive: boolean) => {
+        if (sample === null) return 0;
+        const items = entry.public.items, active = items.filter(item => ['submitting', 'running'].includes(item.status));
+        let ms = active.reduce((sum, item) => { const started = Date.parse(item.startedAt ?? ''); return sum + (Number.isFinite(started) ? Math.max(0, sample - (now - started)) : sample); }, 0);
+        if (onlyActive) return ms;
+        const pending = items.filter(item => item.status === 'pending').length, interval = entry.public.intervalSeconds * 1000;
+        const gaps = items.some(item => item.status !== 'pending') ? pending : Math.max(0, pending - 1);
+        ms += pending * sample;
+        if (!active.length && entry.nextAt > now && pending) ms += (entry.nextAt - now) + Math.max(0, gaps - 1) * interval;
+        else ms += gaps * interval;
+        return ms;
+      };
+      let images = 0, batches = 0, ms = 0;
+      for (const entry of entries.values()) {
+        if (entry === target) break;
+        if (entry.public.execution !== 'queued' || isBatchTerminal(entry.public.status) || stoppedByStorage(entry)) continue;
+        const paused = entry.pauseRequested || entry.public.status === 'paused' || entry.public.cancelRequested;
+        const counted = entry.public.items.filter(item => paused ? ['submitting', 'running'].includes(item.status) : open(item)).length;
+        if (!counted) continue;
+        images += counted; batches++; ms += left(entry, paused);
+      }
+      const waiting = target.pauseRequested || target.public.status === 'paused' || stoppedByStorage(target);
+      ms += left(target, target.public.cancelRequested);
+      return { ahead: { images, batches }, etaSeconds: sample === null || waiting ? null : Math.round(ms / 1000), imageSeconds: sample === null ? null : Math.round(sample / 100) / 10 };
+    },
     capacity,
     /** Bytes of frozen recipes (with their image bytes) this batch still holds: zero once it ended (diagnostics and tests). */
     heldInputBytes(raw: unknown) { const { entry } = find(raw); return (entry.snapshots ? JSON.stringify(entry.snapshots).length : 0) + (entry.manual?.source?.bytes.length ?? 0); },
@@ -825,7 +981,8 @@ export function createBatchService(deps: BatchDependencies) {
     read(raw: unknown) { const { entry, workspaceId } = find(raw); return expose(entry, workspaceId); },
     pause(raw: unknown) {
       const { entry, workspaceId } = find(raw);
-      if (!isBatchTerminal(entry.public.status) && !entry.public.cancelRequested) { entry.pauseRequested = true; entry.public.status = entry.public.activeIndex !== null ? 'pausing' : 'paused'; emit(entry); }
+      // An explicit pause (the window or control_queue) is the user's: it stays paused across a restart (pausedBy).
+      if (!isBatchTerminal(entry.public.status) && !entry.public.cancelRequested) { entry.pauseRequested = true; entry.public.pausedBy = 'user'; entry.public.status = entry.public.activeIndex !== null ? 'pausing' : 'paused'; emit(entry); }
       return entry.public.execution === 'queued' ? durable(entry).then(() => expose(entry, workspaceId)) : expose(entry, workspaceId);
     },
     async resume(raw: unknown) {
@@ -836,9 +993,7 @@ export function createBatchService(deps: BatchDependencies) {
         if (!entry.manual) requireStorage();
         if (disposed) return fail('unavailable', 'The queue scheduler is closed.');
         entry.public.checkpointWorkspaceId = workspaceId; entry.public.checkpointRevision = args.expectedRevision;
-        // Resuming an agent batch is the explicit agent-side confirmation that lifts the halt after a failure; a manual
-        // batch never set it and resuming one leaves the agent batches' protection in place.
-        entry.pauseRequested = false; entry.public.status = 'queued'; entry.public.error = null; if (!entry.manual) queueHalted = false;
+        entry.pauseRequested = false; entry.public.status = 'queued'; entry.public.error = null; delete entry.public.pausedBy;
         emit(entry); await durable(entry); kick(); return expose(entry, workspaceId);
       }
       return fail('batch_not_queued', 'Only frozen queue batches can be resumed.');

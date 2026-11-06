@@ -6,22 +6,28 @@ import type { HostErrorTexts } from "./types";
  * by code here.
  */
 export const QUEUE_ERROR_TEXTS: HostErrorTexts = {
-  // Batch states (BatchJob.error)
-  queue_halted: { "zh-CN": "前一批次失败或结果未知；之后的 Agent 批次已暂停，核对后可显式继续。", "en-US": "An earlier batch failed or has an unknown result; the agent batches after it are paused until you resume them." },
+  // Batch states (BatchJob.error). A failed or unknown image no longer stops its batch or pauses another one; the
+  // codes of that behaviour stay readable for batches stored by older versions, worded in the past tense.
   cancel_unconfirmed: { "zh-CN": "取消请求未能确认；正在等待这一张结束，不会开始后续张。", "en-US": "The cancellation could not be confirmed; waiting for this image to end, and no further image starts." },
-  child_status_unavailable: { "zh-CN": "暂时无法读取当前这一张；保留占用并停止后续提交。", "en-US": "The current image cannot be read right now; the slot is kept and nothing more is submitted." },
-  child_stopped: { "zh-CN": "有图片失败、被取消或结果未知，后续张未执行；不会自动重发。", "en-US": "An image failed, was cancelled or has an unknown result; the remaining images did not run and nothing is resent." },
-  child_lookup_failed: { "zh-CN": "无法确认下一张是否已提交，尚未提交；请检查后再继续。", "en-US": "Whether the next image was already submitted could not be confirmed, so it was not submitted; check, then resume." },
-  child_rejected: { "zh-CN": "有图片在发出请求前被明确拒绝，后续张未执行。", "en-US": "An image was refused before any request was sent; the remaining images did not run." },
-  submission_unconfirmed: { "zh-CN": "无法确认这一张是否已提交，批次已停止；未自动重发，请核对历史。", "en-US": "Whether an image was submitted could not be confirmed; the batch stopped and nothing was resent. Check the history." },
-  scheduler_stopped: { "zh-CN": "队列调度遇到异常，已停止后续提交；请核对已生成的图片。", "en-US": "The scheduler hit an error and stopped submitting; check the images already created." },
-  scheduler_closed: { "zh-CN": "队列调度已关闭，后续张未执行。", "en-US": "The scheduler closed; the remaining images did not run." },
-  restart_unconfirmed: { "zh-CN": "应用在出图过程中关闭，提交或保存结果未知；不会重发，请核对历史。", "en-US": "The app closed while an image was running; whether it was submitted or saved is unknown. It is not resent; check the history." },
-  restart_blocked: { "zh-CN": "批次已有未成功的图片，未提交的图片不会继续。", "en-US": "An image of this batch did not succeed; the images not yet submitted do not continue." },
-  recovered_paused: { "zh-CN": "已恢复冻结的配方；尚未提交的图片等待手动继续，不会在启动时自动执行。", "en-US": "The frozen recipes were recovered; the images not yet submitted wait for you to resume and do not start on launch." },
-  queue_storage_error: { "zh-CN": "冻结队列无法安全读取或写入；文件已保留，新的提交已停止。", "en-US": "The frozen queue cannot be read or written safely; its files are kept and new submissions are stopped." },
+  scheduler_stopped: { "zh-CN": "队列内部出错，这个批次提前结束，剩下的图片没有生成；其他批次不受影响。请核对已生成的图片。", "en-US": "An internal error of the queue ended this batch early; its remaining images were skipped. Other batches are not affected; check the images already created." },
+  scheduler_closed: { "zh-CN": "应用正在关闭，队列先停止出图；重新启动后这个批次会接着出图。", "en-US": "The app was closing, so the queue stopped for now; this batch continues after the restart." },
   update_pending: { "zh-CN": "应用正准备重启安装更新，暂不开始出图；这一批还没有发出任何请求。此时有新批次加入就会取消这次更新，批次照常执行。", "en-US": "The app is about to restart to install an update, so no image starts right now; nothing of this batch was sent. A batch that arrives now calls the update off, and the batch then runs as usual." },
+  queue_storage_error: { "zh-CN": "冻结队列无法安全读取或写入；文件已保留，新的提交已停止。", "en-US": "The frozen queue cannot be read or written safely; its files are kept and new submissions are stopped." },
   "queue.stray_entry": { "zh-CN": "冻结队列文件夹里有本应用不使用的条目：{entry}（在数据文件夹内）。冻结队列已停止，没有改动任何文件。把这个条目移走或删除，然后重新启动应用即可恢复。", "en-US": "The frozen queue folder holds an entry this app does not use: {entry} (in the data folder). The frozen queue stopped without changing any file. Move or delete that entry, then restart the app." },
+  // Legacy batch reasons (older versions only)
+  queue_halted: { "zh-CN": "旧版本在前一批失败或结果未知后暂停了这个批次；现在的队列不会因此暂停其他批次。", "en-US": "An older version paused this batch after an earlier batch failed or had an unknown result; the queue no longer pauses other batches for that." },
+  recovered_paused: { "zh-CN": "旧版本在重启后让这个批次等待手动继续；现在的队列重启后会自动接着出图。", "en-US": "An older version kept this batch waiting for you after a restart; the queue now continues batches by itself after a restart." },
+  child_stopped: { "zh-CN": "有图片失败、被取消或结果未知，旧版本因此停止了这个批次，剩下的图片没有生成；没有重发任何图片。", "en-US": "An image failed, was cancelled or had an unknown result, so an older version stopped this batch; its remaining images were not generated and nothing was resent." },
+  child_rejected: { "zh-CN": "有图片在发出请求前被明确拒绝，旧版本因此停止了这个批次，剩下的图片没有生成。", "en-US": "An image was refused before any request was sent, so an older version stopped this batch; its remaining images were not generated." },
+  restart_blocked: { "zh-CN": "这个批次已有未成功的图片，旧版本在重启后没有继续剩下的图片。", "en-US": "An image of this batch had not succeeded, so an older version did not continue its remaining images after a restart." },
+  // Image outcomes (BatchItem.error): this image only; the batch went on with its other images.
+  rate_limited: { "zh-CN": "NovelAI 回复请求过多（HTTP 429，可能有另一张图正在生成）。约 60 秒内已自动重发，仍被拒绝；这张没有出图，不再重试，批次接着出后面的图。", "en-US": "NovelAI answered that there are too many requests (HTTP 429; another generation may be running). The image was sent again for about 60 seconds and still refused, so it was not generated and is not retried; the batch went on." },
+  child_lookup_failed: { "zh-CN": "约 90 秒内无法确认这一张是否已提交；标记为结果未知，不会重发，批次接着出后面的图。请核对历史。", "en-US": "Whether this image had already been submitted could not be confirmed for about 90 seconds; it is marked unknown and never resent, and the batch went on. Check the history." },
+  child_status_unavailable: { "zh-CN": "约 90 秒内读不到正在生成的这一张；标记为结果未知（可能已出图并扣费），不会重发，批次接着出后面的图。", "en-US": "The running image could not be read for about 90 seconds; it is marked unknown (it may have been generated and charged), never resent, and the batch went on." },
+  scheduler_error: { "zh-CN": "队列处理这一张时出现内部错误；不会重发，批次接着出后面的图。", "en-US": "The queue hit an internal error while handling this image; it is not resent, and the batch went on." },
+  // Also the reason of legacy blocked batches, so neither says what happened to the rest of the batch.
+  submission_unconfirmed: { "zh-CN": "无法确认这一张是否已提交；没有重发，请核对历史。", "en-US": "Whether this image was submitted could not be confirmed; it was not resent. Check the history." },
+  restart_unconfirmed: { "zh-CN": "应用在这一张出图时关闭，提交或保存结果未知；不会重发，请核对历史。", "en-US": "The app closed while this image was running; whether it was submitted or saved is unknown. It is not resent; check the history." },
   // Queue operations
   batch_not_found: { "zh-CN": "本次运行中没有这个批次。", "en-US": "This run of the app has no such batch." },
   batch_not_paused: { "zh-CN": "只有正常暂停的批次可以继续；失败或结果未知的图片不会重发。", "en-US": "Only a paused batch can be resumed; a failed or unknown image is never resent." },

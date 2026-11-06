@@ -67,7 +67,9 @@ describe('the frame of the new interface (step 4b1)', () => {
     // Step 4b2: the settings page and the guide have capture names too; an old settings name opens the new page.
     expect(captureRequest('?uiCapture=settings&uiCapturePage=23-settings-mcp-codex-en')).toEqual({ page: 'settings-mcp-codex', lang: 'en' });
     expect(captureRequest('?uiCapture=onboarding&uiCapturePage=32-onboarding-2-connected-zh')).toEqual({ page: 'onboarding-2-connected', lang: 'zh' });
-    expect(captureRequest('?uiCapture=x&uiCapturePage=18-queue-halted')).toEqual({ page: 'queue-halted', lang: null });
+    expect(captureRequest('?uiCapture=x&uiCapturePage=18-queue-partial')).toEqual({ page: 'queue-partial', lang: null });
+    // The halted scene is gone with the automatic pause (0.1.4): its old name is an unknown page now.
+    expect(captureRequest('?uiCapture=x&uiCapturePage=18-queue-halted')).toBeNull();
     expect(captureRequest('?uiCapture=x&uiCapturePage=settings-api')).toBeNull();
   });
 

@@ -41,7 +41,7 @@ export interface CleanedOutput { historyGroup?: string; fileNamePrefix?: string;
 export interface CleanedBatchRecord {
   kind: 'batch'; v: 1;
   /** recipeHash(requestKey): the hash in the receipt's file name (request-<keyHash>.json); the key itself is not kept. */
-  keyHash: string; batchId: string; mode: string; status: 'succeeded' | 'cancelled' | 'blocked'; stopCode: string | null;
+  keyHash: string; batchId: string; mode: string; status: 'succeeded' | 'partial' | 'cancelled' | 'blocked'; stopCode: string | null;
   count: number; counts: CleanedItemCounts;
   /** The receipt's plan identity; null when the batch had no receipt (not made by this app's enqueue). */
   requestHash: string | null; recipePlanHash: string | null; intervalSeconds: number; output?: CleanedOutput;
@@ -76,7 +76,7 @@ export function validCleanedRecord(value: unknown): value is CleanedRecord {
   if (value.kind !== 'batch' || !sameKeys(value, ['kind', 'v', 'keyHash', 'batchId', 'mode', 'status', 'stopCode', 'count', 'counts', 'requestHash', 'recipePlanHash', 'intervalSeconds', 'createdAt', 'finishedAt', 'cleanedAt'], ['output'])) return false;
   const counts = value.counts, output = value.output;
   return typeof value.keyHash === 'string' && HASH.test(value.keyHash) && typeof value.batchId === 'string' && UUID.test(value.batchId)
-    && ['t2i', 'i2i', 'inpaint', 'enhance', 'upscale', 'director'].includes(value.mode) && ['succeeded', 'cancelled', 'blocked'].includes(value.status) && (value.stopCode === null || (typeof value.stopCode === 'string' && CODE.test(value.stopCode)))
+    && ['t2i', 'i2i', 'inpaint', 'enhance', 'upscale', 'director'].includes(value.mode) && ['succeeded', 'partial', 'cancelled', 'blocked'].includes(value.status) && (value.stopCode === null || (typeof value.stopCode === 'string' && CODE.test(value.stopCode)))
     && Number.isSafeInteger(value.count) && value.count >= 1 && value.count <= 200
     && isObject(counts) && sameKeys(counts, [...CLEANED_ITEM_STATUSES]) && CLEANED_ITEM_STATUSES.every(key => count(counts[key]))
     && CLEANED_ITEM_STATUSES.reduce((sum, key) => sum + counts[key], 0) === value.count

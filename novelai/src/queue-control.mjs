@@ -54,25 +54,42 @@ export function batchSource(source) {
   return { kind: 'agent', client: name ? { name, version: sourceText(client.version, 50) } : null };
 }
 /**
- * Why a batch is paused, blocked or holding (step 4b2; stopReason in outputs): the host's code for it, with this server's own English
- * explanation for the codes the host queue sets (electron/batch-service.ts). The host's message is never passed on
- * (as with item errors): an unknown code is reported by its code only.
+ * Why a batch holds, is paused or ended early (stopReason in outputs): the host's code for it, with this server's own
+ * English explanation for the codes the host queue sets (electron/batch-service.ts). The host's message is never passed
+ * on (as with item errors): an unknown code is reported by its code only. Since 0.1.4 no failure stops the queue: a
+ * failed or unknown image marks only itself (see ITEM_REASONS) and its batch goes on; the codes marked "before
+ * 0.1.4" appear only on batches an older app version stored.
  */
 export const BATCH_REASONS = Object.freeze({
-  queue_halted: 'An earlier agent batch failed or has an unknown result, so this batch was paused before sending anything more. It keeps its original frozen recipes; resume it only when the user asks.',
-  child_stopped: 'Some images of this batch did not succeed, so it stopped and submits nothing more. Failed or unknown images are never resent.',
-  child_rejected: 'An image was refused before any request was sent; the remaining images of this batch did not run.',
-  submission_unconfirmed: 'Whether an image was submitted could not be confirmed (it may have been generated and charged), so the batch stopped without resending it. Check the history before enqueuing again.',
-  restart_unconfirmed: 'The app closed while an image was running; its outcome is unknown and it is not resent. This batch cannot be resumed.',
-  restart_blocked: 'An image of this batch did not succeed before the app closed; the images not yet submitted do not continue.',
-  recovered_paused: 'The app restarted; the images not yet submitted wait, paused, for an explicit resume.',
-  child_lookup_failed: 'Whether the next image was already submitted could not be confirmed, so it was not submitted and the batch paused.',
-  child_status_unavailable: 'The running image cannot be read right now; the batch holds and submits nothing more.',
-  cancel_unconfirmed: 'The cancellation could not be confirmed; the running image is awaited and no further image starts.',
-  queue_storage_error: 'The frozen queue cannot be read or written safely: agent batches are paused and new enqueues are refused until it is fixed.',
-  scheduler_stopped: 'The queue scheduler hit an error and stopped this batch; nothing more is submitted for it. Check the images already created before enqueuing again.',
-  scheduler_closed: 'The app was closing, so this batch stopped before its remaining images; they did not run and are not resent.',
+  cancel_unconfirmed: 'The cancellation could not be confirmed; the running image is awaited and no further image of this batch starts.',
+  queue_storage_error: 'The frozen queue cannot be read or written safely: agent batches are paused and new enqueues are refused until it is fixed (this protects the queued data).',
+  scheduler_stopped: 'The queue hit an internal error and ended this batch early; its remaining images were skipped and are not sent. Other batches are not affected.',
+  scheduler_closed: 'The app was closing; this batch continues by itself after the next app start (an image that was running then is marked unknown and not resent).',
   update_pending: 'The app is about to restart to install an update, so no image starts right now; nothing of this batch was sent. A batch that arrives now calls the update off, and the batch then runs as usual.',
+  // Stored by app versions before 0.1.4 only.
+  queue_halted: 'Before 0.1.4 the app paused later agent batches after a failure; it no longer does, and such a batch continues after the next app start.',
+  child_stopped: 'Before 0.1.4 the app stopped a batch at its first unsuccessful image; the images after it were skipped. Failed or unknown images are never resent.',
+  child_rejected: 'Before 0.1.4 the app stopped this batch when an image was refused before sending; the images after it were skipped.',
+  submission_unconfirmed: 'Before 0.1.4 the app stopped this batch when whether an image was submitted could not be confirmed; that image was not resent and the images after it were skipped.',
+  restart_unconfirmed: 'Before 0.1.4 the app ended this batch after a restart because an image had an unknown outcome; nothing was resent.',
+  restart_blocked: 'Before 0.1.4 the app ended this batch after a restart because an image had not succeeded; the images not yet submitted were skipped.',
+  recovered_paused: 'Before 0.1.4 the app kept unfinished batches paused after a restart; such a batch continues after the next app start.',
+  child_lookup_failed: 'Before 0.1.4 the app paused this batch when whether its next image was submitted could not be confirmed.',
+  child_status_unavailable: 'Before 0.1.4 the app held this batch when its running image could not be read.',
+});
+/**
+ * What an item's error code means (read_queue itemReasons, for the codes present), for the codes the queue itself sets
+ * on one image. Codes of the generation request (generation_failed, authentication_failed, …) speak for themselves.
+ */
+export const ITEM_REASONS = Object.freeze({
+  rate_limited: 'NovelAI answered HTTP 429 (too many requests, e.g. another generation running on the account); the image was sent again automatically for about 60 seconds, was not generated and is not sent again.',
+  child_lookup_failed: 'Whether this image had already been submitted could not be confirmed for about 90 seconds; it is marked unknown and never resent. The batch went on.',
+  child_status_unavailable: 'The running image could not be read for about 90 seconds; its outcome is unknown (it may have been generated and charged) and it is never resent. The batch went on.',
+  submission_unconfirmed: 'Whether this image was submitted could not be confirmed (it may have been generated and charged); it is never resent. The batch went on.',
+  restart_unconfirmed: 'The app closed while this image ran; its outcome is unknown and it is never resent. The rest of the batch continued after the restart.',
+  scheduler_error: 'The queue hit an internal error while handling this image; it is never resent. The batch went on.',
+  provider_unknown: 'The request may have been sent and its outcome is unknown (it may have been generated and charged); it is never resent.',
+  authentication_failed: 'NovelAI refused the token (HTTP 401/403); the image failed. Later images fail the same way until the user fixes the token in the app.',
 });
 const REASON_CODE = /^[a-z][a-z0-9_]{0,79}$/;
 /**
@@ -85,6 +102,13 @@ export function batchReason(error) {
   return Object.hasOwn(BATCH_REASONS, code) ? { code, message: BATCH_REASONS[code] } : { code };
 }
 const itemCount = (batch, status) => (Array.isArray(batch.items) ? batch.items : []).filter(item => item?.status === status).length;
+const COUNTED_STATUSES = ['pending', 'running', 'succeeded', 'failed', 'unknown', 'cancelled', 'skipped'];
+/** Images per status (running = submitting or running), so a partial end says how many failed or are unknown. */
+export function batchItemCounts(batch) {
+  const counts = Object.fromEntries(COUNTED_STATUSES.map(status => [status, 0]));
+  for (const item of Array.isArray(batch?.items) ? batch.items : []) { const status = item?.status === 'submitting' ? 'running' : item?.status; if (Object.hasOwn(counts, status)) counts[status]++; }
+  return counts;
+}
 
 const CLEANED_COUNTS = ['succeeded', 'failed', 'unknown', 'cancelled', 'skipped'];
 const isoTime = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null;
@@ -114,8 +138,8 @@ const unknownInstruction = batch => {
 export function compactQueuedBatch(batch) {
   if (batch?.cleaned === true) return compactCleanedBatch(batch);
   return { batchId: batch.batchId, requestKey: batch.requestKey, execution: batch.execution, source: batchSource(batch.source), status: batch.status, stopReason: batchReason(batch.error), count: batch.count,
-    recipePlanHash: batch.recipePlanHash, intervalSeconds: batch.intervalSeconds, activeJobId: batch.activeJobId ?? null, ...compactOutput(batch.output),
-    items: (batch.items ?? []).map(item => ({ index: item.index, status: item.status, jobId: item.jobId ?? null, resultCount: item.results?.length ?? 0, error: item.error?.code ?? null })) };
+    recipePlanHash: batch.recipePlanHash, intervalSeconds: batch.intervalSeconds, activeJobId: batch.activeJobId ?? null, ...compactOutput(batch.output), itemCounts: batchItemCounts(batch),
+    items: (batch.items ?? []).map(item => ({ index: item.index, status: item.status, jobId: item.jobId ?? null, resultCount: item.results?.length ?? 0, error: item.error?.code ?? null, ...(Number.isSafeInteger(item.rateLimitRetries) && item.rateLimitRetries > 0 ? { rateLimitRetries: item.rateLimitRetries } : {}) })) };
 }
 
 /**
@@ -153,6 +177,24 @@ function readExtras(batch, projectPath) {
     }
   }
   return { results, ...(results.some(entry => typeof entry.file === 'string') ? { pathBase: 'project-root' } : {}), ...(warnings.length ? { warnings } : {}), ...(batch.inputCompacted === true ? { inputCompacted: true, compactedAt: typeof batch.compactedAt === 'string' ? batch.compactedAt : null } : {}) };
+}
+
+/**
+ * read only: where the batch stands in the shared FIFO, as the host reports it (0.1.4): ahead {images, batches} not
+ * yet done before it (not paused), etaSeconds until it ends (from the median time of the images the queue finished
+ * recently, plus intervals; null without such a time or while it is paused, 0 once it ended) and imageSeconds, that
+ * median. An older host reports none of them: null.
+ */
+function positionOf(batch) {
+  const count = value => Number.isSafeInteger(value) && value >= 0;
+  const seconds = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+  const ahead = record(batch.ahead) && count(batch.ahead.images) && count(batch.ahead.batches) ? { images: batch.ahead.images, batches: batch.ahead.batches } : null;
+  return { ahead, etaSeconds: seconds(batch.etaSeconds), imageSeconds: seconds(batch.imageSeconds) };
+}
+/** read only: this server's explanation of the queue's own item codes present in the batch. */
+function itemReasonsOf(batch) {
+  const codes = [...new Set((Array.isArray(batch.items) ? batch.items : []).map(item => item?.error?.code).filter(code => typeof code === 'string' && Object.hasOwn(ITEM_REASONS, code)))];
+  return codes.length ? { itemReasons: Object.fromEntries(codes.map(code => [code, ITEM_REASONS[code]])) } : {};
 }
 
 const STORAGE_FIELDS = { frozenQueue: ['batches', 'batchLimit', 'bytes', 'byteLimit'], recipeStore: ['records', 'recordLimit', 'bytes', 'byteLimit'] };
@@ -198,7 +240,7 @@ export async function queueControlAction(args, { bridge, signal, projectPath } =
     // A cleaned batch (queue retention): how it ended and when it was cleaned; pause and cancel changed nothing.
     if (result.cleaned === true) return { value: { ...compactCleanedBatch(result), ...(args.action === 'read' ? { results: [] } : {}),
       instruction: args.action === 'read' ? 'This batch ended and its queue record was cleaned under the client\'s queue retention; its per-image details are gone and nothing of it runs or is resent. Its saved images stay in the library: asset_library {action:"list", category:"history", queueBatchId} lists them.' : 'This batch ended and its queue record was cleaned under the client\'s queue retention; nothing was changed.' } };
-    return { value: { ...compactQueuedBatch(result), ...(args.action === 'read' ? { ...readExtras(result, projectPath), ...unknownInstruction(result) } : {}) } };
+    return { value: { ...compactQueuedBatch(result), ...(args.action === 'read' ? { ...readExtras(result, projectPath), ...positionOf(result), ...itemReasonsOf(result), ...unknownInstruction(result) } : {}) } };
   }
   if (!Number.isSafeInteger(args.itemIndex) || args.itemIndex < 0 || args.itemIndex >= MAX_QUEUE_ITEMS || (args.index !== undefined && (!Number.isSafeInteger(args.index) || args.index < 0))) invalidArguments('Select a queue item and nonnegative image index.');
   const index = args.index ?? 0;
@@ -209,4 +251,107 @@ export async function queueControlAction(args, { bridge, signal, projectPath } =
   const hostPath = typeof result.filePath === 'string' ? result.filePath : record(result.historyItem) && result.historyItem.id === historyId ? result.historyItem.filePath : undefined;
   const file = historyId !== null ? fileOf(hostPath, projectPath) : {};
   return { value: { batchId: args.batchId, itemIndex: args.itemIndex, index, jobId: result.jobId, historyId, actualSeed: actualSeedOf(result.actualSeed), ...file, ...(typeof file.file === 'string' ? { pathBase: 'project-root' } : {}), imageAttached: true }, image: { mimeType: result.mimeType, data: result.data } };
+}
+
+/** read_queue wait (0.1.4): the longest wait one call takes (the MCP clients' tool timeout is 1560 s) and its default. */
+export const QUEUE_WAIT = Object.freeze({ maxSeconds: 1200, defaultSeconds: 300, pollMs: 1000, slowPollMs: 2000 });
+export const QUEUE_WAIT_UNTIL = Object.freeze(['done', 'next']);
+const ENDED = new Set(['succeeded', 'partial', 'cancelled', 'blocked']);
+/** Failures a wait does not read through: the arguments, the batch or this server are wrong, so another read says the same. */
+const FINAL_READ_ERRORS = new Set(['invalid_arguments', 'invalid_argument', 'invalid_response', 'batch_not_found', 'unknown_tool', 'unsupported_method', 'invalid_connection', 'host_method_not_allowed', 'host_call_outside_tool']);
+const abortError = () => Object.assign(new Error('The request was cancelled.'), { name: 'AbortError' });
+/** Sleeps `milliseconds`, or rejects at once when the request is cancelled. */
+function abortableSleep(milliseconds, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(abortError()); return; }
+    const done = () => { signal?.removeEventListener('abort', stop); resolve(); };
+    const timer = setTimeout(done, milliseconds);
+    const stop = () => { clearTimeout(timer); reject(abortError()); };
+    signal?.addEventListener('abort', stop, { once: true });
+  });
+}
+const resultKey = result => `${result.itemIndex}:${result.index}:${result.historyId}`;
+/** Why a wait ends now with this read, or null to go on waiting. */
+function waitEnded(value, until, before) {
+  if (value.cleaned === true) return 'done';
+  if (value.status === 'cancelled' || value.status === 'cancelling') return 'cancelled';
+  if (ENDED.has(value.status)) return 'done';
+  if (value.status === 'paused') return 'paused';
+  if (until === 'next' && (value.results ?? []).some(result => result.historyId !== null && !before.has(resultKey(result)))) return 'next';
+  return null;
+}
+/**
+ * read_queue with wait {until, seconds}: reads the batch every 1–2 s (2 s while its time left is over a minute) and
+ * returns as soon as it ended ("done"; "cancelled" for a cancelled or cancelling one), is paused ("paused"), or, for
+ * until "next", shows a saved result of this batch that was not there at the first read ("next"); else after `seconds`
+ * ("timeout"). A read that fails with anything but a definite refusal is tried again at the next poll; only when no read
+ * succeeded at all does the wait end with that error. The request's abort signal stops it at once. Read-only: nothing
+ * is enqueued, resumed or resent.
+ */
+export async function waitForQueuedBatch(args, { bridge, signal, projectPath, now = Date.now, sleep = abortableSleep } = {}) {
+  const until = args.wait.until, seconds = args.wait.seconds ?? QUEUE_WAIT.defaultSeconds;
+  if (!QUEUE_WAIT_UNTIL.includes(until) || typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 1 || seconds > QUEUE_WAIT.maxSeconds) invalidArguments(`wait needs until "done" or "next" and seconds 1–${QUEUE_WAIT.maxSeconds}.`);
+  const started = now(), deadline = started + seconds * 1000;
+  let last = null, before = null, failure = null;
+  const finish = ended => ({ value: { ...last, wait: { until, ended, waitedSeconds: Math.round((now() - started) / 100) / 10, ...(failure ? { lastReadFailed: failure.code ?? 'internal_error' } : {}) } } });
+  for (;;) {
+    if (signal?.aborted) throw abortError();
+    try { last = (await queueControlAction({ action: 'read', batchId: args.batchId }, { bridge, signal, projectPath })).value; failure = null; }
+    catch (error) {
+      if (signal?.aborted || error?.name === 'AbortError') throw error;
+      if (FINAL_READ_ERRORS.has(error?.code) || error instanceof QueueControlError) throw error;
+      failure = error;
+    }
+    if (last && !failure) {
+      before ??= new Set((last.results ?? []).filter(result => result.historyId !== null).map(resultKey));
+      const ended = waitEnded(last, until, before);
+      if (ended) return finish(ended);
+    }
+    const left = deadline - now();
+    if (left <= 0) { if (!last) throw failure; return finish('timeout'); }
+    await sleep(Math.min(left, last && typeof last.etaSeconds === 'number' && last.etaSeconds > 60 ? QUEUE_WAIT.slowPollMs : QUEUE_WAIT.pollMs), signal);
+  }
+}
+
+/** get_queue_result without itemIndex (0.1.4): the saved results of one batch per call, as thumbnails. */
+export const QUEUE_RESULT_PAGE = 20;
+export const QUEUE_THUMBNAIL_EDGE = 384;
+/**
+ * The saved results of a whole batch (in item order) as native thumbnails of at most 384 px, at most QUEUE_RESULT_PAGE
+ * per call from `offset`, each with itemIndex, index, historyId, actualSeed, fileName, file; one read_queue, then one
+ * get_queue_result {variant:"thumbnail"} per result. A result whose preview cannot be made stays in the list with
+ * imageAttached:false and its error code; the images follow in the order of the entries with imageAttached:true.
+ * Returns { value, images }.
+ */
+export async function queueBatchResults(args, { bridge, signal, projectPath } = {}) {
+  if (!bridge || typeof bridge.call !== 'function') throw new QueueControlError('invalid_arguments', 'A bridge client is required.');
+  if (typeof args?.batchId !== 'string' || !UUID.test(args.batchId)) invalidArguments('Select one valid queue batch ID.');
+  const offset = args.offset ?? 0;
+  if (!Number.isSafeInteger(offset) || offset < 0) invalidArguments('offset is a nonnegative integer.');
+  const read = await bridge.call(QUEUE_HOST_METHODS.read, { batchId: args.batchId }, signal);
+  if (!record(read) || read.batchId !== args.batchId || read.execution !== 'queued') invalidResponse('The host returned a different queued batch.');
+  if (read.cleaned === true) throw new QueueControlError('result_unavailable', 'This batch ended and its queue record was cleaned under the client\'s queue retention; its saved images stay in the library: asset_library {action:"list", category:"history", queueBatchId} lists them.');
+  const saved = readExtras(read, projectPath).results.filter(result => result.historyId !== null && result.index !== null);
+  const page = saved.slice(offset, offset + QUEUE_RESULT_PAGE), entries = [], images = [];
+  for (const result of page) {
+    const entry = { itemIndex: result.itemIndex, index: result.index, historyId: result.historyId, actualSeed: result.actualSeed, ...(result.fileName !== undefined ? { fileName: result.fileName, file: result.file } : {}) };
+    let reply;
+    try { reply = await bridge.call(QUEUE_HOST_METHODS.result, { batchId: args.batchId, itemIndex: result.itemIndex, index: result.index, variant: 'thumbnail' }, signal); }
+    catch (error) {
+      if (signal?.aborted || error?.name === 'AbortError') throw error;
+      // A client from before 0.1.4 refuses the variant as an unknown field (and would send full-size originals).
+      if (['invalid_argument', 'invalid_arguments'].includes(error?.code) && /unknown queue field|unknown field/i.test(String(error?.message ?? ''))) throw new QueueControlError('host_outdated', 'The NovelAI client is older than this MCP server and cannot send queue thumbnails. Fully rebuild and restart the client; until then use get_queue_result with an itemIndex for one image. Nothing was changed.');
+      entries.push({ ...entry, imageAttached: false, error: typeof error?.code === 'string' && /^[a-z][a-z0-9_]{0,79}$/.test(error.code) ? error.code : 'result_unavailable' });
+      continue;
+    }
+    const thumbnail = record(reply) && reply.variant === 'thumbnail' && IMAGE_TYPES.has(reply.mimeType) && typeof reply.data === 'string' && reply.data && (reply.historyId === undefined || reply.historyId === result.historyId)
+      && [reply.width, reply.height].every(edge => Number.isSafeInteger(edge) && edge > 0 && edge <= QUEUE_THUMBNAIL_EDGE);
+    if (!thumbnail) { entries.push({ ...entry, imageAttached: false, error: 'invalid_response' }); continue; }
+    entries.push({ ...entry, width: reply.width, height: reply.height, imageAttached: true });
+    images.push({ mimeType: reply.mimeType, data: reply.data });
+  }
+  const next = offset + page.length;
+  return { value: { batchId: args.batchId, status: read.status, total: saved.length, offset, returned: page.length, nextOffset: next < saved.length ? next : null,
+    thumbnails: { maxEdge: QUEUE_THUMBNAIL_EDGE }, results: entries, ...(entries.some(entry => typeof entry.file === 'string') ? { pathBase: 'project-root' } : {}),
+    instruction: next < saved.length ? `Showing results ${offset + 1}–${next} of ${saved.length}; call again with offset ${next} for the rest.` : 'Thumbnails only: use get_queue_result with itemIndex (and index) for one full-size image.' }, images };
 }

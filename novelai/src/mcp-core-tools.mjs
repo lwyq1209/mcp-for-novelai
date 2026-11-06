@@ -14,7 +14,7 @@ import { assertInboxFile, assertRealDirectory, manifestFileNames, projectRelativ
 import { HISTORY_COVER_HOST_METHODS, setCoverFromHistory } from './history-cover.mjs';
 import { exportHistoryOriginal } from './history-export.mjs';
 import { materialToolAction } from './material-tools.mjs';
-import { MAX_QUEUE_ITEMS, QUEUE_HOST_METHODS, queueControlAction } from './queue-control.mjs';
+import { MAX_QUEUE_ITEMS, QUEUE_HOST_METHODS, QUEUE_RESULT_PAGE, QUEUE_THUMBNAIL_EDGE, QUEUE_WAIT, QUEUE_WAIT_UNTIL, queueBatchResults, queueControlAction, waitForQueuedBatch } from './queue-control.mjs';
 import { RECIPE_TOOL_SPECS } from './recipe-tool-schemas.mjs';
 import { mcpHostRequestKey } from './recipe-queue.mjs';
 import { studyToolAction } from './study-tools.mjs';
@@ -118,6 +118,10 @@ const TAG_DETAILS_SCHEMA = schema({
 }, []);
 const batchId = { ...uuid, description: 'Queued batch ID from list_queue.' };
 const queueBatch = schema({ batchId });
+const READ_QUEUE_SCHEMA = schema({ batchId, wait: { type: 'object', additionalProperties: false, required: ['until'], description: `Wait in this call: until done (batch ended) or next (a new result of this batch); seconds 1–${QUEUE_WAIT.maxSeconds}, default ${QUEUE_WAIT.defaultSeconds}.`,
+  properties: { until: { type: 'string', enum: [...QUEUE_WAIT_UNTIL] }, seconds: { type: 'number', minimum: 1, maximum: QUEUE_WAIT.maxSeconds } } } }, ['batchId']);
+const QUEUE_RESULT_SCHEMA = schema({ batchId, itemIndex: { type: 'integer', minimum: 0, maximum: MAX_QUEUE_ITEMS - 1, description: 'Omit for thumbnails of the whole batch.' },
+  index: { type: 'integer', minimum: 0, default: 0, description: 'With itemIndex.' }, offset: { type: 'integer', minimum: 0, description: 'Without itemIndex: results to skip.' } }, ['batchId']);
 
 // ---------------------------------------------------------------- handlers
 const LABELS = { materialInbox: 'novelai/library-inbox', materialExports: 'novelai/library-exports', studyInbox: 'novelai/study-inbox', studyExports: 'novelai/study-exports' };
@@ -169,8 +173,8 @@ const RECIPE_TOOL_ACTIONS = { prepare_recipe: 'prepare', enqueue_recipes: 'enque
 
 const QUEUE_DESCRIPTIONS = {
   list_queue: ['List the shared independent host queue that recipes are enqueued into: total, counts by status and the first 8 batches (batchId, status, count, activeJobId), plus storage {frozenQueue, recipeStore} usage against its limits when the host reports it (null = not available); report a full store as it is. Batches started with Generate in the app are listed too: each batch\'s source is {kind:"manual", persistent:false} for those (kept only while the app runs) or {kind:"agent", client} for enqueued ones; report it as given. No workspace or canvas. Read-only; never enqueues, starts or retries a batch.', schema(), true],
-  read_queue: ['Read one queued batch compactly: status, requestKey, recipePlanHash, interval, output (when enqueued with historyGroup/fileNamePrefix), active job and per-item status, jobId, result count and error code, plus results [{itemIndex, index, historyId, actualSeed, fileName, file}] of the saved images (actualSeed: the seed each image was generated with, null for upscale/director; file: project-relative path, null outside the project); copy images only by these names, never by number ranges. A historyId can become the source of a new recipe through asset_library. inputCompacted/compactedAt appear once the host has released an ended batch\'s frozen inputs. Does not expose full recipes. Read-only.', queueBatch, true],
-  get_queue_result: ['View one saved image of a queued batch item (itemIndex 0-199, result index defaults to 0) as a native image with its jobId, historyId, actualSeed (the seed it was generated with, null for upscale/director), fileName and file. Does not generate or retry. An accepted or finished item is not visual approval; inspect the actual image before judging it.', schema({ batchId, itemIndex: { type: 'integer', minimum: 0, maximum: MAX_QUEUE_ITEMS - 1 }, index: { type: 'integer', minimum: 0, default: 0 } }, ['batchId', 'itemIndex']), true],
+  read_queue: ['Read one queued batch compactly: status (ended: succeeded; partial = some images failed or are unknown; cancelled; blocked = stopped by an app before 0.1.4), stopReason, requestKey, recipePlanHash, interval, output (when enqueued with historyGroup/fileNamePrefix), active job, itemCounts and per-item status, jobId, result count and error code (itemReasons explains queue codes such as rate_limited), plus results [{itemIndex, index, historyId, actualSeed, fileName, file}] of the saved images (actualSeed: the seed each image was generated with, null for upscale/director; file: project-relative path, null outside the project); copy images only by these names, never by number ranges. ahead {images, batches}: work queued before it (one shared FIFO, one image at a time); etaSeconds: estimated seconds until it ends (null if unknown or paused). A failed or unknown image never stops the queue; it is never resent and the batch goes on. wait {until:"done"|"next", seconds}: wait in this call instead of polling; it returns once the batch ended (done), saved a new result (next), is paused or cancelled, or after seconds, with wait {ended, waitedSeconds}. A historyId can become the source of a new recipe through asset_library. inputCompacted/compactedAt appear once the host has released an ended batch\'s frozen inputs. Does not expose full recipes. Read-only.', READ_QUEUE_SCHEMA, true],
+  get_queue_result: [`With itemIndex: one saved image of a queued batch item (itemIndex 0-199, result index defaults to 0) as a native image with its jobId, historyId, actualSeed (the seed it was generated with, null for upscale/director), fileName and file. Without itemIndex: thumbnails (≤${QUEUE_THUMBNAIL_EDGE} px) of the batch's saved results in item order, ${QUEUE_RESULT_PAGE} per call (offset; nextOffset null on the last page), each listed with itemIndex, index, historyId, actualSeed, fileName, file and imageAttached (images follow in that order). Does not generate or retry. An accepted or finished item is not visual approval; inspect the actual image before judging it.`, QUEUE_RESULT_SCHEMA, true],
 };
 /** pause_queue, resume_queue and cancel_queue in one tool; every safety rule of the three is kept. */
 const CONTROL_QUEUE_ACTIONS = ['pause', 'resume', 'cancel'];
@@ -272,10 +276,24 @@ const recipeTool = name => {
 
 const queueTool = name => {
   const [description, inputSchema, readOnlyHint, openWorldHint = false] = QUEUE_DESCRIPTIONS[name];
-  return core({ name, description, inputSchema, annotations: annotations(readOnlyHint, openWorldHint), hostMethods: [QUEUE_HOST_METHODS[QUEUE_TOOL_ACTIONS[name]]],
+  // get_queue_result without itemIndex reads the batch first (its saved results), then each thumbnail.
+  const hostMethods = name === 'get_queue_result' ? [QUEUE_HOST_METHODS.result, QUEUE_HOST_METHODS.read] : [QUEUE_HOST_METHODS[QUEUE_TOOL_ACTIONS[name]]];
+  return core({ name, description, inputSchema, annotations: annotations(readOnlyHint, openWorldHint), hostMethods,
+    validate(args) {
+      if (name !== 'get_queue_result') return;
+      if (args.itemIndex === undefined && args.index !== undefined) throw new BridgeError('invalid_arguments', 'index selects a result of one item: pass it with itemIndex.');
+      if (args.itemIndex !== undefined && args.offset !== undefined) throw new BridgeError('invalid_arguments', 'offset pages the whole batch: use it without itemIndex.');
+    },
     async handle(args, { bridge, signal, roots }) {
       // A saved file's host path becomes `file` relative to the project root, or null outside it.
-      const { value, image } = await queueControlAction({ ...args, action: QUEUE_TOOL_ACTIONS[name] }, { bridge, signal, projectPath: path => projectRelative(path, roots) });
+      const projectPath = path => projectRelative(path, roots);
+      if (name === 'read_queue' && args.wait !== undefined) return success((await waitForQueuedBatch(args, { bridge, signal, projectPath })).value, [], roots);
+      if (name === 'get_queue_result' && args.itemIndex === undefined) {
+        const { value, images } = await queueBatchResults(args, { bridge, signal, projectPath });
+        return success(value, images.map(image => imageBlock(image, ENTRY_REREAD)), roots);
+      }
+      const { wait: _wait, offset: _offset, ...plain } = args;
+      const { value, image } = await queueControlAction({ ...plain, action: QUEUE_TOOL_ACTIONS[name] }, { bridge, signal, projectPath });
       return success(value, image ? [imageBlock(image, ENTRY_REREAD)] : [], roots);
     } });
 };

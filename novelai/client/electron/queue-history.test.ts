@@ -151,7 +151,7 @@ async function start() {
   closers.push(async () => { await client.close(); await server.close(); });
   const call = async (name: string, args: Record<string, unknown> = {}) => { const result: any = await client.callTool({ name, arguments: args }); return { ok: !result.isError, value: result.structuredContent, content: result.content }; };
   const ok = async (name: string, args: Record<string, unknown> = {}) => { const result = await call(name, args); expect(result.ok, `${name}: ${JSON.stringify(result.value).slice(0, 1500)}`).toBe(true); return result.value; };
-  const settle = (batchId: string) => waitUntil(async () => { const read = await ok('read_queue', { batchId }); expect(['succeeded', 'blocked', 'cancelled'], `batch ${read.status}`).toContain(read.status); return read; }, { interval: 25 });
+  const settle = (batchId: string) => waitUntil(async () => { const read = await ok('read_queue', { batchId }); expect(['succeeded', 'partial', 'blocked', 'cancelled'], `batch ${read.status}`).toContain(read.status); return read; }, { interval: 25 });
   const workspaceId = (await ok('list_workspaces')).workspaces[0].workspaceId;
   const revision = async () => (await ok('read_workspace', { workspaceId, includeImages: false })).revision;
   /** A batch whose every result is a saved history record the MCP tools can reach. */
@@ -211,18 +211,19 @@ describe('queued results of every mode keep their history record', () => {
     expect(fixture.warnings).toEqual([]);
   });
 
-  it('the strict check failing before the request: the item is refused with history_params_invalid and the field, nothing is sent', async () => {
+  it('the strict check failing before the request: the item is refused with history_params_invalid and the field, nothing is sent for it, and the next image runs', async () => {
     const h = await start();
     const recipe = await h.ok('prepare_recipe', t2i);
     fixture.strict = ['fail'];
     const receipt = await h.ok('enqueue_recipes', { requestKey: 'history-refused', items: [{ ...ref(recipe), count: 2, seeds: [5, 6] }] });
     const read = await h.settle(receipt.batch.batchId);
-    expect(read).toMatchObject({ status: 'blocked', items: [{ index: 0, status: 'failed', error: 'history_params_invalid', resultCount: 0 }, { index: 1, status: 'skipped' }] });
-    expect(read.results).toEqual([]);
-    expect(fixture.post).not.toHaveBeenCalled();
+    expect(read).toMatchObject({ status: 'partial', items: [{ index: 0, status: 'failed', error: 'history_params_invalid', resultCount: 0 }, { index: 1, status: 'succeeded', resultCount: 1 }] });
+    expect(read.results.map((value: any) => value.itemIndex)).toEqual([1]);
+    // One request, for the second image only.
+    expect(fixture.post).toHaveBeenCalledTimes(1);
     const host = h.batch.read({ workspaceId: h.workspaceId, batchId: receipt.batch.batchId });
     expect(host.items[0]).toMatchObject({ providerOutcome: 'not_submitted', error: { code: 'history_params_invalid', message: expect.stringMatching(/qualityPreset.*没有发送生成请求/) } });
-    expect(h.repository.all('history')).toEqual([]);
+    expect(h.repository.all('history').map(item => (item.payload as any).queueOrigin?.itemIndex)).toEqual([1]);
     expect(h.repository.pendingFileOps()).toEqual([]);
     expect((await h.call('get_queue_result', { batchId: receipt.batch.batchId, itemIndex: 0 })).ok).toBe(false);
   });

@@ -164,12 +164,17 @@ describe('durable frozen recipe FIFO', () => {
     expect(calls[0][0].requestKey).toBe(calls[1][0].requestKey);
   });
 
-  it('pauses later pending batches after an unknown child and never retries it', async () => {
+  it('an unknown image marks only itself: its batch ends partial, the batches after it run, new ones are not paused, and nothing is resent', async () => {
     const h = await queueSetup(), a = await h.service.enqueue(queued()); await expectCount(h, 1);
     const b = await h.service.enqueue(queued({ requestKey: 'second' }));
-    h.settle(0, 'unknown'); await expectStatus(h, a, 'blocked'); await expectStatus(h, b, 'paused');
-    expect(h.accepted).toHaveLength(1); expect(h.read(b).error?.code).toBe('queue_halted');
-    const c = await h.service.enqueue(queued({ requestKey: 'third' })); expect(c.status).toBe('paused');
+    h.settle(0, 'unknown'); await expectStatus(h, a, 'partial');
+    expect(h.read(a)).toMatchObject({ error: null, finishedAt: expect.any(String), items: [{ status: 'unknown', providerOutcome: 'unknown' }] });
+    await expectCount(h, 2); expect(h.read(b).error).toBeNull();
+    const c = await h.service.enqueue(queued({ requestKey: 'third' })); expect(c).toMatchObject({ status: 'queued', error: null });
+    h.settle(1); await expectStatus(h, b, 'succeeded'); await expectCount(h, 3); h.settle(2); await expectStatus(h, c, 'succeeded');
+    // Every image was sent once under its own key; the unknown one never again.
+    expect(new Set(h.accepted.map(item => item.request.requestKey)).size).toBe(3);
+    expect(h.accepted.filter(item => item.request.requestKey === `batch-${a.batchId}-0`)).toHaveLength(1);
   });
 
   it('cancels only the selected active batch and continues FIFO after its child confirms cancellation', async () => {
@@ -231,9 +236,11 @@ describe('durable frozen recipe FIFO', () => {
 
   it('keeps response, unknown and proven-not-submitted facts independent and durable across reopen', async () => {
     const h = await queueSetup(), batch = await h.service.enqueue(queued({ count: 3 }));
-    await expectCount(h, 1); h.settle(0, 'succeeded'); await expectCount(h, 2); h.settle(1, 'unknown'); await expectStatus(h, batch, 'blocked');
+    await expectCount(h, 1); h.settle(0, 'succeeded'); await expectCount(h, 2);
+    // A user pause while the second image runs keeps the third one unsent (and paused across the reopen).
+    await h.service.pause(h.args(batch)); h.settle(1, 'unknown'); await expectStatus(h, batch, 'paused');
     expect(h.read(batch).items.map(item => item.providerOutcome)).toEqual(['response_received', 'unknown', 'not_submitted']);
-    expect(h.read(batch).items.map(item => item.status)).toEqual(['succeeded', 'unknown', 'skipped']);
+    expect(h.read(batch).items.map(item => item.status)).toEqual(['succeeded', 'unknown', 'pending']);
     await h.service.dispose(); const restored = setup({ runtimeDir: h.runtimeDir }); await restored.service.ready;
     expect(restored.read(batch).items.map(item => item.providerOutcome)).toEqual(['response_received', 'unknown', 'not_submitted']);
     expect(restored.generation.submit).not.toHaveBeenCalled(); await restored.service.dispose();
@@ -271,35 +278,53 @@ describe('durable frozen recipe FIFO', () => {
     expect(restored.generation.submit).not.toHaveBeenCalled(); await restored.service.dispose();
   });
 
-  it('recovers pending entries paused and resumes the exact saved recipe without a live workspace', async () => {
+  it('continues recovered pending entries on its own with the exact saved recipe, without a live workspace', async () => {
     const h = await queueSetup({ isBusy: () => true }); const batch = await h.service.enqueue(queued()); await h.service.dispose();
     const restored = setup({ runtimeDir: h.runtimeDir }); await restored.service.ready;
-    expect(restored.read(batch).status).toBe('paused'); expect(restored.accepted).toHaveLength(0);
-    await restored.service.resume({ workspaceId: 'recipe-queue', expectedRevision: 0, batchId: batch.batchId });
     await expectCount(restored, 1); expect(restored.accepted[0].snapshot.params).toEqual(snapshot().params);
+    expect(restored.read(batch).error).toBeNull();
     restored.settle(0); await expectStatus(restored, batch, 'succeeded'); await restored.service.dispose();
   });
 
-  it('recovers an in-flight item as unknown with no provider replay', async () => {
-    const h = await queueSetup(), batch = await h.service.enqueue(queued({ count: 2 })); await expectCount(h, 1); await h.service.dispose();
+  it('a batch the user paused stays paused across a restart and runs on an explicit resume; a queue-made pause does not', async () => {
+    const h = await queueSetup({ isBusy: () => true });
+    const paused = await h.service.enqueue(queued()), other = await h.service.enqueue(queued({ requestKey: 'not-paused' }));
+    await h.service.pause(h.args(paused)); expect(h.read(paused)).toMatchObject({ status: 'paused', pausedBy: 'user' });
+    await h.service.dispose();
+    // The closing app paused the other one itself: that pause is not the user's.
+    expect(h.read(other)).toMatchObject({ status: 'paused' }); expect(h.read(other).pausedBy).toBeUndefined();
     const restored = setup({ runtimeDir: h.runtimeDir }); await restored.service.ready;
-    expect(restored.read(batch)).toMatchObject({ status: 'blocked', error: { code: 'restart_unconfirmed' } });
-    expect(restored.read(batch).items.map(item => item.status)).toEqual(['unknown', 'skipped']);
-    await expect(restored.service.resume({ ...restored.args(batch), expectedRevision: 7 })).rejects.toMatchObject({ code: 'batch_not_paused' });
-    expect(restored.accepted).toHaveLength(0); await restored.service.dispose();
+    await expectCount(restored, 1); expect(restored.accepted[0].request.requestKey).toBe(`batch-${other.batchId}-0`);
+    expect(restored.read(paused)).toMatchObject({ status: 'paused', pausedBy: 'user', error: null });
+    restored.settle(0); await expectStatus(restored, other, 'succeeded');
+    await restored.service.resume({ workspaceId: 'recipe-queue', expectedRevision: 0, batchId: paused.batchId });
+    expect(restored.read(paused).pausedBy).toBeUndefined();
+    await expectCount(restored, 2); restored.settle(1); await expectStatus(restored, paused, 'succeeded'); await restored.service.dispose();
   });
 
-  it.each(['failed', 'unknown', 'cancelled'] as const)('blocks a persisted %s child terminal window before any pending follower can run', async status => {
+  it('recovers an in-flight item as unknown with no provider replay and goes on with the rest by itself', async () => {
+    const h = await queueSetup(), batch = await h.service.enqueue(queued({ count: 2 })); await expectCount(h, 1); await h.service.dispose();
+    const restored = setup({ runtimeDir: h.runtimeDir }); await restored.service.ready;
+    expect(restored.read(batch).items[0]).toMatchObject({ status: 'unknown', providerOutcome: 'unknown', error: { code: 'restart_unconfirmed' } });
+    expect(restored.read(batch).error).toBeNull();
+    await expectCount(restored, 1); expect(restored.accepted[0].request.requestKey).toBe(`batch-${batch.batchId}-1`);
+    restored.settle(0); await expectStatus(restored, batch, 'partial');
+    expect(restored.read(batch).items.map(item => item.status)).toEqual(['unknown', 'succeeded']);
+    expect(restored.accepted).toHaveLength(1); await restored.service.dispose();
+  });
+
+  it.each(['failed', 'unknown', 'cancelled'] as const)('after a persisted %s image only the pending follower runs on restart; the settled image is never resent', async status => {
     const h = await queueSetup({ isBusy: () => true }), batch = await h.service.enqueue(queued({ count: 2 })); await h.service.dispose();
     const disk = createBatchStorage(h.runtimeDir), [record] = await disk.load();
     const crashed = structuredClone(record.job); crashed.status = 'running'; crashed.items[0].status = status; crashed.items[0].jobId = 'terminal-child'; crashed.items[0].actualSeed = crashed.items[0].plannedSeed;
     crashed.items[0].error = { code: status, message: 'durable child terminal before batch block' }; crashed.activeIndex = null; crashed.activeJobId = null;
     await disk.save(batch.batchId, crashed);
     const restored = setup({ runtimeDir: h.runtimeDir }); await restored.service.ready;
-    expect(restored.read(batch).status).toBe('blocked'); expect(restored.read(batch).items.map(item => item.status)).toEqual([status, 'skipped']);
-    expect(restored.generation.submit).not.toHaveBeenCalled();
+    await expectCount(restored, 1); expect(restored.accepted[0].request.requestKey).toBe(`batch-${batch.batchId}-1`);
+    restored.settle(0); await expectStatus(restored, batch, 'partial');
+    expect(restored.read(batch).items.map(item => item.status)).toEqual([status, 'succeeded']);
     await expect(restored.service.resume({ ...restored.args(batch), expectedRevision: 0 })).rejects.toMatchObject({ code: 'batch_not_paused' });
-    await restored.service.dispose();
+    expect(restored.generation.submit).toHaveBeenCalledTimes(1); await restored.service.dispose();
   });
 
   it('recovers a durable batch when storage.create publishes files and then throws before current-process registration', async () => {
@@ -313,7 +338,7 @@ describe('durable frozen recipe FIFO', () => {
     expect(() => first.service.lookup(queued())).toThrow(expect.objectContaining({ code: 'queue_storage_error' }));
     expect(first.generation.submit).not.toHaveBeenCalled(); await first.service.dispose();
     const restarted = setup({ runtimeDir, isBusy: () => true }); await restarted.service.ready;
-    expect(restarted.service.lookup(queued())).toMatchObject({ requestKey: 'teacup-study', status: 'paused', error: { code: 'recovered_paused' } });
+    expect(restarted.service.lookup(queued())).toMatchObject({ requestKey: 'teacup-study', status: 'queued', error: null });
     expect(restarted.generation.submit).not.toHaveBeenCalled(); await restarted.service.dispose();
   });
 
@@ -455,11 +480,11 @@ describe('queued batch scheduler', () => {
     expect(h.generation.submit).not.toHaveBeenCalled();
   });
 
-  it('blocks remaining distinct scenes after an unknown child result without retrying', async () => {
+  it('runs the remaining distinct scenes after an unknown child result without retrying it', async () => {
     const h = await queueSetup(), batch = await h.service.enqueue(sceneRequest({ execution: 'queued' }));
-    await expectCount(h, 1); h.settle(0, 'unknown'); await expectStatus(h, batch, 'blocked');
-    expect(h.accepted).toHaveLength(1);
-    expect(h.read(batch).items.map(item => [item.sceneId, item.status])).toEqual([['scene-1', 'unknown'], ['scene-2', 'skipped']]);
+    await expectCount(h, 1); h.settle(0, 'unknown'); await expectCount(h, 2); h.settle(1); await expectStatus(h, batch, 'partial');
+    expect(h.accepted.map(item => item.snapshot.params.positivePrompt)).toEqual(['red cup on a table', 'blue cup beside a plant']);
+    expect(h.read(batch).items.map(item => [item.sceneId, item.status])).toEqual([['scene-1', 'unknown'], ['scene-2', 'succeeded']]);
     await expect(h.service.resume({ ...h.args(batch), expectedRevision: 0 })).rejects.toMatchObject({ code: 'batch_not_paused' });
   });
 
@@ -527,11 +552,12 @@ describe('queued batch scheduler', () => {
     await expectCount(h, 3); h.settle(2); await expectStatus(h, later, 'succeeded');
   });
 
-  it.each(['failed', 'unknown', 'cancelled'] as const)('blocks subsequent children after an independent %s result and never resumes or retries it', async (status) => {
-    const h = await queueSetup(), batch = await h.service.enqueue(queued({ count: 3 })); await expectCount(h, 1); h.settle(0, status); await expectStatus(h, batch, 'blocked');
-    expect(h.read(batch).items.map((item) => item.status)).toEqual([status, 'skipped', 'skipped']);
+  it.each(['failed', 'unknown', 'cancelled'] as const)('goes on with the next images after an independent %s result, ends partial and never retries it', async (status) => {
+    const h = await queueSetup(), batch = await h.service.enqueue(queued({ count: 3, intervalSeconds: 0.05 })); await expectCount(h, 1); h.settle(0, status);
+    await expectCount(h, 2); h.settle(1); await expectCount(h, 3); h.settle(2); await expectStatus(h, batch, 'partial');
+    expect(h.read(batch).items.map((item) => item.status)).toEqual([status, 'succeeded', 'succeeded']);
     await expect(h.service.resume({ ...h.args(batch), expectedRevision: 0 })).rejects.toMatchObject({ code: 'batch_not_paused' });
-    expect(h.generation.submit).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(h.generation.submit).mock.calls.map(([args]) => args.requestKey)).toEqual([0, 1, 2].map(index => `batch-${batch.batchId}-${index}`));
   });
 
   it('recovers a lost submit reply by lookup without submitting a paid child twice', async () => {
@@ -545,28 +571,33 @@ describe('queued batch scheduler', () => {
     await h.service.cancel(h.args(batch));
   });
 
-  it('does not retry an unconfirmed submission and preserves the child key for investigation', async () => {
+  it('does not retry an unconfirmed submission, preserves the child key for investigation and goes on with the next image', async () => {
     const h = await queueSetup(); h.generation.submit = vi.fn(() => { throw new Error('unknown response'); });
-    const batch = await h.service.enqueue(queued({ count: 3 })); await expectStatus(h, batch, 'blocked');
-    expect(h.generation.submit).toHaveBeenCalledTimes(1);
-    expect(h.read(batch).items[0]).toMatchObject({ status: 'unknown', jobId: null, requestKey: `batch-${batch.batchId}-0` });
-    expect(h.read(batch).items.slice(1).map((item) => item.status)).toEqual(['skipped', 'skipped']);
+    const batch = await h.service.enqueue(queued({ count: 3 })); await expectStatus(h, batch, 'partial');
+    // Each image was tried exactly once (its own key); none of them twice.
+    expect(vi.mocked(h.generation.submit).mock.calls.map(([args]) => args.requestKey)).toEqual([0, 1, 2].map(index => `batch-${batch.batchId}-${index}`));
+    expect(h.read(batch).items[0]).toMatchObject({ status: 'unknown', jobId: null, providerOutcome: 'unknown', requestKey: `batch-${batch.batchId}-0`, error: { code: 'submission_unconfirmed' } });
+    expect(h.read(batch).items.map((item) => item.status)).toEqual(['unknown', 'unknown', 'unknown']);
   });
 
-  it('blocks a child projection whose request identity does not belong to the frozen item', async () => {
+  it('marks an image unknown when its child projection does not belong to the frozen item, and goes on', async () => {
     const h = await queueSetup(), original = h.generation.submit;
     h.generation.submit = vi.fn(async args => ({ ...await original(args), requestKey: 'another-child-request' }));
-    const batch = await h.service.enqueue(queued()); await expectStatus(h, batch, 'blocked');
-    expect(h.read(batch).items[0]).toMatchObject({ status: 'unknown', providerOutcome: 'unknown', jobId: null });
-    expect(h.accepted).toHaveLength(1);
+    const batch = await h.service.enqueue(queued({ count: 2 })); await expectCount(h, 1);
+    await waitUntil(() => expect(h.read(batch).items[0]).toMatchObject({ status: 'unknown', providerOutcome: 'unknown', jobId: null, error: { code: 'scheduler_error' } }));
+    // The mismatched child still holds the generator: the next image waits for it, never two at once.
+    h.settle(0); await expectCount(h, 2); h.settle(1);
+    await waitUntil(() => expect(h.read(batch).items[1].status).toBe('unknown'));
+    await expectStatus(h, batch, 'partial'); expect(h.accepted).toHaveLength(2);
   });
 
   it('retains a definitive not-submitted outcome for a trusted pre-provider rejection', async () => {
     const h = await queueSetup(); h.generation.submit = vi.fn(() => { throw new BatchError('invalid_image', 'rejected before provider'); });
-    const batch = await h.service.enqueue(queued({ count: 3 })); await expectStatus(h, batch, 'blocked');
+    const batch = await h.service.enqueue(queued({ count: 3 })); await expectStatus(h, batch, 'partial');
     expect(h.read(batch).items[0]).toMatchObject({ status: 'failed', providerOutcome: 'not_submitted', error: { code: 'invalid_image' } });
-    expect(h.read(batch).items.slice(1).map(item => item.providerOutcome)).toEqual(['not_submitted', 'not_submitted']);
-    expect(h.generation.submit).toHaveBeenCalledOnce();
+    // A refusal before sending marks only that image: the others were tried (and refused) in turn, each once.
+    expect(h.read(batch).items.map(item => [item.status, item.providerOutcome])).toEqual([['failed', 'not_submitted'], ['failed', 'not_submitted'], ['failed', 'not_submitted']]);
+    expect(h.generation.submit).toHaveBeenCalledTimes(3);
   });
 
   it('preflights depth, cycles and JSON escape expansion before canonical clone/stringify', async () => {
@@ -639,18 +670,20 @@ async function ageFinishedBatches(runtimeDir: string, by = minutes(11)) {
 }
 
 describe('W2b frozen queue capacity', () => {
-  it('H3 accepts queued upscale and director recipes and recovers them unchanged', async () => {
+  it('H3 accepts queued upscale and director recipes, recovers them unchanged and runs them after the restart', async () => {
     const h = await queueSetup({ isBusy: () => true });
     const up = await h.service.enqueue(postProcessing('upscale')), director = await h.service.enqueue(postProcessing('director'));
     expect(up).toMatchObject({ mode: 'upscale', execution: 'queued', status: 'queued', items: [{ plannedSeed: 0, status: 'pending' }] }); expect(director).toMatchObject({ mode: 'director', status: 'queued' });
     await expect(h.service.enqueue(queued({ requestKey: 'unknown-mode', mode: 'video' }))).rejects.toMatchObject({ code: 'unsupported_mode' });
     await h.service.dispose();
     const restored = setup({ runtimeDir: h.runtimeDir }); await restored.service.ready;
-    expect(restored.read(up)).toMatchObject({ mode: 'upscale', status: 'paused', error: { code: 'recovered_paused' } }); expect(restored.read(director)).toMatchObject({ mode: 'director', status: 'paused' });
+    expect(restored.read(up)).toMatchObject({ mode: 'upscale', error: null }); expect(restored.read(director)).toMatchObject({ mode: 'director', status: 'queued' });
     expect(restored.service.lookup(postProcessing('upscale'))?.batchId).toBe(up.batchId);
-    await restored.service.resume({ workspaceId: 'recipe-queue', expectedRevision: 0, batchId: up.batchId }); await expectCount(restored, 1);
+    await expectCount(restored, 1);
     expect(restored.accepted[0]).toMatchObject({ request: { mode: 'upscale', requestKey: `batch-${up.batchId}-0` }, snapshot: { upscale: { scale: 2 }, sourceImage: { data: 'fixture-source' }, batchCount: 1, params: { seed: 0 } } });
-    restored.settle(0); await expectStatus(restored, up, 'succeeded'); expect(restored.read(director).status).toBe('paused');
+    restored.settle(0); await expectStatus(restored, up, 'succeeded');
+    await expectCount(restored, 2); expect(restored.accepted[1].request).toMatchObject({ mode: 'director', requestKey: `batch-${director.batchId}-0` });
+    restored.settle(1); await expectStatus(restored, director, 'succeeded');
     await restored.service.dispose();
   });
 
@@ -676,7 +709,7 @@ describe('W2b frozen queue capacity', () => {
     const h = await queueSetup(), mcp = imageRequest(mcpKey('mcp')), foreign = imageRequest('style-plan-host-key'), unknown = imageRequest(mcpKey('unknown'));
     const a = await h.service.enqueue(mcp); await expectCount(h, 1); h.settle(0); await expectStatus(h, a, 'succeeded');
     const b = await h.service.enqueue(foreign); await expectCount(h, 2); h.settle(1); await expectStatus(h, b, 'succeeded');
-    const c = await h.service.enqueue(unknown); await expectCount(h, 3); h.settle(2, 'unknown'); await expectStatus(h, c, 'blocked');
+    const c = await h.service.enqueue(unknown); await expectCount(h, 3); h.settle(2, 'unknown'); await expectStatus(h, c, 'partial');
     await h.service.dispose(); await ageFinishedBatches(h.runtimeDir);
     const restarted = setup({ runtimeDir: h.runtimeDir, isBusy: () => true }); await restarted.service.ready;
     await waitUntil(() => expect(restarted.read(a)).toMatchObject({ inputCompacted: true, compactedAt: expect.any(String) }));
@@ -834,15 +867,13 @@ describe('queued i2i/enhance with a random extra-noise seed (CE-7)', () => {
     // The store is healthy: another batch still goes in.
     await expect(h.service.enqueue(queued({ requestKey: `after-${mode}` }))).resolves.toMatchObject({ status: 'queued' });
     await h.service.dispose();
-    // Restart: recovered paused, a same-key retry with the original request still matches, and resuming sends the frozen seed.
+    // Restart: a same-key retry with the original request still matches, and the batch goes on by itself with the frozen seed.
     const restored = setup({ runtimeDir: h.runtimeDir }); await restored.service.ready;
-    expect(restored.read(batch).status).toBe('paused');
     expect(restored.service.lookup(structuredClone(raw))?.batchId).toBe(batch.batchId);
     expect((await restored.service.enqueue(structuredClone(raw))).batchId).toBe(batch.batchId);
-    await restored.service.resume({ workspaceId: 'recipe-queue', expectedRevision: 0, batchId: batch.batchId });
     await expectCount(restored, 1); restored.settle(0); await expectCount(restored, 2); restored.settle(1); await expectStatus(restored, batch, 'succeeded');
-    expect(restored.accepted.map(item => item.snapshot.i2i?.extraNoiseSeed)).toEqual([seed, seed]);
-    expect(restored.accepted.map(item => item.snapshot.params.seed)).toEqual(h.read(batch).items.map(item => item.plannedSeed));
+    expect(restored.accepted.slice(0, 2).map(item => item.snapshot.i2i?.extraNoiseSeed)).toEqual([seed, seed]);
+    expect(restored.accepted.slice(0, 2).map(item => item.snapshot.params.seed)).toEqual(h.read(batch).items.map(item => item.plannedSeed));
     await restored.service.dispose();
   });
 
@@ -907,7 +938,8 @@ describe('queued i2i/enhance with a random extra-noise seed (CE-7)', () => {
     const restored = setup({ runtimeDir: h.runtimeDir, isBusy: () => true }); await restored.service.ready;
     const again = createQueueRecipeService({ runtimeDir: h.runtimeDir, batch: restored.service, randomSeed: () => 97 });
     expect((await again.enqueue_queue_recipes(plan)).batchId).toBe(job.batchId);
-    expect(restored.read(job).status).toBe('paused');
+    // Recovered to go on by itself (it waits here only for the busy generator).
+    expect(restored.read(job)).toMatchObject({ status: 'queued', error: null });
     await restored.service.dispose();
   });
 });
@@ -1034,67 +1066,55 @@ describe('the shared FIFO with manual batches (step 4a)', () => {
     h.settle(2); await expectStatus(h, a, 'succeeded');
   });
 
-  it('a manual failure halts nothing: an agent batch queued after it runs at once', async () => {
+  it('a manual failure halts nothing: the rest of the click runs, and an agent batch queued after it runs next', async () => {
     const h = await queueSetup();
-    const click = await h.service.enqueueManual(plain(manual()));
+    const click = await h.service.enqueueManual(plain(manual({ count: 2, seeds: [5, 6] })));
     await expectCount(h, 1); h.settle(0, 'failed');
-    await expectStatus(h, click, 'blocked');
     const agent = await h.service.enqueue(queued({ requestKey: 'mcp-after-manual' }));
-    expect(agent.status).toBe('queued');
-    await expectCount(h, 2); h.settle(1); await expectStatus(h, agent, 'succeeded');
+    expect(agent).toMatchObject({ status: 'queued', error: null });
+    await expectCount(h, 2); h.settle(1); await expectStatus(h, click, 'partial');
+    expect(h.read(click).items.map(item => item.status)).toEqual(['failed', 'succeeded']);
+    await expectCount(h, 3); h.settle(2); await expectStatus(h, agent, 'succeeded');
   });
 
-  it('an agent failure still pauses the agent batches after it; a manual click runs anyway and its failure halts nothing', async () => {
+  it('an agent failure pauses nothing: the agent batch after it, a manual click and a later agent batch all run in FIFO order', async () => {
     const h = await queueSetup();
-    const failing = await h.service.enqueue(queued({ requestKey: 'mcp-fails' }));
+    const failing = await h.service.enqueue(queued({ requestKey: 'mcp-fails', count: 2 }));
     const follower = await h.service.enqueue(queued({ requestKey: 'mcp-follower' }));
     await expectCount(h, 1); h.settle(0, 'unknown');
-    await expectStatus(h, failing, 'blocked');
-    await waitUntil(() => expect(h.read(follower)).toMatchObject({ status: 'paused', error: { code: 'queue_halted' } }));
+    // The failing batch goes on with its own next image first, then ends partial.
+    await expectCount(h, 2); expect(h.accepted[1].request.requestKey).toBe(`batch-${failing.batchId}-1`); h.settle(1, 'failed');
+    await expectStatus(h, failing, 'partial');
+    expect(h.read(failing).items.map(item => item.status)).toEqual(['unknown', 'failed']);
     const click = await h.service.enqueueManual(plain(manual({ count: 2, seeds: [5, 6] })));
-    expect(click.source).toEqual({ kind: 'manual', persistent: false });
-    expect(click.status).toBe('queued');
-    // The manual batch runs; an image whose outcome is unknown does not stop it (as the window's generation did).
-    await expectCount(h, 2); h.settle(1, 'unknown');
-    await expectCount(h, 3); h.settle(2);
-    await expectStatus(h, click, 'blocked');
-    expect(h.read(click).items.map(item => item.status)).toEqual(['unknown', 'succeeded']);
-    // A new agent batch is saved paused while the queue is halted; a refused manual image halts nothing either.
+    expect(click).toMatchObject({ source: { kind: 'manual', persistent: false }, status: 'queued' });
     const later = await h.service.enqueue(queued({ requestKey: 'mcp-later' }));
-    expect(later.status).toBe('paused');
-    const refused = await h.service.enqueueManual(plain(manual()));
-    await expectCount(h, 4); h.settle(3, 'failed');
-    await expectStatus(h, refused, 'blocked');
-    expect(h.read(follower).status).toBe('paused');
-    expect(vi.mocked(h.generation.submit).mock.calls.slice(1).every(([args]) => (args as any).manual === true)).toBe(true);
+    expect(later).toMatchObject({ status: 'queued', error: null });
+    await expectCount(h, 3); expect(h.read(follower).error).toBeNull(); h.settle(2); await expectStatus(h, follower, 'succeeded');
+    // The manual click: an unknown image does not stop it either.
+    await expectCount(h, 4); h.settle(3, 'unknown'); await expectCount(h, 5); h.settle(4); await expectStatus(h, click, 'partial');
+    expect(h.read(click).items.map(item => item.status)).toEqual(['unknown', 'succeeded']);
+    await expectCount(h, 6); h.settle(5); await expectStatus(h, later, 'succeeded');
+    expect(vi.mocked(h.generation.submit).mock.calls.map(([args]) => (args as any).manual === true)).toEqual([false, false, false, true, true, false]);
+    // Nothing was sent twice.
+    expect(new Set(h.accepted.map(item => item.request.requestKey)).size).toBe(6);
   });
 
-  it('resuming a manual batch leaves the halt after an agent failure in place; resuming an agent batch lifts it', async () => {
+  it('pausing and resuming a manual click or an agent batch changes nothing for the others', async () => {
     const h = await queueSetup();
-    const failing = await h.service.enqueue(queued({ requestKey: 'mcp-unknown' }));
-    const halted = await h.service.enqueue(queued({ requestKey: 'mcp-halted' }));
-    await expectCount(h, 1); h.settle(0, 'unknown');
-    await expectStatus(h, failing, 'blocked');
-    await waitUntil(() => expect(h.read(halted)).toMatchObject({ status: 'paused', error: { code: 'queue_halted' } }));
-    // The user pauses and resumes a manual click meanwhile.
+    const agent = await h.service.enqueue(queued({ requestKey: 'mcp-first', count: 2 }));
+    await expectCount(h, 1); await h.service.pause(h.args(agent)); h.settle(0); await expectStatus(h, agent, 'paused');
     const click = await h.service.enqueueManual(plain(manual({ count: 2, seeds: [5, 6] })));
     await expectCount(h, 2);
     await h.service.pause({ workspaceId: 'recipe-queue', batchId: click.batchId });
     h.settle(1); await expectStatus(h, click, 'paused');
+    const after = await h.service.enqueue(queued({ requestKey: 'mcp-after-pauses' }));
+    expect(after).toMatchObject({ status: 'queued', error: null });
+    await expectCount(h, 3); h.settle(2); await expectStatus(h, after, 'succeeded');
     await h.service.resume({ workspaceId: 'recipe-queue', batchId: click.batchId, expectedRevision: 0 });
-    await expectCount(h, 3); h.settle(2); await expectStatus(h, click, 'succeeded');
-    // A new agent batch is still saved paused; nothing of it was submitted.
-    const after = await h.service.enqueue(queued({ requestKey: 'mcp-after-manual-resume' }));
-    expect(after).toMatchObject({ status: 'paused', error: { code: 'queue_halted' } });
-    await new Promise(resolve => setTimeout(resolve, 50));
-    expect(h.accepted).toHaveLength(3);
-    expect(h.read(halted).status).toBe('paused');
-    // Resuming an agent batch is the agent-side confirmation: it runs, and the next agent batch is not halted.
-    await h.service.resume({ ...h.args(halted), expectedRevision: 7 });
-    await expectCount(h, 4); h.settle(3); await expectStatus(h, halted, 'succeeded');
-    const next = await h.service.enqueue(queued({ requestKey: 'mcp-after-agent-resume' }));
-    expect(next.status).toBe('queued');
-    await expectCount(h, 5); h.settle(4); await expectStatus(h, next, 'succeeded');
+    await expectCount(h, 4); h.settle(3); await expectStatus(h, click, 'succeeded');
+    await h.service.resume({ ...h.args(agent), expectedRevision: 7 });
+    await expectCount(h, 5); h.settle(4); await expectStatus(h, agent, 'succeeded');
   });
 
   it('a frozen-queue storage failure stops the agent side; manual batches keep running, pausing, resuming and cancelling', async () => {
@@ -1254,32 +1274,32 @@ describe('frozen-queue state writes (queue retention rework: what is written at 
     await waitUntil(async () => expect((await stateOnDisk(h.runtimeDir, batch.batchId)).status).toBe('succeeded'), DISK_POLL);
   });
 
-  it('a crash while the image runs (its progress not yet written) restores it as unknown and never resends it', async () => {
+  it('a crash while the image runs (its progress not yet written) restores it as unknown, never resends it and goes on with the rest', async () => {
     const h = await recordingSetup({ stateFlushMs: 60_000 });
     const batch = await h.service.enqueue(queued({ count: 2, seedMode: 'increment' }));
     await expectCount(h, 1); await waitUntil(() => expect(h.read(batch).items[0]).toMatchObject({ status: 'running', jobId: 'child-1' }));
     expect((await stateOnDisk(h.runtimeDir, batch.batchId)).items[0]).toMatchObject({ status: 'submitting', providerOutcome: 'unknown' });
     const copy = await copyRuntime(h.runtimeDir);
     const restored = setup({ runtimeDir: copy }); await restored.service.ready; cleanups.push(restored.service.dispose);
-    expect(restored.read(batch)).toMatchObject({ status: 'blocked', error: { code: 'restart_unconfirmed' } });
-    expect(restored.read(batch).items.map(item => `${item.status}/${item.providerOutcome}`)).toEqual(['unknown/unknown', 'skipped/not_submitted']);
-    await expect(restored.service.resume({ ...restored.args(batch), expectedRevision: 0 })).rejects.toMatchObject({ code: 'batch_not_paused' });
-    expect(restored.generation.submit).not.toHaveBeenCalled();
+    expect(restored.read(batch).items[0]).toMatchObject({ status: 'unknown', providerOutcome: 'unknown', error: { code: 'restart_unconfirmed' } });
+    await expectCount(restored, 1); expect(vi.mocked(restored.generation.submit).mock.calls[0][0].requestKey).toBe(`batch-${batch.batchId}-1`);
+    restored.settle(0); await expectStatus(restored, batch, 'partial');
+    expect(restored.read(batch).items.map(item => `${item.status}/${item.providerOutcome}`)).toEqual(['unknown/unknown', 'succeeded/response_received']);
+    expect(restored.generation.submit).toHaveBeenCalledTimes(1);
   });
 
-  it('a start of the app (also one by an agent\'s MCP server) never submits a recovered batch: it stays paused until an explicit resume', async () => {
+  it('a start of the app (also one by an agent\'s MCP server) goes on with a recovered batch by itself', async () => {
     const h = await queueSetup({ isBusy: () => true });
     const batch = await h.service.enqueue(queued({ count: 2 })); await h.service.dispose();
     expect(h.generation.submit).not.toHaveBeenCalled();
-    // The next start: nothing else is generating, so a queued batch would run at once.
+    // The closing app paused it itself; that is no user pause.
+    expect((await stateOnDisk(h.runtimeDir, batch.batchId)).pausedBy).toBeUndefined();
     const restored = setup({ runtimeDir: h.runtimeDir, isBusy: () => false }); await restored.service.ready; cleanups.push(restored.service.dispose);
-    expect(restored.read(batch)).toMatchObject({ status: 'paused', error: { code: 'recovered_paused' } });
-    await new Promise(resolve => setTimeout(resolve, 200));
-    expect(restored.generation.submit).not.toHaveBeenCalled();
-    expect(restored.read(batch).status).toBe('paused');
+    expect(restored.read(batch).error).toBeNull();
+    await expectCount(restored, 1); restored.settle(0); await expectCount(restored, 2); restored.settle(1); await expectStatus(restored, batch, 'succeeded');
   });
 
-  it('a crash after an image settled, before the next one is marked, keeps the settled image and resumes only the rest', async () => {
+  it('a crash after an image settled, before the next one is marked, keeps the settled image and continues only the rest', async () => {
     let busy = false;
     const h = await recordingSetup({ stateFlushMs: 60_000, isBusy: () => busy });
     const batch = await h.service.enqueue(queued({ count: 2, seedMode: 'increment' }));
@@ -1287,9 +1307,7 @@ describe('frozen-queue state writes (queue retention rework: what is written at 
     await waitUntil(async () => expect((await stateOnDisk(h.runtimeDir, batch.batchId)).items[0]).toMatchObject({ status: 'succeeded', providerOutcome: 'response_received' }), DISK_POLL);
     const copy = await copyRuntime(h.runtimeDir);
     const restored = setup({ runtimeDir: copy }); await restored.service.ready; cleanups.push(restored.service.dispose);
-    expect(restored.read(batch)).toMatchObject({ status: 'paused', error: { code: 'recovered_paused' } });
-    expect(restored.read(batch).items.map(item => item.status)).toEqual(['succeeded', 'pending']);
-    await restored.service.resume({ ...restored.args(batch), expectedRevision: 0 });
+    expect(restored.read(batch)).toMatchObject({ error: null }); expect(restored.read(batch).items[0].status).toBe('succeeded');
     await expectCount(restored, 1); expect(vi.mocked(restored.generation.submit).mock.calls[0][0].requestKey).toBe(`batch-${batch.batchId}-1`);
     restored.settle(0); await expectStatus(restored, batch, 'succeeded');
   });
@@ -1308,19 +1326,19 @@ describe('restart recovery is written and matched with the library (review rewor
   const crashedCopy = async (h: Awaited<ReturnType<typeof queueSetup>>) => { const copy = await fs.mkdtemp(path.join(os.tmpdir(), 'nai-restart-copy-')); cleanups.push(() => fs.rm(copy, { recursive: true, force: true })); await fs.cp(h.runtimeDir, copy, { recursive: true, filter: source => !path.basename(source).startsWith('.quota.lock') }); return copy; };
   const stored = async (runtimeDir: string, batchId: string) => JSON.parse(await fs.readFile(path.join(runtimeDir, 'frozen-queue', `${batchId}.state.json`), 'utf8')).job as BatchJob;
 
-  it('P2-1: a batch restored as blocked is written ended with its finishedAt, which a later restart keeps', async () => {
-    const h = await queueSetup(), batch = await h.service.enqueue(queued({ count: 2, seedMode: 'increment' }));
+  it('P2-1: a batch a restart ends (partial) is written ended with its finishedAt, which a later restart keeps', async () => {
+    const h = await queueSetup(), batch = await h.service.enqueue(queued({ count: 1 }));
     await expectCount(h, 1);
     const copy = await crashedCopy(h);
-    expect((await stored(copy, batch.batchId)).status).not.toBe('blocked');
+    expect((await stored(copy, batch.batchId)).status).not.toBe('partial');
     const first = setup({ runtimeDir: copy }); await first.service.ready;
     const restored = first.read(batch);
-    expect(restored).toMatchObject({ status: 'blocked', error: { code: 'restart_unconfirmed' } });
-    expect(await stored(copy, batch.batchId)).toMatchObject({ status: 'blocked', finishedAt: restored.finishedAt, activeIndex: null });
+    expect(restored).toMatchObject({ status: 'partial', error: null, finishedAt: expect.any(String), items: [{ status: 'unknown', error: { code: 'restart_unconfirmed' } }] });
+    expect(await stored(copy, batch.batchId)).toMatchObject({ status: 'partial', finishedAt: restored.finishedAt, activeIndex: null });
     await first.service.dispose();
     const second = setup({ runtimeDir: copy }); await second.service.ready; cleanups.push(second.service.dispose);
-    expect(second.read(batch)).toMatchObject({ status: 'blocked', finishedAt: restored.finishedAt });
-    expect(second.generation.submit).not.toHaveBeenCalled();
+    expect(second.read(batch)).toMatchObject({ status: 'partial', finishedAt: restored.finishedAt });
+    expect(first.generation.submit).not.toHaveBeenCalled(); expect(second.generation.submit).not.toHaveBeenCalled();
   });
 
   it('P2-2: an image the library saved before the app died is the item\'s result; an unmatched one stays unknown', async () => {
@@ -1333,12 +1351,10 @@ describe('restart recovery is written and matched with the library (review rewor
     await restarted.service.ready; cleanups.push(restarted.service.dispose);
     expect(calls).toEqual([[batch.batchId, 0]]);
     const value = restarted.read(batch);
-    expect(value).toMatchObject({ status: 'paused', error: { code: 'recovered_paused' } });
+    expect(value).toMatchObject({ error: null });
     expect(value.items[0]).toMatchObject({ status: 'succeeded', providerOutcome: 'response_received', jobId: 'child-1', actualSeed: 42, error: null, results: [{ index: 0, id: 'history-saved-0', width: 832, height: 1216, model: 'nai-diffusion-4-5-full', actualSeed: 42 }] });
-    expect(value.items[1].status).toBe('pending');
     expect((await stored(copy, batch.batchId)).items[0].status).toBe('succeeded');
-    // Resumed: only the second image is sent.
-    await restarted.service.resume({ ...restarted.args(batch), expectedRevision: 0 });
+    // It goes on by itself: only the second image is sent.
     await expectCount(restarted, 1); expect(vi.mocked(restarted.generation.submit).mock.calls[0][0].requestKey).toBe(`batch-${batch.batchId}-1`);
   });
 
@@ -1349,10 +1365,153 @@ describe('restart recovery is written and matched with the library (review rewor
       const copy = await crashedCopy(h);
       const restarted = setup({ runtimeDir: copy, savedResults: () => savedImage ? [{ id: 'h-1', width: 64, height: 64, model: 'm', actualSeed: 42, jobId: null }] : [] });
       await restarted.service.ready; cleanups.push(restarted.service.dispose);
-      expect(restarted.read(batch).status).toBe(savedImage ? 'succeeded' : 'blocked');
+      expect(restarted.read(batch).status).toBe(savedImage ? 'succeeded' : 'partial');
       expect(restarted.read(batch).items[0].status).toBe(savedImage ? 'succeeded' : 'unknown');
-      expect((await stored(copy, batch.batchId)).status).toBe(savedImage ? 'succeeded' : 'blocked');
+      expect((await stored(copy, batch.batchId)).status).toBe(savedImage ? 'succeeded' : 'partial');
       expect(restarted.generation.submit).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe('the queue never stops on a failure (0.1.4)', () => {
+  /** Child `index` (in submit order) ends as NovelAI's received HTTP 429 (nothing generated) or another status code. */
+  const refuse = (h: ReturnType<typeof setup>, index: number, statusCode = 429) => {
+    const job = h.jobs.get(`child-${index + 1}`)!;
+    Object.assign(job, { status: 'failed', finishedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), providerOutcome: 'response_received', results: [],
+      error: { code: 'generation_failed', message: `HTTP ${statusCode}`, statusCode, reason: 'generation.request_failed', params: { status: statusCode } } });
+    h.emitJob(job);
+  };
+
+  it('sends an image again after a received HTTP 429 with the same frozen recipe and seed under a new child key, then succeeds', async () => {
+    const h = await queueSetup({ rateLimitDelaysMs: [5, 5, 5] });
+    const batch = await h.service.enqueue(queued({ count: 2 }));
+    await expectCount(h, 1); refuse(h, 0);
+    await expectCount(h, 2);
+    expect(h.accepted[1].request.requestKey).toBe(`batch-${batch.batchId}-0-r1`);
+    expect(h.accepted[1].snapshot).toEqual(h.accepted[0].snapshot);
+    expect(h.read(batch).items[0]).toMatchObject({ status: 'running', rateLimitRetries: 1, jobId: 'child-2' });
+    h.settle(1); await expectCount(h, 3); expect(h.accepted[2].request.requestKey).toBe(`batch-${batch.batchId}-1`);
+    h.settle(2); await expectStatus(h, batch, 'succeeded');
+    expect(h.read(batch).items[0]).toMatchObject({ status: 'succeeded', rateLimitRetries: 1, results: [{ id: 'result-2' }] });
+    // The resend is durable: a restart reads the item as it ended, with its resend count.
+    await h.service.dispose(); const restored = setup({ runtimeDir: h.runtimeDir }); await restored.service.ready; cleanups.push(restored.service.dispose);
+    expect(restored.read(batch).items[0]).toMatchObject({ status: 'succeeded', rateLimitRetries: 1 });
+  });
+
+  it('gives up after the 429 resends run out: the image fails as rate_limited and the batch goes on', async () => {
+    const h = await queueSetup({ rateLimitDelaysMs: [5, 5] });
+    const batch = await h.service.enqueue(queued({ count: 2 }));
+    for (let index = 0; index < 3; index++) { await expectCount(h, index + 1); refuse(h, index); }
+    await expectCount(h, 4); expect(h.accepted.map(item => item.request.requestKey)).toEqual([`batch-${batch.batchId}-0`, `batch-${batch.batchId}-0-r1`, `batch-${batch.batchId}-0-r2`, `batch-${batch.batchId}-1`]);
+    h.settle(3); await expectStatus(h, batch, 'partial');
+    expect(h.read(batch).items[0]).toMatchObject({ status: 'failed', providerOutcome: 'response_received', rateLimitRetries: 2, error: { code: 'rate_limited', reason: 'generation.request_failed' } });
+    expect(h.read(batch).items[1].status).toBe('succeeded');
+  });
+
+  it('resends only after a received 429: another HTTP failure, an unknown outcome or a cancelled image is never sent again', async () => {
+    const h = await queueSetup({ rateLimitDelaysMs: [5, 5] });
+    const batch = await h.service.enqueue(queued({ count: 4, intervalSeconds: 0 }));
+    await expectCount(h, 1); refuse(h, 0, 500);
+    await expectCount(h, 2); refuse(h, 1, 402);
+    await expectCount(h, 3); h.settle(2, 'unknown');
+    await expectCount(h, 4); h.settle(3, 'cancelled');
+    await expectStatus(h, batch, 'partial');
+    expect(h.accepted.map(item => item.request.requestKey)).toEqual([0, 1, 2, 3].map(index => `batch-${batch.batchId}-${index}`));
+    expect(h.read(batch).items.map(item => [item.status, item.rateLimitRetries ?? 0])).toEqual([['failed', 0], ['failed', 0], ['unknown', 0], ['cancelled', 0]]);
+  });
+
+  it('a 429 resend waits while the batch is paused and continues the same image when resumed', async () => {
+    const h = await queueSetup({ rateLimitDelaysMs: [5] });
+    const batch = await h.service.enqueue(queued());
+    await expectCount(h, 1); await h.service.pause(h.args(batch)); refuse(h, 0);
+    await expectStatus(h, batch, 'paused');
+    expect(h.read(batch).items[0]).toMatchObject({ status: 'pending', rateLimitRetries: 1, jobId: null, providerOutcome: 'not_submitted' });
+    await new Promise(resolve => setTimeout(resolve, 30)); expect(h.accepted).toHaveLength(1);
+    await h.service.resume({ ...h.args(batch), expectedRevision: 0 });
+    await expectCount(h, 2); expect(h.accepted[1].request.requestKey).toBe(`batch-${batch.batchId}-0-r1`);
+    h.settle(1); await expectStatus(h, batch, 'succeeded');
+  });
+
+  it('a failing pre-submit lookup is tried again; one that keeps failing marks only that image unknown (never submitted) and the batch goes on', async () => {
+    const h = await queueSetup({ childReadRetryMs: 60 });
+    const original = vi.mocked(h.generation.lookup).getMockImplementation()!;
+    let flaky = 2;
+    vi.mocked(h.generation.lookup).mockImplementation((args: any) => {
+      if (args.requestKey.endsWith('-0')) throw new Error('lookup unavailable');
+      if (args.requestKey.endsWith('-1') && flaky-- > 0) throw new Error('lookup briefly unavailable');
+      return original(args);
+    });
+    const batch = await h.service.enqueue(queued({ count: 2 }));
+    await expectCount(h, 1); expect(h.accepted[0].request.requestKey).toBe(`batch-${batch.batchId}-1`);
+    expect(h.read(batch).items[0]).toMatchObject({ status: 'unknown', providerOutcome: 'unknown', jobId: null, error: { code: 'child_lookup_failed' } });
+    expect(h.read(batch).error).toBeNull();
+    h.settle(0); await expectStatus(h, batch, 'partial');
+    expect(vi.mocked(h.generation.lookup).mock.calls.filter(([args]) => args.requestKey.endsWith('-0')).length).toBeGreaterThan(1);
+  });
+
+  it('a status read that keeps failing marks the running image unknown after the retry window; the next image waits for the generator, never two at once', async () => {
+    let running = 0, overlap = false;
+    const h = await queueSetup({ childReadRetryMs: 60, isBusy: () => running > 0 });
+    const submit = vi.mocked(h.generation.submit), original = submit.getMockImplementation()!;
+    submit.mockImplementation((args: any) => { if (running) overlap = true; running++; return original(args); });
+    const read = vi.mocked(h.generation.read), plainRead = read.getMockImplementation()!;
+    read.mockImplementation((args: any) => { if (args.jobId === 'child-1') throw new Error('status unavailable'); return plainRead(args); });
+    const batch = await h.service.enqueue(queued({ count: 2 }));
+    await expectCount(h, 1);
+    await waitUntil(() => expect(h.read(batch).items[0]).toMatchObject({ status: 'unknown', error: { code: 'child_status_unavailable' } }));
+    expect(h.read(batch).error).toBeNull(); expect(h.read(batch).status).not.toBe('paused');
+    // The abandoned child still holds the generator: nothing more starts until it ends.
+    await new Promise(resolve => setTimeout(resolve, 40)); expect(h.accepted).toHaveLength(1);
+    h.jobs.get('child-1')!.status = 'succeeded'; running--;
+    await expectCount(h, 2); h.settle(1); running--; await expectStatus(h, batch, 'partial');
+    expect(overlap).toBe(false);
+    expect(h.read(batch).items.map(item => item.status)).toEqual(['unknown', 'succeeded']);
+  });
+
+  it('a status read that fails for a moment is tried again and the image ends normally', async () => {
+    const h = await queueSetup({ childReadRetryMs: 5000 });
+    const read = vi.mocked(h.generation.read), plainRead = read.getMockImplementation()!;
+    let failures = 3;
+    read.mockImplementation((args: any) => { if (failures-- > 0) throw new Error('status briefly unavailable'); return plainRead(args); });
+    const batch = await h.service.enqueue(queued());
+    await expectCount(h, 1); await waitUntil(() => expect(failures).toBeLessThan(0));
+    const job = h.jobs.get('child-1')!; Object.assign(job, { status: 'succeeded', providerOutcome: 'response_received', results: [{ index: 0, id: 'late-result', width: 64, height: 64, model: job.model, actualSeed: 42 }] });
+    await expectStatus(h, batch, 'succeeded');
+    expect(h.read(batch).items[0]).toMatchObject({ status: 'succeeded', results: [{ id: 'late-result' }] });
+  });
+
+  it('an internal error before the request marks only that image failed (nothing sent) and the batch goes on', async () => {
+    const h = await queueSetup();
+    const request: Record<string, unknown> = queued({ workspaceId: 'recipe-queue', expectedRevision: 0, requestKey: 'manual-prepare-throws', count: 2, seeds: [5, 6] }); delete request.seedMode;
+    const click = await h.service.enqueueManual(request,
+      { prepare: (value, index) => { if (index === 0) throw new Error('wildcard expansion failed'); return value; } });
+    await expectCount(h, 1); expect(h.accepted[0].request.requestKey).toBe(`batch-${click.batchId}-1`);
+    expect(h.read(click).items[0]).toMatchObject({ status: 'failed', providerOutcome: 'not_submitted', error: { code: 'scheduler_error' } });
+    h.settle(0); await expectStatus(h, click, 'partial');
+  });
+
+  it('position: images and batches ahead, and a time left from the recent image times (null without one, null while paused, 0 once ended)', async () => {
+    let busy = false;
+    const h = await queueSetup({ isBusy: () => busy });
+    const first = await h.service.enqueue(queued({ requestKey: 'first', count: 2 }));
+    const second = await h.service.enqueue(queued({ requestKey: 'second', count: 3, intervalSeconds: 10 }));
+    await expectCount(h, 1);
+    expect(h.service.position(second.batchId)).toEqual({ ahead: { images: 2, batches: 1 }, etaSeconds: null, imageSeconds: null });
+    expect(h.service.position(first.batchId)).toMatchObject({ ahead: { images: 0, batches: 0 }, etaSeconds: null });
+    await new Promise(resolve => setTimeout(resolve, 30)); h.settle(0);
+    await expectCount(h, 2);
+    const timed = h.service.position(second.batchId)!;
+    expect(timed.ahead).toEqual({ images: 1, batches: 1 });
+    expect(timed.imageSeconds).toEqual(expect.any(Number));
+    // 1 left ahead + 3 of its own + 2 intervals of 10 s between its images.
+    expect(timed.etaSeconds).toBeGreaterThanOrEqual(20); expect(timed.etaSeconds).toBeLessThan(25);
+    await h.service.pause(h.args(second)); expect(h.service.position(second.batchId)!.etaSeconds).toBeNull();
+    // A paused batch ahead holds nothing up: it is not counted.
+    const third = await h.service.enqueue(queued({ requestKey: 'third' }));
+    expect(h.service.position(third.batchId)!.ahead).toEqual({ images: 1, batches: 1 });
+    h.settle(1); await expectStatus(h, first, 'succeeded');
+    expect(h.service.position(first.batchId)).toMatchObject({ ahead: { images: 0, batches: 0 }, etaSeconds: 0 });
+    expect(h.service.position('no-such-batch')).toBeNull();
+    busy = true; await h.service.cancel(h.args(third)); await h.service.cancel(h.args(second));
   });
 });

@@ -5,7 +5,12 @@ import type { BatchScene } from "./scene-patch";
 /** The scheduler accepts the first four modes; others are reserved for adapters. */
 export type BatchMode = "t2i" | "i2i" | "inpaint" | "enhance" | "upscale" | "director";
 export type BatchSeedMode = "increment" | "random" | "fixed";
-export type BatchStatus = "queued" | "running" | "pausing" | "paused" | "cancelling" | "succeeded" | "cancelled" | "blocked";
+/**
+ * partial: the batch ran to its end but not every image succeeded (some failed or have an unknown outcome; none of
+ * them is resent). blocked: an end of batches stored by versions before 0.1.4, which stopped a batch at its first
+ * unsuccessful image; it is still read, never set for a new run.
+ */
+export type BatchStatus = "queued" | "running" | "pausing" | "paused" | "cancelling" | "succeeded" | "partial" | "cancelled" | "blocked";
 export interface BatchRequest {
   workspaceId: string;
   expectedRevision: number;
@@ -32,6 +37,14 @@ export interface BatchItem {
   status: "pending" | "submitting" | "running" | "succeeded" | "failed" | "unknown" | "cancelled" | "skipped";
   /** Direct child-executor evidence. Missing on old records means unknown. */
   providerOutcome?: GenerationJob["providerOutcome"];
+  /** When this image's (latest) request was prepared and when it ended (ISO); absent on records from before 0.1.4. */
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  /**
+   * How often NovelAI answered HTTP 429 (nothing generated) and this image was sent again with the same frozen recipe
+   * (batch-service RATE_LIMIT_RETRY); absent when it never was. Each resend uses its own child request key.
+   */
+  rateLimitRetries?: number;
   results: GenerationJob["results"];
   /**
    * upstream (step 4c1): what NovelAI answered to a failed agent image, cleaned, for the window's queue page; a stored
@@ -72,6 +85,9 @@ export interface BatchJob {
   /** reason/params (step 4a): only on a frozen-queue storage stop naming an entry, for the window's own text. */
   error: { code: string; message: string; reason?: string; params?: Record<string, string | number> } | null;
   cancelRequested: boolean;
+  /** "user": paused by an explicit pause (the window or control_queue); such a batch stays paused across a restart.
+   * Absent for every other state, including a pause the queue made itself (it continues after a restart). */
+  pausedBy?: "user";
   items: BatchItem[];
   source?: BatchSource;
 }
@@ -91,4 +107,5 @@ export interface BatchGenerationPort {
 export const MANUAL_BATCH_MAX_ITEMS = 999;
 /** Images one durable queued batch (an agent enqueue) may hold at most, whatever the per-enqueue setting says. */
 export const QUEUED_BATCH_MAX_ITEMS = 200;
-export const isBatchTerminal = (status: BatchStatus) => ["succeeded", "cancelled", "blocked"].includes(status);
+export const BATCH_TERMINAL_STATUSES: readonly BatchStatus[] = ["succeeded", "partial", "cancelled", "blocked"];
+export const isBatchTerminal = (status: BatchStatus) => BATCH_TERMINAL_STATUSES.includes(status);

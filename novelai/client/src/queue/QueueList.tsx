@@ -112,8 +112,8 @@ export const BatchCard = memo(function BatchCard({ api, batch, selected, onSelec
       <span className="qp-card-progress">
         <Progress value={batch.count ? counts.succeeded / batch.count : 0} tone={progressTone(batch)} label={t('q.progressLabel', { done: counts.succeeded, total: batch.count })} />
         <span className="qp-num">{t('q.progress', { done: counts.succeeded, total: batch.count })}</span>
-        {flags.map(flag => <span key={flag} className={clsx('qp-flag', `qp-flag--${flag}`)} title={t(flag === 'halted' ? 'q.flag.halted' : flag === 'unknown' ? 'q.flag.unknown' : 'q.flag.failed')}>
-          <Icon name={flag === 'halted' ? 'pause' : flag === 'unknown' ? 'alert' : 'x'} size={13} title={t(flag === 'halted' ? 'q.flag.halted' : flag === 'unknown' ? 'q.flag.unknown' : 'q.flag.failed')} />
+        {flags.map(flag => <span key={flag} className={clsx('qp-flag', `qp-flag--${flag}`)} title={t(flag === 'unknown' ? 'q.flag.unknown' : 'q.flag.failed')}>
+          <Icon name={flag === 'unknown' ? 'alert' : 'x'} size={13} title={t(flag === 'unknown' ? 'q.flag.unknown' : 'q.flag.failed')} />
         </span>)}
       </span>
     </span>

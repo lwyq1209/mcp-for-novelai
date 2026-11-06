@@ -1,7 +1,7 @@
 /**
  * The queue panel's host side (review rework P1-1): novelai:queue:call reaches exactly the host queue methods
  * list_queue / pause_queue / resume_queue / cancel_queue of the real recipe queue over the real durable batch
- * service, with the host rules unchanged: a batch paused by queue_halted resumes with its original frozen recipe,
+ * service, with the host rules unchanged: a resumed batch continues with its original frozen recipe,
  * and a failed or unknown image is never resent. The child generator is a fixture; nothing reaches NovelAI.
  */
 import fs from 'node:fs/promises';
@@ -93,27 +93,25 @@ describe('queue panel IPC (novelai:queue:call)', () => {
     expect(h.events.filter(event => event.batchId === a.batchId).map(event => event.status)).toEqual(expect.arrayContaining(['running', 'pausing', 'paused', 'queued', 'cancelling', 'cancelled']));
   });
 
-  it('resumes a batch paused by queue_halted with its original frozen recipe and never resends the unknown image', async () => {
+  it('an unknown image pauses nothing: the next batch runs with its original frozen recipe and the unknown image is never resent', async () => {
     const h = await setup();
     const a = await h.enqueue('panel-unknown', 'first recipe');
     await waitUntil(() => expect(h.accepted).toHaveLength(1));
-    const b = await h.enqueue('panel-halted', 'second recipe');
+    const b = await h.enqueue('panel-next', 'second recipe');
     h.settle(0, 'unknown');
-    await waitUntil(() => expect(h.read(b.batchId).status).toBe('paused'));
-    expect(h.read(a.batchId)).toMatchObject({ status: 'blocked', items: [{ status: 'unknown' }] });
-    const halted = ok(await h.call('list_queue', {})).batches.find((item: BatchJob) => item.batchId === b.batchId);
-    expect(halted).toMatchObject({ status: 'paused', error: { code: 'queue_halted' } });
+    await waitUntil(() => expect(h.accepted).toHaveLength(2));
+    expect(h.read(a.batchId)).toMatchObject({ status: 'partial', items: [{ status: 'unknown' }] });
+    const listed = ok(await h.call('list_queue', {})).batches.find((item: BatchJob) => item.batchId === b.batchId);
+    expect(listed).toMatchObject({ status: 'running', error: null });
 
     // The ended batch with the unknown image cannot be resumed: nothing is resent.
     const refused = await h.call('resume_queue', { batchId: a.batchId });
     expect(refused).toMatchObject({ ok: false, error: { code: 'batch_not_paused' } });
-    expect(ok(await h.call('resume_queue', { batchId: b.batchId }))).toMatchObject({ batchId: b.batchId, status: 'queued', error: null });
-    await waitUntil(() => expect(h.accepted).toHaveLength(2));
     expect(h.accepted.map(item => item.snapshot.params.positivePrompt)).toEqual(['first recipe', 'second recipe']);
     h.settle(1, 'succeeded');
     await waitUntil(() => expect(h.read(b.batchId).status).toBe('succeeded'));
     expect(h.accepted).toHaveLength(2);
-    expect(h.read(a.batchId)).toMatchObject({ status: 'blocked', items: [{ status: 'unknown' }] });
+    expect(h.read(a.batchId)).toMatchObject({ status: 'partial', items: [{ status: 'unknown' }] });
   });
 
   it('offers nothing beyond the four panel methods, and refusals keep the queue\'s own code', async () => {

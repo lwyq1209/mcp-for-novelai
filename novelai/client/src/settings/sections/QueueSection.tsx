@@ -124,7 +124,7 @@ export function QueueSection() {
       confirmLabel={t('set.q.repairConfirm')} cancelLabel={t('c.cancel')} onCancel={() => setRepair(null)} onConfirm={() => void runRepair()} />
     <SettingsGroup title={t('set.q.rules')} icon="lock">
       <SettingsBlock className="sp-rules">
-        <div><Icon name="pause" size={14} /><span>{t('set.q.r1')}</span></div>
+        <div><Icon name="play" size={14} /><span>{t('set.q.r1')}</span></div>
         <div><Icon name="refresh" size={14} /><span>{t('set.q.r2')}</span></div>
         <div><Icon name="drive" size={14} /><span>{t('set.q.r3')}</span></div>
       </SettingsBlock>
