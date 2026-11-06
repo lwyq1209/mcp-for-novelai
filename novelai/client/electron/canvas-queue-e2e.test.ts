@@ -80,7 +80,7 @@ beforeEach(async () => {
 });
 afterEach(() => runCleanups([...closers.splice(0).reverse(), () => cancelAllJobs(), () => vi.unstubAllGlobals(), () => fs.rm(base, { recursive: true, force: true })]));
 
-async function start() {
+async function start(options: { batch?: Partial<Parameters<typeof createBatchService>[0]> } = {}) {
   const runtimeDir = path.join(base, 'runtime'), projectRoot = path.join(base, 'project');
   await fs.mkdir(runtimeDir, { recursive: true }); await fs.mkdir(projectRoot, { recursive: true });
   const clock = { now: Date.now() };
@@ -98,7 +98,7 @@ async function start() {
       throw new Error(`mode ${mode} is not part of this fixture`);
     },
     onJob: job => rendererJobs.forEach(listener => listener(structuredClone(job))) });
-  const batch = createBatchService({ generation, isBusy: hasActiveGenerationJobs, runtimeDir });
+  const batch = createBatchService({ generation, isBusy: hasActiveGenerationJobs, runtimeDir, ...options.batch });
   closers.push(() => batch.dispose());
   const queue: any = createQueueRecipeService({ runtimeDir, batch, generation, historyById: id => (repository.get('history', id)?.payload as any) ?? null, validateImage: data => sizeOf(data),
     resolveHistoryGroup: name => resolveQueueHistoryGroup(name, getHistoryGroups(), ensureHistoryGroup), recipeReclaim: { auto: false, now: () => clock.now, log: () => {} } });
@@ -132,7 +132,7 @@ async function start() {
   const ok = async (name: string, args: Record<string, unknown> = {}) => { const result = await call(name, args); expect(result.ok, `${name}: ${JSON.stringify(result.value).slice(0, 1500)}`).toBe(true); return result.value; };
   const refused = async (name: string, args: Record<string, unknown>) => { const result = await call(name, args); expect(result.ok, `${name} should fail`).toBe(false); return result.value.error; };
   // Until the batch ends (the test timeout bounds it).
-  const settle = (batchId: string) => waitUntil(async () => { const read = await ok('read_queue', { batchId }); expect(['succeeded', 'blocked', 'cancelled'], `batch ${read.status}`).toContain(read.status); return read; }, { interval: 25 });
+  const settle = (batchId: string) => waitUntil(async () => { const read = await ok('read_queue', { batchId }); expect(['succeeded', 'partial', 'blocked', 'cancelled'], `batch ${read.status}`).toContain(read.status); return read; }, { interval: 25 });
   const workspaceId = (await ok('list_workspaces')).workspaces[0].workspaceId;
   const revision = async () => (await ok('read_workspace', { workspaceId, includeImages: false })).revision;
   return { queue, repository, clock, projectRoot, call, ok, refused, settle, workspace, workspaceId, revision, dispatched };
@@ -214,6 +214,47 @@ describe('canvas → prepare_recipe {canvas} → enqueue_recipes → read_queue/
     expect((await h.ok('get_queue_result', { batchId: receipt.batch.batchId, itemIndex: 0 })).actualSeed).toBe(11);
     expect(fixture.post).toHaveBeenCalledTimes(2);
     expect(await h.refused('enqueue_recipes', { requestKey: 'e2e-canvas-t2i-more', items: [{ ...ref(recipe), seeds: [13] }] })).toMatchObject({ code: 'recipe_not_found' });
+  });
+
+  it('a 429 is sent again and succeeds, a 500 marks only its image, the batch ends partial; read_queue waits and get_queue_result shows the whole batch as thumbnails', async () => {
+    const h = await start({ batch: { rateLimitDelaysMs: [20] } });
+    const answer = (status: number, message: string) => Object.assign(new Error(`Request failed with status code ${status}`), { isAxiosError: true, response: { status, headers: { 'content-type': 'application/json' }, data: Buffer.from(JSON.stringify({ statusCode: status, message })) } });
+    const held = deferred<any>(), limited = deferred<void>();
+    fixture.post
+      .mockImplementationOnce(() => held.promise)
+      .mockImplementationOnce(() => limited.promise.then(() => Promise.reject(answer(429, 'Concurrent generation is locked'))))
+      .mockImplementationOnce(() => zipReply())
+      .mockImplementationOnce(() => Promise.reject(answer(500, 'Upstream GPU melted')))
+      .mockImplementation(() => zipReply());
+    const recipe = await h.ok('prepare_recipe', { mode: 't2i', canvas: { workspaceId: h.workspaceId, expectedRevision: await h.revision() } });
+    const receipt = await h.ok('enqueue_recipes', { requestKey: 'e2e-no-stop', items: [{ ...ref(recipe), count: 4, seeds: [31, 32, 33, 34] }] });
+    const later = await h.ok('enqueue_recipes', { requestKey: 'e2e-no-stop-later', items: [{ ...ref(recipe), seeds: [41] }] });
+    await waitUntil(() => expect(fixture.post).toHaveBeenCalledTimes(1));
+    // The later batch waits behind the four images of the first; no image time is known yet.
+    expect(await h.ok('read_queue', { batchId: later.batch.batchId })).toMatchObject({ status: 'queued', ahead: { images: 4, batches: 1 }, etaSeconds: null });
+    // A wait for the next result returns once the first image is saved.
+    const waiting = h.ok('read_queue', { batchId: receipt.batch.batchId, wait: { until: 'next', seconds: 60 } });
+    held.resolve(await zipReply());
+    const next = await waiting;
+    expect(next.wait).toMatchObject({ until: 'next', ended: 'next' });
+    expect(next).toMatchObject({ status: 'running', results: [{ itemIndex: 0, actualSeed: 31 }] });
+    limited.resolve();
+    // Then a wait for the end: the 429 was sent again (same seed), the 500 marked only its image, the rest ran.
+    const done = await h.ok('read_queue', { batchId: receipt.batch.batchId, wait: { until: 'done', seconds: 60 } });
+    expect(done).toMatchObject({ status: 'partial', stopReason: null, wait: { ended: 'done' }, itemCounts: { succeeded: 3, unknown: 1, failed: 0 }, ahead: { images: 0, batches: 0 }, etaSeconds: 0 });
+    expect(done.items.map((item: any) => [item.status, item.rateLimitRetries ?? 0])).toEqual([['succeeded', 0], ['succeeded', 1], ['unknown', 0], ['succeeded', 0]]);
+    expect(fixture.post.mock.calls.slice(0, 5).map(([, body]: any[]) => body.parameters.seed)).toEqual([31, 32, 32, 33, 34]);
+    const after = await h.ok('read_queue', { batchId: later.batch.batchId, wait: { until: 'done', seconds: 60 } });
+    expect(after).toMatchObject({ status: 'succeeded', wait: { ended: 'done' } });
+    expect(after.imageSeconds).toEqual(expect.any(Number));
+    // The whole batch at once: three thumbnails in item order.
+    const all = await h.call('get_queue_result', { batchId: receipt.batch.batchId });
+    expect(all.ok, JSON.stringify(all.value)).toBe(true);
+    expect(all.value).toMatchObject({ status: 'partial', total: 3, returned: 3, nextOffset: null });
+    expect(all.value.results.map((entry: any) => [entry.itemIndex, entry.actualSeed, entry.imageAttached, entry.width <= 384])).toEqual([[0, 31, true, true], [1, 32, true, true], [3, 34, true, true]]);
+    const images = all.content.filter((entry: any) => entry.type === 'image');
+    expect(images).toHaveLength(3);
+    expect(images.every((entry: any) => entry.mimeType === 'image/webp')).toBe(true);
   });
 
   it('i2i: the canvas source is copied into the recipe; preview saves nothing; the queued image carries its seed and can be exported into the project', async () => {

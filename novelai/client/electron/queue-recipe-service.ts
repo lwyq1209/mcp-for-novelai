@@ -9,7 +9,8 @@ import { readSavedGenerationResult } from './generation-result';
 import { record, validatePatch, type CreativeState } from '../src/workspace/state';
 import { authoredPromptReview, type PromptReviewPreparation, type PromptReviewInput } from '../src/workspace/prompt-review';
 import { isBatchTerminal, type BatchJob, type BatchSource } from '../src/workspace/batch-types';
-import type { BatchAdmission, BatchCapacity } from './batch-service';
+import type { BatchAdmission, BatchCapacity, BatchPosition } from './batch-service';
+import { queueResultThumbnail, type QueueResultThumbnail } from './queue-result-thumbnail';
 import { FROZEN_QUEUE_LIMITS } from './batch-storage';
 import { GENERATION_MODES, isSeededGeneration, type GenerationSnapshot } from '../src/workspace/generation-types';
 import { buildPromptReview, freezeReviewedGeneration } from './prompt-review';
@@ -59,7 +60,7 @@ export const receiptSlotBytes = (items: number) => RECEIPT_SLOT_BYTES * Math.max
  * grows (RECIPE_STORE_LIMITS), and a canvas capture of an image mode stores its source inline. Only a record with a
  * canvas origin is ever removed; plain recipes and every receipt stay. A capture is removed
  * once it is older than graceMs AND every receipt naming it is settled that long: its batch ended (succeeded,
- * cancelled or blocked) graceMs ago, or its enqueue was rejected graceMs ago. A receipt still preparing or unknown, an
+ * partial, cancelled or blocked) graceMs ago, or its enqueue was rejected graceMs ago. A receipt still preparing or unknown, an
  * unfinished batch, a receipt whose batch cannot be found, an unreadable receipt or an unreadable frozen queue keeps
  * it (the last two skip the whole round). A running batch never needs its recipe (it runs from its frozen input);
  * lookups, queue reads and history never read recipes, and a repeated enqueue of an existing key is answered from
@@ -71,7 +72,7 @@ export const RECIPE_RECLAIM_POLICY = Object.freeze({ graceMs: 7 * 24 * 60 * 60 *
 export interface RecipeReclaimOptions { auto?: boolean; graceMs?: number; roundLimit?: number; startDelayMs?: number; intervalMs?: number; now?: () => number; log?: (message: string) => void }
 /**
  * Queue retention (2026-11, Settings › Queue: 7, 30 or 90 days, or never; default 30). An ended agent batch (succeeded,
- * cancelled or blocked; never a queued, running or paused one) whose end lies MORE than that many days back is cleaned
+ * partial, cancelled or blocked; never a queued, running or paused one) whose end lies MORE than that many days back is cleaned
  * together with its receipt and the plain recipes only it used (option B: no receipt of any status still names the
  * recipe; a recipe never enqueued and every canvas capture keep their own rules). A record per batch and per recipe
  * stays (queue-tombstones): the old requestKey keeps answering "accepted, ended, cleaned" and is never queued again.
@@ -234,6 +235,8 @@ interface QueueBackend {
   capacity?(): BatchCapacity | null;
   /** Bounded synchronous compaction of ended batches (frees bytes, never batch slots). */
   reclaim?(maxBatches?: number): Promise<{ compacted: number; capacity: BatchCapacity | null }>;
+  /** Where a batch stands in the FIFO (images and batches ahead, time left); read_queue reports it. */
+  position?(batchId: string): BatchPosition | null;
   /** Throws when the frozen queue cannot accept anything; otherwise its unfinished-item load. */
   queueAdmission?(): BatchAdmission;
   /** Queue retention: removes ended batches (their cleaned records are written first). */
@@ -258,7 +261,9 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
    * repair of damaged cleaned records adds a record for each key that has neither a receipt nor a readable record. */
   libraryQueueOrigins?: () => Array<{ requestKey: string; batchId: string; images: number }>;
   /** Where a store problem the user can fix is written (an entry the store does not use); default console.warn, which main mirrors into app.log. */
-  log?: (message: string) => void }) {
+  log?: (message: string) => void;
+  /** get_queue_result variant thumbnail: makes the ≤384 px preview of a saved result (default: sharp, WebP). */
+  thumbnail?: QueueResultThumbnail }) {
   const directory = path.resolve(options.runtimeDir, 'queue-recipes'), recordLimit = options.recordLimit ?? RECIPE_STORE_LIMITS.records;
   /** Records/bytes of the recipe store from the latest scan (or write) in this process. */
   let recipeUsage: { records: number; total: number } | null = null;
@@ -967,6 +972,14 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
     return history && bound && typeof history.filePath === 'string' && history.filePath
       ? { ...result, fileName: path.basename(history.filePath), filePath: history.filePath } : result;
   }) })) });
+  /** read_queue only: where the batch stands in the shared FIFO (ahead, etaSeconds, imageSeconds); omitted for a cleaned
+   * batch or when the batch service cannot say. */
+  const withPosition = <T extends { batchId?: unknown; cleaned?: unknown }>(job: T) => {
+    if (job?.cleaned === true || typeof job?.batchId !== 'string' || !options.batch.position) return job;
+    let position: BatchPosition | null = null;
+    try { position = options.batch.position(job.batchId); } catch { position = null; }
+    return position ? { ...job, ahead: position.ahead, etaSeconds: position.etaSeconds, imageSeconds: position.imageSeconds } : job;
+  };
   /** Before a receipt exists: refuse (queue_full) without consuming the key when the frozen queue cannot take
    * the batch even after one bounded reclaim. Unknown capacity leaves the decision to the batch service. */
   const ensureFrozenCapacity = async (needed: number) => {
@@ -1271,7 +1284,8 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
       }
     },
     async get_queue_result(raw: unknown) {
-      preflight(raw); const args = record(raw, 'queue result'); keys(args, ['batchId', 'itemIndex', 'index']);
+      preflight(raw); const args = record(raw, 'queue result'); keys(args, ['batchId', 'itemIndex', 'index', 'variant']);
+      if (args.variant !== undefined && args.variant !== 'original' && args.variant !== 'thumbnail') fail('invalid_argument', 'variant is original or thumbnail.');
       const job = await api.control('read', { batchId: args.batchId });
       if ((job as { cleaned?: unknown }).cleaned === true) fail('result_unavailable', `This batch ended and its queue record was cleaned on ${(job as { cleanedAt?: string }).cleanedAt} (queue retention). Its saved images stay in the library: asset_library lists them with queueBatchId or queueRequestKey. Nothing is generated again.`);
       if (!Number.isInteger(args.itemIndex) || args.itemIndex < 0 || args.itemIndex >= job.items.length || (args.index !== undefined && (!Number.isInteger(args.index) || args.index < 0))) fail('invalid_argument', 'Invalid queue result index.');
@@ -1280,17 +1294,29 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
       const index = args.index ?? 0;
       // The saved file by name and host path at the top level: the HTTP bridge forwards only listed result keys
       // (never historyItem); the MCP server turns the path into a project-relative one.
-      const withFile = <T extends { historyItem?: HistoryItem; historyId?: string }>(value: T) => value?.historyItem && value.historyItem.id === value.historyId && typeof value.historyItem.filePath === 'string' && value.historyItem.filePath
+      const named = <T extends { historyItem?: HistoryItem; historyId?: string }>(value: T) => value?.historyItem && value.historyItem.id === value.historyId && typeof value.historyItem.filePath === 'string' && value.historyItem.filePath
         ? { ...value, fileName: path.basename(value.historyItem.filePath), filePath: value.historyItem.filePath } : value;
+      // variant thumbnail (2026-12, whole-batch views): the same saved original, shrunk to at most 384 px (WebP); the
+      // reply keeps the original's identity and names its size as sourceWidth/sourceHeight.
+      const withFile = async <T extends { historyItem?: HistoryItem; historyId?: string; data?: unknown; width?: unknown; height?: unknown }>(value: T) => {
+        const result = named(value);
+        if (args.variant !== 'thumbnail' || typeof result?.data !== 'string') return result;
+        let small: Awaited<ReturnType<QueueResultThumbnail>>;
+        try { small = await (options.thumbnail ?? queueResultThumbnail)(Buffer.from(result.data, 'base64')); }
+        catch { return fail('result_unavailable', 'The preview of this saved image cannot be made right now; the original is kept and nothing is generated again.'); }
+        return { ...result, variant: 'thumbnail', mimeType: small.mimeType, data: small.data.toString('base64'), width: small.width, height: small.height, sourceWidth: result.width, sourceHeight: result.height };
+      };
       if (options.generation) {
-        try { return withFile(await options.generation.result({ workspaceId: QUEUE_WORKSPACE, jobId: item.jobId, index })); }
+        try { return await withFile(await options.generation.result({ workspaceId: QUEUE_WORKSPACE, jobId: item.jobId, index })); }
         catch (error: any) { if (error?.code !== 'job_not_found') throw error; }
       }
       const result = item.results.find((value: { index: number }) => value.index === index);
       const history = result && options.historyById?.(result.id), provenance = history?.generationOrigin;
       if (!result || !history || !options.validateImage || !provenance || provenance.jobId !== item.jobId || provenance.originWorkspaceId !== QUEUE_WORKSPACE || provenance.mode !== job.mode || provenance.submittedRevision !== job.submittedRevision) fail('result_unavailable', 'The saved image record is missing or does not match this queue item.');
-      try { return withFile(await readSavedGenerationResult(history!, { jobId: item.jobId!, workspaceId: QUEUE_WORKSPACE, originWorkspaceId: QUEUE_WORKSPACE, submittedRevision: job.submittedRevision, index, actualSeed: result!.actualSeed, model: result!.model }, options.validateImage!)); }
+      let saved: Awaited<ReturnType<typeof readSavedGenerationResult>>;
+      try { saved = await readSavedGenerationResult(history!, { jobId: item.jobId!, workspaceId: QUEUE_WORKSPACE, originWorkspaceId: QUEUE_WORKSPACE, submittedRevision: job.submittedRevision, index, actualSeed: result!.actualSeed, model: result!.model }, options.validateImage!); }
       catch { return fail('result_unavailable', 'The original cannot be read right now; the job and the history are kept and nothing is generated again.'); }
+      return withFile(saved);
     },
   };
   // reclaimRecipes is host-internal (tests, maintenance); it is not a bridge method.
@@ -1331,5 +1357,5 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
     for (const name of referenceCache.keys()) if (!names.has(name)) referenceCache.delete(name);
     return found;
   }
-  return { ...api, reclaimRecipes, sourceReferences, runRetention, retentionStatus, retentionStatusFresh, retentionPreview, repairPlan: async () => { const plan = await repairPlan(); return { ...plan, records: undefined }; }, repairCleanedRecords, restoreCleanedRecords, cleanedRecordFiles, libraryRestored, stopRetention, read_queue: async (raw: unknown) => withResultFiles(await api.control('read', raw)), pause_queue: (raw: unknown) => api.control('pause', raw), resume_queue: (raw: unknown) => api.control('resume', raw), cancel_queue: (raw: unknown) => api.control('cancel', raw) };
+  return { ...api, reclaimRecipes, sourceReferences, runRetention, retentionStatus, retentionStatusFresh, retentionPreview, repairPlan: async () => { const plan = await repairPlan(); return { ...plan, records: undefined }; }, repairCleanedRecords, restoreCleanedRecords, cleanedRecordFiles, libraryRestored, stopRetention, read_queue: async (raw: unknown) => withPosition(withResultFiles(await api.control('read', raw))), pause_queue: (raw: unknown) => api.control('pause', raw), resume_queue: (raw: unknown) => api.control('resume', raw), cancel_queue: (raw: unknown) => api.control('cancel', raw) };
 }
