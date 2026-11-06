@@ -168,8 +168,10 @@ test('N4 size budget: tools/list totals stay under the agreed ceilings', async t
   // prepare_recipe and the asset_library export action raise core to 40k and asset_library to 5k; without the eight
   // canvas generation tools the whole server fits in 50k. Step 3c (Recently Deleted: delete, recently-deleted, restore,
   // purge; approved for that step) raises asset_library to 5.8k inside the same core and server ceilings.
+  // read_queue wait and the whole-batch get_queue_result (thumbnails) raise core to 42k (approved by the main session
+  // 2026-11-05; about 41.4k used).
   assert.ok(total <= 50_000, `whole server ${total}`);
-  assert.ok(core <= 40_000, `core layer ${core}`);
+  assert.ok(core <= 42_000, `core layer ${core}`);
   assert.ok(asset <= 5_800, `asset_library ${asset}`);
 });
 

@@ -418,6 +418,7 @@ const queuedBatch = (overrides = {}) => ({ batchId: BATCH, requestKey: 'mcp-abc-
 
 /** The compact projection of queuedBatch(): identity, plan and per-item progress only (no recipe, prompt, error text or workspace). */
 const compactQueued = status => ({ batchId: BATCH, requestKey: 'mcp-abc-def', execution: 'queued', source: { kind: 'agent', client: null }, status, stopReason: null, count: 2, recipePlanHash: 'a'.repeat(64), intervalSeconds: 0, activeJobId: 'job-1',
+  itemCounts: { pending: 0, running: 1, succeeded: 1, failed: 0, unknown: 0, cancelled: 0, skipped: 0 },
   items: [{ index: 0, status: 'succeeded', jobId: 'job-0', resultCount: 1, error: null }, { index: 1, status: 'running', jobId: 'job-1', resultCount: 0, error: 'none_yet' }] });
 
 test('queue outputs say why a batch is paused or blocked (stopReason), and how many images failed or are unknown (step 4b2)', async t => {
@@ -463,7 +464,8 @@ test('queue tools map one-to-one to fixed host methods with a compact output', a
     const result = ok(await call(tool, args));
     assert.deepEqual(calls.at(-1), { method, args: { batchId: BATCH } });
     // read_queue adds the saved images' history identities (phase two) and the seed each was generated with.
-    assert.deepEqual(result, { ...compactQueued(status), ...(tool === 'read_queue' ? { results: [{ itemIndex: 0, index: 0, historyId: 'h0', actualSeed: 4242 }] } : {}) });
+    // An older host reports no position: null.
+    assert.deepEqual(result, { ...compactQueued(status), ...(tool === 'read_queue' ? { results: [{ itemIndex: 0, index: 0, historyId: 'h0', actualSeed: 4242 }], ahead: null, etaSeconds: null, imageSeconds: null } : {}) });
     assert.ok(!JSON.stringify(result).includes('full recipe text') && !JSON.stringify(result).includes('secret prompt text'));
   }
   const image = await call('get_queue_result', { batchId: BATCH, itemIndex: 1 });
@@ -481,7 +483,9 @@ test('queue tools reject invalid identities before the host and reject mismatche
   for (const [tool, args] of [['list_queue', { batchId: BATCH }], ['list_queue', { action: 'enqueue' }], ['read_queue', {}], ['read_queue', { batchId: 'b-1' }], ['read_queue', { batchId: BATCH.toUpperCase() }],
     ['read_queue', { batchId: BATCH, itemIndex: 0 }], ['read_queue', { batchId: BATCH, action: 'enqueue' }], ['control_queue', { batchId: BATCH, action: 'pause', requestKey: 'x' }], ['control_queue', { action: 'resume' }], ['control_queue', { batchId: '../x', action: 'cancel' }],
     ['control_queue', { batchId: BATCH }], ['control_queue', { batchId: BATCH, action: 'read' }], ['control_queue', { batchId: BATCH, action: 'list' }], ['control_queue', { batchId: BATCH, action: 'result', itemIndex: 0 }], ['control_queue', { batchId: BATCH, action: 'enqueue' }], ['control_queue', { batchId: BATCH, action: 'PAUSE' }], ['control_queue', { batchId: BATCH, action: 'cancel', workspaceId: 'w' }],
-    ['get_queue_result', { batchId: BATCH }], ['get_queue_result', { batchId: BATCH, itemIndex: 200 }], ['get_queue_result', { batchId: BATCH, itemIndex: -1 }], ['get_queue_result', { batchId: BATCH, itemIndex: 0, index: -1 }],
+    ['get_queue_result', { batchId: BATCH, index: 1 }], ['get_queue_result', { batchId: BATCH, itemIndex: 0, offset: 2 }], ['get_queue_result', { batchId: BATCH, offset: -1 }],
+    ['read_queue', { batchId: BATCH, wait: { until: 'later', seconds: 5 } }], ['read_queue', { batchId: BATCH, wait: { until: 'done', seconds: 1201 } }], ['read_queue', { batchId: BATCH, wait: { until: 'done', seconds: 0 } }],
+    ['read_queue', { batchId: BATCH, wait: { seconds: 5 } }], ['read_queue', { batchId: BATCH, wait: { until: 'done', every: 1 } }], ['read_queue', { batchId: BATCH, wait: 'done' }], ['get_queue_result', { batchId: BATCH, itemIndex: 200 }], ['get_queue_result', { batchId: BATCH, itemIndex: -1 }], ['get_queue_result', { batchId: BATCH, itemIndex: 0, index: -1 }],
     ['get_queue_result', { batchId: BATCH, itemIndex: 0.5 }], ['get_queue_result', { itemIndex: 0 }]]) {
     assert.equal(errorOf(await call(tool, args)).code, 'invalid_arguments', `${tool} ${JSON.stringify(args)}`);
   }
@@ -551,8 +555,9 @@ test('source stays a whitelist: one guarded bridge, fixed host methods per tool,
     assert.deepEqual(importsOf(source).filter(item => writeOrReview.test(item) && !['./recipe-queue.mjs', './recipe-tool-schemas.mjs'].includes(item)), []);
   }
   assert.deepEqual(importsOf(guards).filter(source => writeOrReview.test(source)), []);
-  assert.equal((queue.match(/bridge\.call\(/g) ?? []).length, 3);
-  assert.equal((queue.match(/bridge\.call\(QUEUE_HOST_METHODS\.[a-z]+|bridge\.call\(QUEUE_HOST_METHODS\[args\.action\]/g) ?? []).length, 3);
+  // list, read/pause/resume/cancel, one result; the whole-batch results read the batch and each thumbnail (2026-12).
+  assert.equal((queue.match(/bridge\.call\(/g) ?? []).length, 5);
+  assert.equal((queue.match(/bridge\.call\(QUEUE_HOST_METHODS\.[a-z]+|bridge\.call\(QUEUE_HOST_METHODS\[args\.action\]/g) ?? []).length, 5);
   assert.deepEqual(importsOf(queue).filter(source => writeOrReview.test(source)), []);
   assert.ok(!/enqueue_queue_recipes|put_queue_recipe|read_queue_recipe|derive_queue_recipe|lookup_queue_request/.test(queue));
   // Phase two: the recipe module calls exactly seven fixed host methods (the five raw recipe methods, the canvas
