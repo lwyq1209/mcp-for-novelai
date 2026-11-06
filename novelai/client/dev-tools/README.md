@@ -213,13 +213,22 @@ on those images, so a screenshot shows at once whether a view shows the whole im
 ```sh
 node dev-tools/mcp.mjs tools --data ../../.tmp/t1 [--names]
 node dev-tools/mcp.mjs call list_queue '{}' --data ../../.tmp/t1 [--project <dir>] [--client-name claude-code]
+node dev-tools/mcp.mjs call enqueue_recipes '{…}' --data ../../.tmp/t1 --bridge-fault enqueue_queue_recipes:reply-lost
 ```
 
 Runs `dist-mcp/novelai-mcp.mjs` with this checkout's Electron as Node (`ELECTRON_RUN_AS_NODE=1`) and the data root's
 `NOVELAI_DATA_DIR`, always with `NOVELAI_MCP_AUTOSTART=0`: it never starts an app by itself (without a running test
 client a call answers `unavailable`, `details.autostart: "off"`); start the test client with `test-client.mjs`.
-Library: `connectMcp({ data, project, clientName })` → `{ tools(), call(name, args), close() }` from
+Library: `connectMcp({ data, project, clientName, bridgeFaults })` → `{ tools(), call(name, args), close() }` from
 `lib/mcp-client.mjs`.
+
+`--bridge-fault <method>:<kind>[:<times>]` (repeatable) loses chosen calls between the MCP server and the app, to check
+how the server handles a lost answer: `request-lost` (the call never reaches the app) or `reply-lost` (the app handles
+it and its answer is lost), each as the bridge's own `timeout`, for the first `times` calls of that bridge method
+(default 1, or `always`; methods such as `enqueue_queue_recipes`, `lookup_queue_request`, `list_queue`). The bundle then
+runs through `lib/mcp-fault-server.mjs` (the same bundle and environment, with a wrapped bridge client; the shipped
+server has no such hook), and the result names the faults. Example: `enqueue_queue_recipes:reply-lost` shows
+`enqueue_recipes` settling the lost answer by itself (`reconciled: true`, `settled`), with one batch in the queue.
 
 ## update-rehearsal — a real in-app update between two rehearsal builds
 

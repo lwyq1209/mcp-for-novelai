@@ -106,6 +106,7 @@ test('CLIs refuse a missing --data and real locations before doing anything', t 
     ['test-client.mjs', ['stop', '--data', real], 'refused_location'],
     ['mcp.mjs', ['call', 'list_queue', '{}'], 'refused_no_data'],
     ['mcp.mjs', ['call', 'list_queue', '{}', '--data', real], 'refused_location'],
+    ['mcp.mjs', ['call', 'list_queue', '{}', '--data', real, '--bridge-fault', 'enqueue_queue_recipes:reply-lost'], 'refused_location'],
     ['seed-library.mjs', [], 'refused_no_data'],
     ['seed-library.mjs', ['--data', pictures], 'refused_location'],
   ];
@@ -116,6 +117,17 @@ test('CLIs refuse a missing --data and real locations before doing anything', t 
   }
   assert.equal(fs.existsSync(pictures), false, 'nothing was created in Pictures');
   assert.equal(runCli('test-client.mjs', ['start', '--data', path.join(tempDir(t), 'x'), '--no-such-option', '1']).status, 2);
+});
+
+test('mcp.mjs --bridge-fault: <method>:request-lost|reply-lost[:<times>|always], repeatable; anything else is a usage error before any server starts', async () => {
+  const { parseBridgeFaults } = await import('../lib/mcp-client.mjs');
+  assert.deepEqual(parseBridgeFaults(['enqueue_queue_recipes:reply-lost', 'lookup_queue_request:request-lost:always', 'list_queue:reply-lost:2']),
+    [{ method: 'enqueue_queue_recipes', kind: 'reply-lost', times: 1 }, { method: 'lookup_queue_request', kind: 'request-lost', times: 'always' }, { method: 'list_queue', kind: 'reply-lost', times: 2 }]);
+  assert.deepEqual(parseBridgeFaults(undefined), []);
+  for (const bad of ['enqueue_queue_recipes', 'enqueue_queue_recipes:hang', 'enqueue_queue_recipes:reply-lost:0', 'enqueue_queue_recipes:reply-lost:1:2', 'Enqueue:reply-lost', ':reply-lost'])
+    assert.throws(() => parseBridgeFaults([bad]), error => error.code === 'usage', bad);
+  const run = runCli('mcp.mjs', ['call', 'list_queue', '{}', '--data', '/tmp/never-used', '--bridge-fault', 'enqueue_queue_recipes:hang']);
+  assert.equal(run.json?.error?.code, 'usage'); assert.equal(run.status, 2);
 });
 
 test('test-client status lists only clients of this checkout', () => {
