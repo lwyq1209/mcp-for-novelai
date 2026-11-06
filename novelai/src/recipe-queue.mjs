@@ -317,8 +317,9 @@ function sizeFields(args, warnings) {
   for (const side of ['width', 'height']) if (typeof args[side] !== 'number' || !Number.isFinite(args[side])) invalid(`${side} must be a number of pixels.`);
   const size = fitImageSize(args.width, args.height);
   if (size.width !== args.width || size.height !== args.height) {
-    const why = args.width * args.height > MAX_PIXEL_AREA && (args.width % 64 === 0 && args.height % 64 === 0) ? `has more than ${MAX_PIXEL_AREA} pixels` : 'is not made of multiples of 64 within the limits';
-    warnings.push({ code: 'size_adjusted', field: 'width×height', from: { width: args.width, height: args.height }, to: size, message: `width×height ${args.width}×${args.height} ${why}; ${size.width}×${size.height} is used (multiples of 64, at most ${MAX_PIXEL_AREA} pixels, as the host would snap it).` });
+    const unaligned = [args.width, args.height].some(value => !Number.isInteger(value) || value % 64 || value < 64 || value > MAX_DIMENSION), large = args.width * args.height > MAX_PIXEL_AREA;
+    const why = [unaligned ? 'is not in multiples of 64' : null, large ? `has more than ${MAX_PIXEL_AREA} pixels` : null].filter(Boolean).join(' and ');
+    warnings.push({ code: 'size_adjusted', field: 'width×height', from: { width: args.width, height: args.height }, to: size, message: `width×height ${args.width}×${args.height} ${why}; ${size.width}×${size.height} is used (the host's own size rule: multiples of 64 within ${MAX_PIXEL_AREA} pixels).` });
   }
   return size;
 }
@@ -1516,7 +1517,7 @@ export function createRecipeQueue({ bridge, monotonicNow = () => performance.now
     const hostCode = cause instanceof BridgeError ? cause.code : null;
     const keyStatus = last?.status === 'lookup_failed' ? 'lookup_failed' : last?.inFlight ? 'in_flight' : last?.status ?? 'lookup_failed';
     if (givenUp) throw new BridgeError('queue_acceptance_unknown', 'The host finished with this requestKey without a batch and cannot start it again, and the queue has no batch under it. If the images are still wanted, enqueue the same plan under a NEW requestKey; check list_queue afterwards in case the old request still appears.', { ...base, status: 'unknown', enqueueSent: true, keyStatus: 'unknown', newKeyAdvised: true, hostCode, ...hostDetailsOf(cause), settled: facts(), ...withWarnings });
-    const why = signal?.aborted ? 'The call was cancelled while its outcome was still being settled' : `The outcome is still unknown after about ${seconds(monotonicNow() - from)} seconds (${progress.lookups} lookup(s), ${progress.resends} resend(s) of the same plan${keyStatus === 'in_flight' ? '; the host is still handling it' : keyStatus === 'lookup_failed' ? '; the client did not answer' : ''})`;
+    const why = signal?.aborted ? 'The call was cancelled while its outcome was still being settled' : `The outcome is still unknown after about ${seconds(monotonicNow() - from)} seconds (${progress.lookups} lookup(s), ${progress.resends} resend(s) of the same plan${keyStatus === 'in_flight' ? '; the host is still handling it' : keyStatus === 'lookup_failed' ? '; the client did not answer' : keyStatus === 'not_found' ? '; the client answers lookups, but none of the sends reached it' : ''})`;
     throw new BridgeError('queue_acceptance_unknown', `${why}. Nothing more is sent by itself. Asking again is safe: call enqueue_recipes with the same requestKey and plan (the host answers it from the key's receipt and never makes a second batch), or lookup_enqueue with the same requestKey. Do not switch keys.`, { ...base, status: 'unknown', enqueueSent: true, keyStatus, newKeyAdvised: false, hostCode, ...hostDetailsOf(cause), settled: facts(), ...withWarnings });
   }
 
