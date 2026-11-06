@@ -25,6 +25,7 @@ export const CANVAS_STRINGS = {
   'cv.effort': ['生成档位', 'Effort'],
   'cv.effort.high': ['High 完整', 'High'],
   'cv.effort.medium': ['Medium 省量', 'Medium'],
+  'cv.effort.hint': ['V5 Full 专有：Medium 约省 42% 用量，步数、采样器和负面固定', 'V5 Full only: Medium costs about 42% less; steps, sampler and UC are fixed'],
   'cv.effort.tip': ['V5 Full 专有。Medium 是蒸馏模型，默认设置下约省 42% 用量；固定 14 步、Euler Ancestral 和 Heavy 负面预设，不发送负面提示词，也没有引导缩放（引导仍可调）', 'V5 Full only. Medium is a distilled model that costs about 42% less at default settings; it always runs 14 steps, Euler Ancestral and the Heavy UC preset, sends no negative prompt and has no guidance rescale (guidance still works)'],
   'cv.effort.fixed': ['Medium 档固定：14 步 · Euler Ancestral · Heavy 负面预设 · 引导缩放 0', 'Medium effort fixes: 14 steps · Euler Ancestral · Heavy UC preset · guidance rescale 0'],
   'cv.effort.negIgnored': ['Medium 档不发送负面提示词（角色的负面也不发）。想去掉某样东西，可以在正面里写负权重，例如 -3::hat::', 'Medium effort sends no negative prompt (character negatives neither). To remove something, use negative emphasis in the prompt, e.g. -3::hat::'],

@@ -109,7 +109,7 @@ function ModeGenerateBar({ mode }: { mode: ReturnType<typeof useCanvasMode> }) {
   if (mode === 'i2i') return <GenerateBar feature="i2i" onRun={() => void store.getState().generateI2I()} />;
   if (mode === 'inpaint') return <GenerateBar feature="inpaint" showCount={false} label={t('cv.ip.run')} onRun={() => void store.getState().inpaint()} disabled={!!inpaintBlock} disabledReason={inpaintBlock} />;
   if (mode === 'enhance') return <GenerateBar feature="i2i" label={enhanceScale === 'max' ? t('cv.pp.run.enhanceMax') : t('cv.pp.run.enhance', { scale: String(enhanceScale) })} onRun={() => void runEnhance()} disabled={enhance.tooLarge || !hasSource} disabledReason={enhance.reason || noSource}
-    quoteOverride={enhance.max && enhance.input ? { width: enhance.input.width, height: enhance.input.height, strength: Math.min(0.48, 0.10 + enhanceMagnitude * 0.034), upscaledEnhance: true } : undefined} />;
+    quoteOverride={{ enhance: true, ...(enhance.max && enhance.input ? { max: { width: enhance.input.width, height: enhance.input.height, strength: Math.min(0.48, 0.10 + enhanceMagnitude * 0.034) } } : {}) }} />;
   if (mode === 'upscale') return <GenerateBar feature="upscale" showCount={false} label={t('cv.pp.run.upscale', { scale: String(upscale.scale) })} onRun={() => void store.getState().upscaleCurrentImage()} disabled={upscale.tooLarge || !hasSource} disabledReason={upscale.reason || noSource} />;
   return <GenerateBar feature="director" showCount={false} label={t('cv.pp.run.director')} onRun={() => void store.getState().runDirectorTool()} disabled={!hasSource} disabledReason={noSource} />;
 }

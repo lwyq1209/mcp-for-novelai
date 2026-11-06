@@ -60,7 +60,7 @@ export function EffortToggle({ executionModel, scope = 'base' }: { executionMode
   if (!supportsNAIEffort(executionModel)) return null;
   const effort = naiEffortOf(params, executionModel);
   return <div className="cv-switch-row" data-testid="cv-effort" title={t('cv.effort.tip')}>
-    <div className="cv-grow"><b>{t('cv.effort')}</b><small className="ui-faint">{t(effort === 'medium' ? 'cv.effort.fixed' : 'cv.effort.tip')}</small></div>
+    <div className="cv-grow"><b>{t('cv.effort')}</b><small className="ui-faint">{t(effort === 'medium' ? 'cv.effort.fixed' : 'cv.effort.hint')}</small></div>
     <Seg<NAIEffort> size="sm" label={t('cv.effort')} value={effort} onChange={value => setParam('effort', value === 'medium' ? 'medium' : 'high')} options={[
       { value: 'high', label: t('cv.effort.high') }, { value: 'medium', label: t('cv.effort.medium') },
     ]} />
