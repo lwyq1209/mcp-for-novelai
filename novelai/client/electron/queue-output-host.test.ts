@@ -150,9 +150,9 @@ describe('enqueue output at the host boundary (issue #1)', () => {
     const same = await host.ok('enqueue_recipes', { requestKey: 'proj-c', items: [ref(recipe)], historyGroup: 'MY PROJ' });
     expect(same.batch.output).toMatchObject({ historyGroup: 'MY PROJ', historyGroupId: first.batch.output.historyGroupId, historyGroupName: 'my proj' });
     expect(fixture.groups.map(group => group.name)).toEqual(['my proj']);
-    // The refusal frees the key for a changed plan at once: no settle window (round 3 observation).
+    // The refusal frees the key for a changed plan at once: clear, no window (round 3 observation; 0.1.4 says so).
     const looked = await host.ok('lookup_enqueue', { requestKey: 'proj-b' });
-    expect(looked.status).toBe('not_found'); expect(looked).not.toHaveProperty('settlement');
+    expect(looked.status).toBe('not_found'); expect(looked.settlement).toEqual({ state: 'clear', newKeyAdvised: false });
     const renamed = await host.ok('enqueue_recipes', { requestKey: 'proj-b', items: [ref(recipe)], historyGroup: 'other proj' });
     expect(renamed.batch.output).toMatchObject({ historyGroup: 'other proj', historyGroupName: 'other proj' });
     expect(() => resolveQueueHistoryGroup('a-b', [{ id: 'x', name: 'a:b' }], () => { throw new Error('must not create'); })).toThrow(QueueHistoryGroupConflict);
@@ -247,41 +247,33 @@ describe('enqueue output at the host boundary (issue #1)', () => {
     expect(plain.batch).not.toHaveProperty('output');
   });
 
-  it('a history-group refusal never erases the settle window of an earlier unknown dispatch of the same key (round 4 S1)', async () => {
+  it('a lost enqueue is settled in the same call by the same plan under the same key; the original arriving late is answered from its receipt (0.1.4, replacing the settle window of round 4 S1)', async () => {
     fixture.groups.push({ id: 'g0', name: 'my proj', createdAt: '2026-10-14T00:00:00Z' });
     const host = await startHost();
     const recipe = await host.ok('prepare_recipe', t2i);
     host.holdNext();
-    const lost = await host.call('enqueue_recipes', { requestKey: 'k-s1', items: [ref(recipe)] });
-    expect(lost.value.error).toMatchObject({ code: 'queue_acceptance_unknown' });
-    const first = await host.ok('lookup_enqueue', { requestKey: 'k-s1' });
-    expect(first).toMatchObject({ status: 'not_found', settlement: { state: 'settling' } });
-    // The agent changes the plan early and its new group collides: refused before any receipt.
-    const refused = await host.call('enqueue_recipes', { requestKey: 'k-s1', items: [ref(recipe)], historyGroup: 'My_Proj' });
-    expect(refused.value.error.code).toBe('history_group_conflict');
-    expect(refused.value.error.message).toContain('an earlier request under this requestKey may still arrive');
-    expect(refused.value.error.message).not.toContain('no earlier request');
-    const after = await host.ok('lookup_enqueue', { requestKey: 'k-s1' });
-    expect(after).toMatchObject({ status: 'not_found', settlement: { state: 'settling' } });
-    // The lost request arrives late and is accepted under the key: the window was right to hold.
+    const settled = await host.ok('enqueue_recipes', { requestKey: 'k-s1', items: [ref(recipe)] });
+    expect(settled).toMatchObject({ status: 'enqueued', reconciled: true, settled: { lookups: 1, resends: 1 } });
+    // The held original reaches the host late: answered from the key's receipt, no second batch.
     await host.release();
-    expect(await host.ok('lookup_enqueue', { requestKey: 'k-s1' })).toMatchObject({ status: 'enqueued' });
-    expect(fixture.post).not.toHaveBeenCalledTimes(2);
+    expect(await host.ok('lookup_enqueue', { requestKey: 'k-s1' })).toMatchObject({ status: 'enqueued', batch: { batchId: settled.batch.batchId } });
+    // A changed plan under the key (here a colliding group) is refused before anything is sent.
+    const refused = await host.call('enqueue_recipes', { requestKey: 'k-s1', items: [ref(recipe)], historyGroup: 'My_Proj' });
+    expect(refused.value.error).toMatchObject({ code: 'request_conflict', details: { enqueueSent: false, existingBatch: { batchId: settled.batch.batchId } } });
+    await settle(host.ok, settled.batch.batchId);
+    expect(fixture.post).toHaveBeenCalledTimes(1);
   });
 
-  it('host_outdated keeps the settle window of an earlier unknown dispatch too (round 4 S1)', async () => {
+  it('host_outdated from a client without the output fields leaves the key unused, and lookup_enqueue says so at once (0.1.4)', async () => {
     const host = await startHost({ olderClient: true });
     const recipe = await host.ok('prepare_recipe', t2i);
-    host.holdNext();
-    expect((await host.call('enqueue_recipes', { requestKey: 'k-s1b', items: [ref(recipe)] })).value.error.code).toBe('queue_acceptance_unknown');
-    expect(await host.ok('lookup_enqueue', { requestKey: 'k-s1b' })).toMatchObject({ status: 'not_found', settlement: { state: 'settling' } });
-    expect((await host.call('enqueue_recipes', { requestKey: 'k-s1b', items: [ref(recipe)], fileNamePrefix: 'p' })).value.error.code).toBe('host_outdated');
-    expect(await host.ok('lookup_enqueue', { requestKey: 'k-s1b' })).toMatchObject({ status: 'not_found', settlement: { state: 'settling' } });
-    // Without an earlier dispatch the same refusal frees the key outright.
     expect((await host.call('enqueue_recipes', { requestKey: 'k-s1c', items: [ref(recipe)], fileNamePrefix: 'p' })).value.error.code).toBe('host_outdated');
     const free = await host.ok('lookup_enqueue', { requestKey: 'k-s1c' });
-    expect(free.status).toBe('not_found'); expect(free).not.toHaveProperty('settlement'); expect(free.instruction).toMatch(/Enqueue again with the same requestKey/);
-    await host.release();
+    expect(free).toMatchObject({ status: 'not_found', inFlight: false, settlement: { state: 'clear', newKeyAdvised: false } });
+    expect(free.instruction).toMatch(/with the same plan or a changed one/);
+    const plain = await host.ok('enqueue_recipes', { requestKey: 'k-s1c', items: [ref(recipe)] });
+    expect(plain.status).toBe('enqueued');
+    await settle(host.ok, plain.batch.batchId);
   });
 
   it('allows only the three RGI tag flags, folds like APFS, maps cut surrogates like the disk and offers usable names (round 4 S2\u2013S5)', () => {
