@@ -22,7 +22,9 @@ prepares recipes, queues images and organises your library through MCP, while yo
 - **Canvas**: a manual workbench for Txt2Img, Img2Img, Inpaint (with mask painting) and Post (Enhance, Upscale,
   Director tools). An agent's proposed edits appear as visible drafts that you apply or discard.
 - **Shared queue**: every image, from an agent or from the canvas, goes through one queue in order. Pause, resume and
-  cancel per batch; when an image fails or its outcome is unknown, later agent batches pause until you check.
+  cancel per batch. A failed or unknown image never holds anyone up: only that image is marked (never resent) and the
+  queue goes on; a "too many requests" answer is retried for about a minute, and after a restart unfinished batches
+  continue by themselves.
 - **Agent connection**: Settings › MCP access writes the exact configuration for Claude Code, Cursor, Codex, Pi or any
   `mcpServers` client, with this computer's paths, and shows which agents connected recently.
 - **Backups**: automatic backups and portable `.naisbackup` exports; your API token is never in an automatic backup.

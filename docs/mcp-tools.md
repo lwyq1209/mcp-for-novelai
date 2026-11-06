@@ -12,7 +12,7 @@ authoritative text; this page explains them for people.
 - [Recipes and the queue](#recipes-and-the-queue)
 - [Canvas tools](#canvas-tools)
 - [Request keys and paid requests](#request-keys-and-paid-requests)
-- [Queue limits and stop protection](#queue-limits-and-stop-protection)
+- [Queue limits and failures](#queue-limits-and-failures)
 - [Queue retention and cleaned batches](#queue-retention-and-cleaned-batches)
 - [When a recipe is gone: `recipe_not_found`](#when-a-recipe-is-gone-recipe_not_found)
 - [Several projects on one queue](#several-projects-on-one-queue)
@@ -73,7 +73,9 @@ the system needs to run it (system folders, user profile, locale, display, sessi
 `ELECTRON_*`, proxy, key, token, secret or password variables. The app has its own proxy setting (Settings › Account &
 network, the system proxy by default), so an agent's proxy variables are not needed. The app records in Settings › MCP
 access which agent started it.
-Starting the app never generates anything: batches it recovers from its last run wait paused for an explicit resume.
+Starting the app (also by an agent) continues the batches its last run had not finished: an image that was running
+when the app closed and was not saved is marked unknown and never resent, the other images go on in queue order. A
+batch the user paused stays paused until it is resumed.
 
 When the server does not start the app, `unavailable` says why in its message and in `details.autostart`:
 
@@ -119,7 +121,7 @@ The groups are the ones Settings › MCP access shows.
 
 Only `enqueue_recipes` generates images, and only when an agent calls it. Browsing, editing, drafting and saving never
 generate anything. `control_queue` can resume a paused batch, which continues generating with the batch's original
-recipes.
+recipes, and a restarted app continues the batches that were already queued.
 
 ## Library tools
 
@@ -234,11 +236,44 @@ plus a **settlement** that says what you may do next. It never enqueues or resen
   recipe store against their limits. Batches started with **Generate** in the app are listed too, with
   `source: {kind: "manual", persistent: false}` (they are kept only while the app runs); agent batches have
   `source: {kind: "agent", client}`.
-- `read_queue {batchId}`: status, request key, plan hash, interval, output (project and prefix), per-item status,
-  job ID, result count and error code, and `results` — one entry per saved image with `itemIndex`, `index`,
-  `historyId`, `actualSeed` (the seed it was generated with; `null` for upscale and director), `fileName` and `file`
-  (the path relative to the project root, or `null` outside it).
-- `get_queue_result {batchId, itemIndex, index?}`: one saved image, with the same identity fields.
+- `read_queue {batchId, wait?}`: status, `stopReason`, request key, plan hash, interval, output (project and
+  prefix), `itemCounts` (`pending`, `running`, `succeeded`, `failed`, `unknown`, `cancelled`, `skipped`), per-item
+  status, job ID, result count, error code and `rateLimitRetries` (how often the image was sent again after HTTP 429),
+  `itemReasons` (an explanation of the queue's own item codes present, see [below](#queue-limits-and-failures)), and
+  `results` — one entry per saved image with `itemIndex`, `index`, `historyId`, `actualSeed` (the seed it was
+  generated with; `null` for upscale and director), `fileName` and `file` (the path relative to the project root, or
+  `null` outside it). It also says where the batch stands in the shared queue:
+  - `ahead: {images, batches}` — unfinished images, and the batches they belong to, that run before this batch
+    (paused batches hold nothing up and are not counted; of a batch being paused only its running image counts);
+  - `etaSeconds` — about how many seconds until this batch ends: the recent median image time (`imageSeconds`) times
+    the images before it and its own, plus its intervals. `null` while no image time is known yet (after a start the
+    app reads them from the batches it stored) or while the batch is paused; `0` once it ended.
+  An app older than this server reports `ahead`, `etaSeconds` and `imageSeconds` as `null`.
+
+  **Waiting.** Instead of reading again and again with sleeps, pass `wait: {until, seconds?}` (`seconds` 1–1200,
+  default 300). The server reads the batch every second (every two seconds while `etaSeconds` is over a minute) and
+  returns as soon as:
+  - `until: "done"` — the batch ended (`succeeded`, `partial`, `cancelled` or a cleaned batch);
+  - `until: "next"` — this batch saved a result that was not there when the call started (results of other batches
+    do not count); a batch that ends first returns `done`;
+  - the batch is `paused` (`ended: "paused"`) or cancelled or being cancelled (`ended: "cancelled"`), whatever
+    `until` says;
+  - otherwise after `seconds` (`ended: "timeout"`).
+
+  The answer is the usual `read_queue` answer plus `wait: {until, ended, waitedSeconds}`. A read that fails on the
+  way (the app restarting, a dropped connection) is tried again at the next poll; if the last read failed, the answer
+  carries the last good state and `wait.lastReadFailed` with the error code, and only when no read succeeded at all
+  does the call fail with that error. A definite refusal (`batch_not_found`, invalid arguments) ends it at once.
+  Cancelling the MCP request stops the wait. 1200 seconds is the most one call waits, below the 1560-second tool
+  timeout of the MCP configurations the app shows; wait again for longer.
+- `get_queue_result {batchId, itemIndex, index?}`: one saved image at full size, with the same identity fields.
+- `get_queue_result {batchId, offset?}` (without `itemIndex`): the saved results of the whole batch in item order as
+  native thumbnails (at most 384 px on the longer side, WebP), **at most 20 per call**: `total`, `offset`,
+  `returned`, `nextOffset` (`null` on the last page; pass it as `offset` for the next page) and `results`, one entry
+  per saved image with `itemIndex`, `index`, `historyId`, `actualSeed`, `fileName`, `file`, `width`, `height` (of the
+  thumbnail) and `imageAttached`. The images follow the text in the order of the entries with `imageAttached: true`;
+  an image whose preview cannot be made right now is listed with `imageAttached: false` and its error `code`. An app
+  older than this server answers `host_outdated`; use `itemIndex` there.
 
 Copy files only by the `fileName` / `file` these return, never by guessing numbers. A `historyId` from here can be the
 source of a new image-mode recipe (through `asset_library`).
@@ -295,7 +330,7 @@ The canvas is the app's manual workbench. The canvas tools read it and stage vis
   `read_queue` tells you to check the library (`asset_library` with `queueBatchId`) before making it again under a
   new key.
 
-## Queue limits and stop protection
+## Queue limits and failures
 
 Settings › Queue in the app holds the limits; they are this app's safety stops, not NovelAI limits.
 
@@ -308,13 +343,42 @@ Settings › Queue in the app holds the limits; they are this app's safety stops
 The images' frozen sources and masks may take about 32 MiB per enqueue. These limits apply to agent enqueues, not to
 generating on the canvas.
 
-Stop protection: when an image fails or its outcome is unknown, later agent batches are paused before they send
-anything (`stopReason.code: "queue_halted"`) until someone checks and resumes them; failed or unknown images are never
-resent. `read_queue`, `list_queue` and `control_queue` report `stopReason` as `{code, message}`; the codes the queue
-sets are `queue_halted`, `child_stopped`, `child_rejected`, `submission_unconfirmed`, `restart_unconfirmed`,
-`restart_blocked`, `recovered_paused`, `child_lookup_failed`, `child_status_unavailable`, `cancel_unconfirmed`,
-`queue_storage_error`, `scheduler_stopped`, `scheduler_closed` and `update_pending`. Resuming a batch the queue paused
-itself asks for confirmation in the app, because it lifts the protection.
+**No failure stops the queue.** All projects' agent batches and the app's own **Generate** clicks run in one queue,
+one image at a time. When an image fails, is refused before it is sent or has an unknown outcome, only that image is
+marked (`failed` or `unknown`, with its error code) — it is **never resent** — and its batch goes on with its next
+image after its interval; no batch pauses another. A batch that ran to its end with such images ends **`partial`**
+(never `succeeded`), with `itemCounts` saying how many failed or are unknown. `blocked` appears only on batches an
+app version before 2026-12 stopped at their first unsuccessful image.
+
+- **HTTP 429** (NovelAI answered "too many requests", for example "Concurrent generation is locked" while another
+  generation runs on the account; nothing was generated): the same image is sent again with the same frozen recipe
+  and seed after 2, 4, 8, 16 and 30 seconds (about a minute in all), then it fails as `rate_limited` and the batch
+  goes on. Only a received 429 counts: a timeout, a dropped connection or any unknown outcome is never resent.
+- **A token that is no longer valid or not enough Anlas** (HTTP 401, 402, 403): that image fails (`authentication_failed`
+  or `generation_failed`) and the batch goes on; its next images fail the same way quickly until the user fixes the
+  account in the app.
+- **The app cannot read the running image, or cannot confirm whether an image was already submitted**: it reads again
+  with growing pauses for about 90 seconds; then only that image is marked unknown (`child_status_unavailable`,
+  `child_lookup_failed`) and the batch goes on. The next image waits until the generator is free: two images never
+  run at once.
+- **The app closes or crashes while an image runs**: after the next start an image the library did not save is
+  `unknown` (`restart_unconfirmed`, never resent), and the batch continues by itself with the rest.
+- **The frozen queue cannot be written to disk** (`queue_storage_error`): this still stops every agent batch and new
+  enqueues are refused, to protect the queued data, until the problem is fixed.
+
+Item error codes the queue sets itself (explained in `read_queue` as `itemReasons`): `rate_limited`,
+`child_lookup_failed`, `child_status_unavailable`, `submission_unconfirmed`, `restart_unconfirmed` and
+`scheduler_error` (an internal error while handling that image). Codes of the request itself include
+`generation_failed`, `authentication_failed`, `provider_unknown` and the refusals before sending (`invalid_arguments`,
+`invalid_image`, `history_params_invalid`, …).
+
+`read_queue`, `list_queue` and `control_queue` report a batch's `stopReason` as `{code, message}`. The codes the queue
+sets on a batch now are `update_pending`, `queue_storage_error`, `cancel_unconfirmed`, `scheduler_closed` (the app was
+closing; the batch continues after the next start) and `scheduler_stopped` (an internal error ended only this batch
+early; its remaining images were skipped). Batches stored by an app version before 2026-12 may still carry
+`queue_halted`, `child_stopped`, `child_rejected`, `submission_unconfirmed`, `restart_unconfirmed`,
+`restart_blocked`, `recovered_paused`, `child_lookup_failed` or `child_status_unavailable`; the message says what that
+version did.
 
 `update_pending` is not a pause: while the app hands over to its update helper (Settings › About › Update and restart,
 a few seconds) it starts no image; queued batches show it with status `queued`. A batch enqueued in that moment calls
@@ -324,7 +388,7 @@ the update off, and the queue then runs as usual. Otherwise the app quits for th
 
 ## Queue retention and cleaned batches
 
-Ended agent batches (succeeded, cancelled or blocked) are cleaned once they ended more than the retention period ago:
+Ended agent batches (succeeded, partial, cancelled or blocked) are cleaned once they ended more than the retention period ago:
 **30 days by default**; Settings › Queue › Ended batches offers 7, 30 or 90 days, or Forever. Cleaning removes the
 batch's frozen inputs, its receipt and the recipes only it used. **The images stay in the library.** Queued, running
 and paused batches are never cleaned, and manual batches are not stored at all.

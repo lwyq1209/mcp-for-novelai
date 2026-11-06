@@ -255,9 +255,12 @@ watches the front app during each (a test app in front stops everything). Result
 - `node dev-tools/examples/smoke.mjs [--keep]` — fake service → small seeded library → test client → library
   (detail, select two, delete confirmation **cancelled**) → one canvas Generate through the fake service → result
   on the canvas → queue page → MCP reads the same batch → screenshots → everything stopped.
-- `node dev-tools/examples/fault-injection.mjs [--fault generation:1:500] [--keep]` — the first generation request
-  fails; an agent enqueues two batches; the second is paused by the queue's stop protection (`queue_halted`, shown
-  on the queue page) without sending anything; the agent then resumes it.
+- `node dev-tools/examples/fault-injection.mjs [--keep]` — no failure stops the queue: the fake service answers the
+  2nd generation request with HTTP 400 and the 4th with 429; an agent enqueues batch A (3 images) and B (2 images). A
+  goes on after its failed image and ends `partial` (shown on the queue page), B runs right after it and its 429 image
+  is sent again with the same seed; `read_queue` `wait` (`next`, then `done`) returns on time and `get_queue_result`
+  without `itemIndex` returns A's thumbnails. Then batch C's second request hangs at the fake service, the test client
+  is stopped and started again, and C continues by itself with that image unknown and never resent.
 - `node dev-tools/examples/library-scroll.mjs --data <seeded root> [--shots <folder>] [--delta 1200]` — performance:
   start, first tile, wheel-scroll the library to the end; the renderer's DOM nodes, JS heap and memory every 50 steps,
   at the end and again after a full garbage collection; page errors.

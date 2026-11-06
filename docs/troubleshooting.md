@@ -8,7 +8,7 @@ what to do next. This page explains the codes and situations people ask about mo
 - [Settings › MCP access shows a warning](#settings--mcp-access-shows-a-warning)
 - [Timeouts and unknown outcomes](#timeouts-and-unknown-outcomes)
 - [Refused enqueues](#refused-enqueues)
-- [Paused batches (`queue_halted` and other stop reasons)](#paused-batches-queue_halted-and-other-stop-reasons)
+- [Failed, unknown and partial batches](#failed-unknown-and-partial-batches)
 - [Cleaned batch records damaged or missing](#cleaned-batch-records-damaged-or-missing)
 - [Queue storage errors](#queue-storage-errors)
 - [NovelAI refuses a request](#novelai-refuses-a-request)
@@ -105,15 +105,26 @@ Nothing was sent and the request key is still unused unless the message says oth
 | `history_group_unavailable` | The project could not be created or read | Nothing was queued and the key was not used; check the app and try again |
 | `invalid_arguments` | The arguments do not match the tool's schema or rules | Fix the call; the message names the problem |
 
-## Paused batches (`queue_halted` and other stop reasons)
+## Failed, unknown and partial batches
 
-When an image fails or its outcome is unknown, the queue pauses the agent batches after it before they send anything
-(`stopReason.code: "queue_halted"`), so a run of failures does not keep spending. Failed and unknown images are never
-resent. Check the failed batch (the queue page, or `read_queue`) and the library, then resume the paused batches on the
-queue page (the app asks you to confirm, because resuming lifts the protection) or ask the agent to
-`control_queue {action: "resume"}`. After a restart, batches that had not finished wait paused for an explicit resume
-(`recovered_paused`); one whose running image had an unknown outcome cannot be resumed (`restart_unconfirmed`).
-[MCP tools](mcp-tools.md#queue-limits-and-stop-protection) lists every stop reason.
+A failed or unknown image never stops the queue: only that image is marked, it is never resent, and its batch goes
+on with its next image; other batches (other projects', the app's own Generate) are not affected. A batch that ran to
+its end with such images ends **partial** (部分完成 on the queue page) instead of succeeded. Check its failed and
+unknown images on the queue page or with `read_queue` (`itemCounts`, each item's `error` code, `itemReasons`) and the
+library (`asset_library {action: "list", category: "history", queueBatchId}`): an unknown image may have been generated
+and charged, so look there before making it again under a new request key.
+
+- A received **HTTP 429** is sent again automatically for about a minute (`rateLimitRetries` counts the resends);
+  only after that does the image fail as `rate_limited`.
+- After the app closed or crashed, unfinished batches **continue by themselves** at the next start; an image that was
+  running then and was not saved is `unknown` (`restart_unconfirmed`). A batch you paused stays paused.
+- Only a frozen-queue storage failure (`queue_storage_error`, below) still stops every agent batch.
+
+An agent follows a batch with `read_queue {batchId, wait: {until: "done"}}` instead of polling; `ahead` and
+`etaSeconds` say what is queued before it and roughly how long it takes.
+[MCP tools](mcp-tools.md#queue-limits-and-failures) lists every code. Batches an app version before 2026-12 stored may
+show **blocked** (stopped at their first unsuccessful image) or stop reasons such as `queue_halted`; they are kept
+for reading.
 
 ## Cleaned batch records damaged or missing
 
@@ -140,7 +151,9 @@ To recover, in this order:
 ## Queue storage errors
 
 - `queue_storage_error` — the frozen queue cannot be read or written safely. Agent batches are paused and new enqueues
-  are refused until it is fixed. The log (see [Logs](#logs)) names the cause.
+  are refused until it is fixed (the one failure that still stops the queue, to protect the queued data). The log
+  (see [Logs](#logs)) names the cause. After the problem is fixed and the app restarted, the paused batches continue
+  by themselves.
 - `queue_acceptance_unknown` — the request key has a receipt, but the frozen queue cannot be read right now, so its
   batch may already exist. Do not resend and do not switch keys; fix the app first (restarting it is your decision),
   then look up the same key again.
@@ -149,10 +162,14 @@ To recover, in this order:
 ## NovelAI refuses a request
 
 - **Authentication failed (401/403)** — paste and verify your Persistent API Token again in Settings › Account &
-  network, and check that the image API is `https://image.novelai.net` (Custom API address is off by default).
-- **Not enough Anlas or subscription (402)** — check your balance and subscription on NovelAI.
-- **Too many requests (429) or a server error** — the batch stops; later agent batches pause (`queue_halted`).
-  Wait, then resume on the queue page.
+  network, and check that the image API is `https://image.novelai.net` (Custom API address is off by default). Queued
+  images fail one after another (quickly) until the token works again; nothing is paused.
+- **Not enough Anlas or subscription (402)** — check your balance and subscription on NovelAI. As with 401, the
+  queued images fail and the queue moves on.
+- **Too many requests (429)** — usually another generation on the same account ("Concurrent generation is locked").
+  The queue sends that image again for about a minute, then marks it `rate_limited` and goes on.
+- **A server error (5xx) or a timeout** — the image may have been generated and charged, so it is marked unknown and
+  never resent; the batch goes on. Check the library before making it again.
 - **"Set up your NovelAI API token in Settings first"** — the app has no token yet (Settings › Account & network).
 
 ## Files in the inboxes

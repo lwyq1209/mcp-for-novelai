@@ -2,6 +2,40 @@
 
 All notable changes to MCP for NovelAI are recorded here. Versions follow [Semantic Versioning](https://semver.org).
 
+## Unreleased
+
+### Changed
+
+- **No failure stops the shared queue any more.** An image that fails, is refused before it is sent or has an unknown
+  outcome marks only itself (never resent); its batch goes on with its next image after its interval, and no batch
+  pauses another (agent or manual). A batch that ran to its end this way ends with the new status **partial**
+  (部分完成), never succeeded; `blocked` stays readable for batches stored before. The stop reason `queue_halted`, the
+  automatic pause of later agent batches and the confirmation before resuming such a batch are gone.
+- A received **HTTP 429** (for example "Concurrent generation is locked"; nothing generated) is sent again with the
+  same frozen recipe and seed after 2, 4, 8, 16 and 30 seconds, then fails as `rate_limited`. A timeout, a dropped
+  connection or an unknown outcome is still never resent.
+- A status read or pre-submit lookup of the running image that fails is tried again for about 90 seconds; then only
+  that image is unknown (`child_status_unavailable`, `child_lookup_failed`) and the batch goes on. Two images still
+  never run at once.
+- **After a restart, unfinished batches continue by themselves** (also when an agent's MCP server starts the app): an
+  image that was running and was not saved is unknown (`restart_unconfirmed`, never resent), the rest goes on. A batch
+  the user paused stays paused. Batches the queue had paused itself (closing app, an older version's stop after a
+  failure, `recovered_paused`) continue.
+- Unchanged: a frozen-queue storage failure still stops every agent batch; request keys, the per-enqueue and total
+  limits, pause, resume, cancel and the hold before an update work as before.
+
+### Added
+
+- `read_queue` `wait: {until: "done" | "next", seconds}` (1–1200, default 300): the server polls the app every 1–2
+  seconds and returns as soon as the batch ended, saved a new result, was paused or cancelled, or the time ran out, with
+  `wait: {until, ended, waitedSeconds}`; failed reads on the way are read through and cancelling the request stops it.
+- `read_queue` says where a batch stands: `ahead: {images, batches}` queued before it, `etaSeconds` (from the recent
+  image times and the intervals) and `imageSeconds`, plus `itemCounts`, `rateLimitRetries` per image and `itemReasons`
+  for the queue's own item codes.
+- `get_queue_result` without `itemIndex` returns the whole batch's saved results as thumbnails (at most 384 px, 20 per
+  call, `offset` pages on), each with its `itemIndex`, `index`, `historyId`, `actualSeed`, `fileName` and `file`.
+- Queue items record when they started and ended (`startedAt`, `finishedAt`).
+
 ## 0.1.3 - 2026-11-06
 
 ### Added
