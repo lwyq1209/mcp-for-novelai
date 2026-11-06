@@ -7,7 +7,7 @@ export type BatchMode = "t2i" | "i2i" | "inpaint" | "enhance" | "upscale" | "dir
 export type BatchSeedMode = "increment" | "random" | "fixed";
 /**
  * partial: the batch ran to its end but not every image succeeded (some failed or have an unknown outcome; none of
- * them is resent). blocked: an end of batches stored by versions before 2026-12, which stopped a batch at its first
+ * them is resent). blocked: an end of batches stored by versions before 0.1.4, which stopped a batch at its first
  * unsuccessful image; it is still read, never set for a new run.
  */
 export type BatchStatus = "queued" | "running" | "pausing" | "paused" | "cancelling" | "succeeded" | "partial" | "cancelled" | "blocked";
@@ -37,7 +37,7 @@ export interface BatchItem {
   status: "pending" | "submitting" | "running" | "succeeded" | "failed" | "unknown" | "cancelled" | "skipped";
   /** Direct child-executor evidence. Missing on old records means unknown. */
   providerOutcome?: GenerationJob["providerOutcome"];
-  /** When this image's (latest) request was prepared and when it ended (ISO); absent on records from before 2026-12. */
+  /** When this image's (latest) request was prepared and when it ended (ISO); absent on records from before 0.1.4. */
   startedAt?: string | null;
   finishedAt?: string | null;
   /**

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Fault injection on the paid path, without real generation: no failure stops the shared queue (2026-12).
+// Fault injection on the paid path, without real generation: no failure stops the shared queue (0.1.4).
 // The fake NovelAI service answers the 2nd generation request with HTTP 400 (an image of batch A fails) and the 4th
 // with HTTP 429 (the first image of batch B is rate limited once). An agent (MCP client "claude-code") enqueues A (3
 // images) and B (2 images):

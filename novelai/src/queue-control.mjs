@@ -56,9 +56,9 @@ export function batchSource(source) {
 /**
  * Why a batch holds, is paused or ended early (stopReason in outputs): the host's code for it, with this server's own
  * English explanation for the codes the host queue sets (electron/batch-service.ts). The host's message is never passed
- * on (as with item errors): an unknown code is reported by its code only. Since 2026-12 no failure stops the queue: a
+ * on (as with item errors): an unknown code is reported by its code only. Since 0.1.4 no failure stops the queue: a
  * failed or unknown image marks only itself (see ITEM_REASONS) and its batch goes on; the codes marked "before
- * 2026-12" appear only on batches an older app version stored.
+ * 0.1.4" appear only on batches an older app version stored.
  */
 export const BATCH_REASONS = Object.freeze({
   cancel_unconfirmed: 'The cancellation could not be confirmed; the running image is awaited and no further image of this batch starts.',
@@ -66,16 +66,16 @@ export const BATCH_REASONS = Object.freeze({
   scheduler_stopped: 'The queue hit an internal error and ended this batch early; its remaining images were skipped and are not sent. Other batches are not affected.',
   scheduler_closed: 'The app was closing; this batch continues by itself after the next app start (an image that was running then is marked unknown and not resent).',
   update_pending: 'The app is about to restart to install an update, so no image starts right now; nothing of this batch was sent. A batch that arrives now calls the update off, and the batch then runs as usual.',
-  // Stored by app versions before 2026-12 only.
-  queue_halted: 'Before 2026-12 the app paused later agent batches after a failure; it no longer does, and such a batch continues after the next app start.',
-  child_stopped: 'Before 2026-12 the app stopped a batch at its first unsuccessful image; the images after it were skipped. Failed or unknown images are never resent.',
-  child_rejected: 'Before 2026-12 the app stopped this batch when an image was refused before sending; the images after it were skipped.',
-  submission_unconfirmed: 'Before 2026-12 the app stopped this batch when whether an image was submitted could not be confirmed; that image was not resent and the images after it were skipped.',
-  restart_unconfirmed: 'Before 2026-12 the app ended this batch after a restart because an image had an unknown outcome; nothing was resent.',
-  restart_blocked: 'Before 2026-12 the app ended this batch after a restart because an image had not succeeded; the images not yet submitted were skipped.',
-  recovered_paused: 'Before 2026-12 the app kept unfinished batches paused after a restart; such a batch continues after the next app start.',
-  child_lookup_failed: 'Before 2026-12 the app paused this batch when whether its next image was submitted could not be confirmed.',
-  child_status_unavailable: 'Before 2026-12 the app held this batch when its running image could not be read.',
+  // Stored by app versions before 0.1.4 only.
+  queue_halted: 'Before 0.1.4 the app paused later agent batches after a failure; it no longer does, and such a batch continues after the next app start.',
+  child_stopped: 'Before 0.1.4 the app stopped a batch at its first unsuccessful image; the images after it were skipped. Failed or unknown images are never resent.',
+  child_rejected: 'Before 0.1.4 the app stopped this batch when an image was refused before sending; the images after it were skipped.',
+  submission_unconfirmed: 'Before 0.1.4 the app stopped this batch when whether an image was submitted could not be confirmed; that image was not resent and the images after it were skipped.',
+  restart_unconfirmed: 'Before 0.1.4 the app ended this batch after a restart because an image had an unknown outcome; nothing was resent.',
+  restart_blocked: 'Before 0.1.4 the app ended this batch after a restart because an image had not succeeded; the images not yet submitted were skipped.',
+  recovered_paused: 'Before 0.1.4 the app kept unfinished batches paused after a restart; such a batch continues after the next app start.',
+  child_lookup_failed: 'Before 0.1.4 the app paused this batch when whether its next image was submitted could not be confirmed.',
+  child_status_unavailable: 'Before 0.1.4 the app held this batch when its running image could not be read.',
 });
 /**
  * What an item's error code means (read_queue itemReasons, for the codes present), for the codes the queue itself sets
@@ -180,7 +180,7 @@ function readExtras(batch, projectPath) {
 }
 
 /**
- * read only: where the batch stands in the shared FIFO, as the host reports it (2026-12): ahead {images, batches} not
+ * read only: where the batch stands in the shared FIFO, as the host reports it (0.1.4): ahead {images, batches} not
  * yet done before it (not paused), etaSeconds until it ends (from the median time of the images the queue finished
  * recently, plus intervals; null without such a time or while it is paused, 0 once it ended) and imageSeconds, that
  * median. An older host reports none of them: null.
@@ -253,7 +253,7 @@ export async function queueControlAction(args, { bridge, signal, projectPath } =
   return { value: { batchId: args.batchId, itemIndex: args.itemIndex, index, jobId: result.jobId, historyId, actualSeed: actualSeedOf(result.actualSeed), ...file, ...(typeof file.file === 'string' ? { pathBase: 'project-root' } : {}), imageAttached: true }, image: { mimeType: result.mimeType, data: result.data } };
 }
 
-/** read_queue wait (2026-12): the longest wait one call takes (the MCP clients' tool timeout is 1560 s) and its default. */
+/** read_queue wait (0.1.4): the longest wait one call takes (the MCP clients' tool timeout is 1560 s) and its default. */
 export const QUEUE_WAIT = Object.freeze({ maxSeconds: 1200, defaultSeconds: 300, pollMs: 1000, slowPollMs: 2000 });
 export const QUEUE_WAIT_UNTIL = Object.freeze(['done', 'next']);
 const ENDED = new Set(['succeeded', 'partial', 'cancelled', 'blocked']);
@@ -313,7 +313,7 @@ export async function waitForQueuedBatch(args, { bridge, signal, projectPath, no
   }
 }
 
-/** get_queue_result without itemIndex (2026-12): the saved results of one batch per call, as thumbnails. */
+/** get_queue_result without itemIndex (0.1.4): the saved results of one batch per call, as thumbnails. */
 export const QUEUE_RESULT_PAGE = 20;
 export const QUEUE_THUMBNAIL_EDGE = 384;
 /**
@@ -339,7 +339,7 @@ export async function queueBatchResults(args, { bridge, signal, projectPath } = 
     try { reply = await bridge.call(QUEUE_HOST_METHODS.result, { batchId: args.batchId, itemIndex: result.itemIndex, index: result.index, variant: 'thumbnail' }, signal); }
     catch (error) {
       if (signal?.aborted || error?.name === 'AbortError') throw error;
-      // A client from before 2026-12 refuses the variant as an unknown field (and would send full-size originals).
+      // A client from before 0.1.4 refuses the variant as an unknown field (and would send full-size originals).
       if (['invalid_argument', 'invalid_arguments'].includes(error?.code) && /unknown queue field|unknown field/i.test(String(error?.message ?? ''))) throw new QueueControlError('host_outdated', 'The NovelAI client is older than this MCP server and cannot send queue thumbnails. Fully rebuild and restart the client; until then use get_queue_result with an itemIndex for one image. Nothing was changed.');
       entries.push({ ...entry, imageAttached: false, error: typeof error?.code === 'string' && /^[a-z][a-z0-9_]{0,79}$/.test(error.code) ? error.code : 'result_unavailable' });
       continue;

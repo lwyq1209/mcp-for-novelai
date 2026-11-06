@@ -91,7 +91,7 @@ export async function startHttpBridge(options: { runtimeDir: string; dispatch: D
     if (method === 'get_queue_result') {
       const result = await materializeAsset(await options.dispatch(method, args, caller));
       // A queue result also names its saved file (issue #1); the MCP server never passes the absolute path on.
-      // variant thumbnail (2026-12): the preview's size, the original's as sourceWidth/sourceHeight.
+      // variant thumbnail (0.1.4): the preview's size, the original's as sourceWidth/sourceHeight.
       const keys = ['workspaceId', 'jobId', 'index', 'mimeType', 'data', 'width', 'height', 'model', 'actualSeed', 'originWorkspaceId', 'submittedRevision', 'historyId', 'createdAt', 'providerRequestId', 'fileName', 'filePath', 'variant', 'sourceWidth', 'sourceHeight'];
       return Object.fromEntries(keys.filter(key => result[key] !== undefined).map(key => [key, result[key]]));
     }

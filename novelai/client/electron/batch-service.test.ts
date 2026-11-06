@@ -1373,7 +1373,7 @@ describe('restart recovery is written and matched with the library (review rewor
   });
 });
 
-describe('the queue never stops on a failure (2026-12)', () => {
+describe('the queue never stops on a failure (0.1.4)', () => {
   /** Child `index` (in submit order) ends as NovelAI's received HTTP 429 (nothing generated) or another status code. */
   const refuse = (h: ReturnType<typeof setup>, index: number, statusCode = 429) => {
     const job = h.jobs.get(`child-${index + 1}`)!;

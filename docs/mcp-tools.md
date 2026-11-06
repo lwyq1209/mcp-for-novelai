@@ -348,7 +348,7 @@ one image at a time. When an image fails, is refused before it is sent or has an
 marked (`failed` or `unknown`, with its error code) — it is **never resent** — and its batch goes on with its next
 image after its interval; no batch pauses another. A batch that ran to its end with such images ends **`partial`**
 (never `succeeded`), with `itemCounts` saying how many failed or are unknown. `blocked` appears only on batches an
-app version before 2026-12 stopped at their first unsuccessful image.
+app version before 0.1.4 stopped at their first unsuccessful image.
 
 - **HTTP 429** (NovelAI answered "too many requests", for example "Concurrent generation is locked" while another
   generation runs on the account; nothing was generated): the same image is sent again with the same frozen recipe
@@ -375,7 +375,7 @@ Item error codes the queue sets itself (explained in `read_queue` as `itemReason
 `read_queue`, `list_queue` and `control_queue` report a batch's `stopReason` as `{code, message}`. The codes the queue
 sets on a batch now are `update_pending`, `queue_storage_error`, `cancel_unconfirmed`, `scheduler_closed` (the app was
 closing; the batch continues after the next start) and `scheduler_stopped` (an internal error ended only this batch
-early; its remaining images were skipped). Batches stored by an app version before 2026-12 may still carry
+early; its remaining images were skipped). Batches stored by an app version before 0.1.4 may still carry
 `queue_halted`, `child_stopped`, `child_rejected`, `submission_unconfirmed`, `restart_unconfirmed`,
 `restart_blocked`, `recovered_paused`, `child_lookup_failed` or `child_status_unavailable`; the message says what that
 version did.

@@ -122,7 +122,7 @@ and charged, so look there before making it again under a new request key.
 
 An agent follows a batch with `read_queue {batchId, wait: {until: "done"}}` instead of polling; `ahead` and
 `etaSeconds` say what is queued before it and roughly how long it takes.
-[MCP tools](mcp-tools.md#queue-limits-and-failures) lists every code. Batches an app version before 2026-12 stored may
+[MCP tools](mcp-tools.md#queue-limits-and-failures) lists every code. Batches an app version before 0.1.4 stored may
 show **blocked** (stopped at their first unsuccessful image) or stop reasons such as `queue_halted`; they are kept
 for reading.
 

@@ -1,4 +1,4 @@
-// read_queue wait, the place in the queue and the whole-batch thumbnails of get_queue_result (2026-12): the queue
+// read_queue wait, the place in the queue and the whole-batch thumbnails of get_queue_result (0.1.4): the queue
 // never stops on a failure, so an agent waits inside one call instead of polling with sleeps.
 import test from 'node:test';
 import assert from 'node:assert/strict';

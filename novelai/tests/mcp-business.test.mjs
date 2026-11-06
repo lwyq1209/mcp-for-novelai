@@ -555,7 +555,7 @@ test('source stays a whitelist: one guarded bridge, fixed host methods per tool,
     assert.deepEqual(importsOf(source).filter(item => writeOrReview.test(item) && !['./recipe-queue.mjs', './recipe-tool-schemas.mjs'].includes(item)), []);
   }
   assert.deepEqual(importsOf(guards).filter(source => writeOrReview.test(source)), []);
-  // list, read/pause/resume/cancel, one result; the whole-batch results read the batch and each thumbnail (2026-12).
+  // list, read/pause/resume/cancel, one result; the whole-batch results read the batch and each thumbnail (0.1.4).
   assert.equal((queue.match(/bridge\.call\(/g) ?? []).length, 5);
   assert.equal((queue.match(/bridge\.call\(QUEUE_HOST_METHODS\.[a-z]+|bridge\.call\(QUEUE_HOST_METHODS\[args\.action\]/g) ?? []).length, 5);
   assert.deepEqual(importsOf(queue).filter(source => writeOrReview.test(source)), []);

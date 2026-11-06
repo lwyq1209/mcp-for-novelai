@@ -1296,7 +1296,7 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
       // (never historyItem); the MCP server turns the path into a project-relative one.
       const named = <T extends { historyItem?: HistoryItem; historyId?: string }>(value: T) => value?.historyItem && value.historyItem.id === value.historyId && typeof value.historyItem.filePath === 'string' && value.historyItem.filePath
         ? { ...value, fileName: path.basename(value.historyItem.filePath), filePath: value.historyItem.filePath } : value;
-      // variant thumbnail (2026-12, whole-batch views): the same saved original, shrunk to at most 384 px (WebP); the
+      // variant thumbnail (0.1.4, whole-batch views): the same saved original, shrunk to at most 384 px (WebP); the
       // reply keeps the original's identity and names its size as sourceWidth/sourceHeight.
       const withFile = async <T extends { historyItem?: HistoryItem; historyId?: string; data?: unknown; width?: unknown; height?: unknown }>(value: T) => {
         const result = named(value);

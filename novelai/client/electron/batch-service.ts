@@ -706,7 +706,7 @@ export function createBatchService(deps: BatchDependencies) {
       // An item with child evidence cannot be restored as unsent, even when the
       // JSON remains valid after a damaged status field. Never replay it.
       if (['pending', 'submitting'].includes(item.status) && (item.jobId !== null || item.actualSeed !== null || item.results.length)) return storageFailed();
-      // Fields added in 2026-12 (absent on older records): image times and the resends after HTTP 429.
+      // Fields added in 0.1.4 (absent on older records): image times and the resends after HTTP 429.
       const time = (value: unknown) => value === undefined || value === null || (typeof value === 'string' && Number.isFinite(Date.parse(value)));
       if (!time(item.startedAt) || !time(item.finishedAt) || (item.rateLimitRetries !== undefined && (!Number.isSafeInteger(item.rateLimitRetries) || item.rateLimitRetries < 1 || item.rateLimitRetries > 16))) return storageFailed();
       for (const result of item.results) if (!record(result) || typeof result.id !== 'string' || !result.id || !Number.isSafeInteger(result.index) || result.index < 0 || !Number.isFinite(result.width) || result.width <= 0 || !Number.isFinite(result.height) || result.height <= 0 || typeof result.model !== 'string') return storageFailed();
@@ -740,7 +740,7 @@ export function createBatchService(deps: BatchDependencies) {
       }
     }
     if (!isBatchTerminal(restored.status)) {
-      // A restart goes on where the batch was (2026-12): only the image that was in flight and not found saved is
+      // A restart goes on where the batch was (0.1.4): only the image that was in flight and not found saved is
       // marked unknown (never resent); the rest continues on its own. A batch the user paused stays paused; a pause
       // the queue made itself (closing app, storage failure, an older version's stop after a failure) does not.
       const now = new Date().toISOString();
@@ -784,7 +784,7 @@ export function createBatchService(deps: BatchDependencies) {
     const timed = restored.flatMap(entry => entry.public.items).filter(item => item.status === 'succeeded' && item.startedAt && item.finishedAt).sort((a, b) => Date.parse(a.finishedAt!) - Date.parse(b.finishedAt!));
     for (const item of timed.slice(-IMAGE_TIME_SAMPLES)) sampleDuration(item);
     scheduleCompaction();
-    // Unfinished batches go on after a start, also one by an agent's MCP server (2026-12).
+    // Unfinished batches go on after a start, also one by an agent's MCP server (0.1.4).
     queueMicrotask(kick);
   }).catch(error => storageFailed(error)) : Promise.resolve();
   void ready.catch(() => {}); // Callers await ready; no unhandled rejection before IPC is attached.
