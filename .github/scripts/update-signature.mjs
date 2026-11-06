@@ -3,25 +3,18 @@
 // signature over the exact bytes of SHA256SUMS.txt. The app verifies it with the public key built into it
 // (novelai/client/electron/update/source.ts, raw 32 bytes in base64) before it downloads or installs anything.
 //
-//   node .github/scripts/update-signature.mjs release --dir <release files> [--expect-public-key <base64 raw key>] [--key-env UPDATE_SIGNING_KEY]
-//   node .github/scripts/update-signature.mjs sign --in SHA256SUMS.txt --out SHA256SUMS.txt.sig [--key-env UPDATE_SIGNING_KEY]
-//   node .github/scripts/update-signature.mjs verify --in SHA256SUMS.txt --sig SHA256SUMS.txt.sig --public-key <base64 raw key>
-//   node .github/scripts/update-signature.mjs public-key [--key-env UPDATE_SIGNING_KEY]
-//   node .github/scripts/update-signature.mjs keygen --out <private key file>       (rehearsals only: a throwaway key)
+// Releases are signed OFFLINE by the maintainer with .github/scripts/sign-release.mjs (the private key never is in CI or
+// on GitHub). This file holds the signature format and the checks anyone can run:
 //
-// sign reads the private key (PKCS#8 PEM) from the environment variable --key-env names (UPDATE_SIGNING_KEY by default)
-// and never prints or writes it; a missing or unusable key is an error (exit 1), so a release cannot go out unsigned.
-// sign also checks its own signature with the key's public half and prints that public key (base64 raw), so the
-// workflow can compare it with the key built into the app. Output: one JSON line.
+//   node .github/scripts/update-signature.mjs verify --in SHA256SUMS.txt --sig SHA256SUMS.txt.sig [--public-key <base64 raw key>]
+//   node .github/scripts/update-signature.mjs public-key --key <private key file>
+//   node .github/scripts/update-signature.mjs keygen --out <private key file>       (rehearsals and tests: a throwaway key)
 //
-// release (the release workflow's step): signs <dir>/SHA256SUMS.txt into <dir>/SHA256SUMS.txt.sig, fails unless the
-// signing key's public half is the one built into the app (OFFICIAL_UPDATE_PUBLIC_KEY in
-// novelai/client/electron/update/source.ts; --expect-public-key for a rehearsal with a throwaway key), verifies the
-// result, and verifies it once more with OpenSSL (`openssl pkeyutl -verify -rawin`, the check docs/updates.md gives)
-// when an OpenSSL 3 or later is installed.
+// verify uses the key built into the app unless --public-key names another; exit 0 only for a valid signature (exit 1
+// otherwise, with {"ok":false}). Output: one JSON line. No command prints a private key.
 import { createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -59,23 +52,6 @@ export function signatureValid(bytes, text, publicKey) {
   try { return verify(null, bytes, publicKey, Buffer.from(value, 'base64')); } catch { return false; }
 }
 
-function parse(argv) {
-  const [command, ...rest] = argv;
-  const options = {};
-  for (let index = 0; index < rest.length; index += 2) {
-    if (!rest[index]?.startsWith('--') || rest[index + 1] === undefined) throw new Error(`usage: update-signature.mjs sign|verify|public-key|keygen [--option value]… (got ${rest[index]})`);
-    options[rest[index].slice(2)] = rest[index + 1];
-  }
-  return { command, options };
-}
-
-function keyFromEnv(options) {
-  const name = options['key-env'] ?? 'UPDATE_SIGNING_KEY';
-  const pem = process.env[name];
-  if (!pem || !pem.trim()) throw new Error(`${name} is not set: the release cannot be signed.`);
-  return privateKeyFromPem(pem);
-}
-
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 /** The update key built into the app (its source file is the one place it is written down). */
 export function builtInPublicKey() {
@@ -98,43 +74,39 @@ export function opensslVerifies(file, signatureFile, publicKeyRaw) {
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 }
 
+/** Whether this module is the script node was started with, also through a symbolic link or a relative path. */
+export function isEntryScript(importMetaUrl, argv1 = process.argv[1]) {
+  if (!argv1) return false;
+  try { return realpathSync(argv1) === realpathSync(fileURLToPath(importMetaUrl)); } catch { return false; }
+}
+
+export function parseOptions(rest, usage) {
+  const options = {};
+  for (let index = 0; index < rest.length; index += 2) {
+    if (!rest[index]?.startsWith('--') || rest[index + 1] === undefined) throw new Error(`${usage} (got ${rest[index]})`);
+    options[rest[index].slice(2)] = rest[index + 1];
+  }
+  return options;
+}
+
+const USAGE = 'usage: update-signature.mjs verify --in <SHA256SUMS.txt> --sig <SHA256SUMS.txt.sig> [--public-key <base64>] | public-key --key <file> | keygen --out <file>';
+
 function main() {
-  const { command, options } = parse(process.argv.slice(2));
-  if (command === 'release') {
-    if (!options.dir) throw new Error('release needs --dir');
-    const sums = path.join(options.dir, 'SHA256SUMS.txt'), out = path.join(options.dir, 'SHA256SUMS.txt.sig');
-    const expected = options['expect-public-key'] ?? builtInPublicKey();
-    const key = keyFromEnv(options);
-    const signer = rawPublicKey(key);
-    if (signer !== expected) throw new Error(`the signing key is not the one built into the app (its public key is ${signer}, the app has ${expected})`);
-    const bytes = readFileSync(sums);
-    const text = signatureText(bytes, key);
-    if (!signatureValid(bytes, text, publicKeyFromRaw(expected))) throw new Error('the new signature does not verify');
-    writeFileSync(out, text);
-    const openssl = opensslVerifies(sums, out, expected);
-    if (openssl === false) throw new Error('OpenSSL does not verify the new signature');
-    console.log(JSON.stringify({ ok: true, signed: 'SHA256SUMS.txt', signature: 'SHA256SUMS.txt.sig', publicKey: expected, openssl: openssl === null ? 'not available' : 'verified' }));
-    return;
-  }
-  if (command === 'sign') {
-    if (!options.in || !options.out) throw new Error('sign needs --in and --out');
-    const key = keyFromEnv(options);
-    const bytes = readFileSync(options.in);
-    const text = signatureText(bytes, key);
-    const publicKey = rawPublicKey(key);
-    if (!signatureValid(bytes, text, publicKeyFromRaw(publicKey))) throw new Error('the new signature does not verify');
-    writeFileSync(options.out, text);
-    console.log(JSON.stringify({ ok: true, signed: path.basename(options.in), signature: path.basename(options.out), publicKey }));
-    return;
-  }
+  const [command, ...rest] = process.argv.slice(2);
+  const options = parseOptions(rest, USAGE);
   if (command === 'verify') {
-    if (!options.in || !options.sig || !options['public-key']) throw new Error('verify needs --in, --sig and --public-key');
-    const ok = signatureValid(readFileSync(options.in), readFileSync(options.sig, 'utf8'), publicKeyFromRaw(options['public-key']));
-    console.log(JSON.stringify({ ok, verified: path.basename(options.in) }));
+    if (!options.in || !options.sig) throw new Error('verify needs --in and --sig');
+    const publicKey = options['public-key'] ?? builtInPublicKey();
+    const ok = signatureValid(readFileSync(options.in), readFileSync(options.sig, 'utf8'), publicKeyFromRaw(publicKey));
+    console.log(JSON.stringify({ ok, verified: path.basename(options.in), publicKey }));
     process.exitCode = ok ? 0 : 1;
     return;
   }
-  if (command === 'public-key') { console.log(JSON.stringify({ ok: true, publicKey: rawPublicKey(keyFromEnv(options)) })); return; }
+  if (command === 'public-key') {
+    if (!options.key) throw new Error('public-key needs --key');
+    console.log(JSON.stringify({ ok: true, publicKey: rawPublicKey(privateKeyFromPem(readFileSync(options.key, 'utf8'))) }));
+    return;
+  }
   if (command === 'keygen') {
     if (!options.out) throw new Error('keygen needs --out');
     const { privateKey } = generateKeyPairSync('ed25519');
@@ -142,9 +114,9 @@ function main() {
     console.log(JSON.stringify({ ok: true, privateKeyFile: options.out, publicKey: rawPublicKey(privateKey) }));
     return;
   }
-  throw new Error('usage: update-signature.mjs sign|verify|public-key|keygen');
+  throw new Error(USAGE);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isEntryScript(import.meta.url)) {
   try { main(); } catch (error) { console.error(`update-signature: ${error instanceof Error ? error.message : error}`); process.exitCode = 1; }
 }

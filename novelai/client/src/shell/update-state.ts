@@ -27,7 +27,7 @@ export interface UpdateUiState {
 
 const KNOWN_REASONS = new Set(['signature_invalid', 'manifest_invalid', 'version_mismatch', 'checksum_mismatch', 'redirect_refused', 'signature_mismatch', 'package_invalid', 'extract_failed',
   'network', 'stalled', 'http_status', 'too_large', 'translocated', 'read_only', 'not_writable', 'per_machine', 'not_installed', 'sandbox_helper', 'not_packaged', 'asset_missing', 'unknown_layout',
-  'app_running', 'not_movable', 'move_failed', 'launch_failed', 'new_app_exited', 'not_started', 'installer_failed']);
+  'app_running', 'not_movable', 'move_failed', 'launch_failed', 'new_app_exited', 'not_started', 'installer_failed', 'other_instance', 'signature_changed', 'installer_changed', 'missing']);
 
 /** The key of a reason code (set.upd.<code>); unknown codes say the helper stopped part-way. */
 export function updateReasonKey(reason: string | undefined): UiStringKey {

@@ -158,9 +158,11 @@ Releases are built by `.github/workflows/release.yml` on GitHub-hosted runners (
 Linux x64) for a `v<version>` tag, after the CI tests. It runs the same scripts and the check, builds
 `third-party-sources-<version>.tar.gz` (`.github/scripts/third-party-sources.mjs`: the source archives of the
 libraries in sharp's libvips, checked against the vendored license files), writes `SHA256SUMS.txt`, and after a
-maintainer's approval signs it for the in-app update (`SHA256SUMS.txt.sig`, with the secret `UPDATE_SIGNING_KEY` of the
-environment `release`: `.github/scripts/update-signature.mjs release`) and creates a draft GitHub release with the
-`CHANGELOG.md` entry of that version as its notes. A maintainer publishes the draft by hand. The in-app update, the
+maintainer's approval creates an UNSIGNED draft GitHub release with the `CHANGELOG.md` entry of that version as its
+notes. The macOS builds get their signing certificate from the environment `release-build` (`v*` tags only). The update
+signing key is held offline: the maintainer signs the draft on their own computer with
+`node .github/scripts/sign-release.mjs v<version> --key <update key file>` (it checks the draft's files against
+`SHA256SUMS.txt`, uploads `SHA256SUMS.txt.sig` and verifies it) and then publishes the draft by hand. The in-app update, the
 signature format and the threat model: [Updates](updates.md).
 
 The update can be rehearsed without any real key: `node novelai/client/dev-tools/update-rehearsal.mjs prepare` and

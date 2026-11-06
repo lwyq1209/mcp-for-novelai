@@ -72,6 +72,7 @@ export const BATCH_REASONS = Object.freeze({
   queue_storage_error: 'The frozen queue cannot be read or written safely: agent batches are paused and new enqueues are refused until it is fixed.',
   scheduler_stopped: 'The queue scheduler hit an error and stopped this batch; nothing more is submitted for it. Check the images already created before enqueuing again.',
   scheduler_closed: 'The app was closing, so this batch stopped before its remaining images; they did not run and are not resent.',
+  update_pending: 'The app is about to restart to install an update, so no image starts right now; nothing of this batch was sent. A batch that arrives now calls the update off, and the batch then runs as usual.',
 });
 const REASON_CODE = /^[a-z][a-z0-9_]{0,79}$/;
 /**

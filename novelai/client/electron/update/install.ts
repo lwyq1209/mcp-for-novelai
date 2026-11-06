@@ -14,6 +14,7 @@
 // Windows: the NSIS installation folder of the running executable (per user: %LOCALAPPDATA%\Programs\…); the helper
 //   runs the checked installer silently into the same folder. A per-machine installation (Program Files) would need
 //   elevation and is updated by hand (per_machine).
+import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 
@@ -42,7 +43,12 @@ export interface InstallDeps {
   };
   /** Linux: the version in <app folder>/resources/app.asar/package.json (Electron reads into app.asar). */
   packagedVersion?(appFolder: string): Promise<string | null>;
+  /** Whether a file exists (the system tools are taken by absolute path). */
+  exists?(file: string): boolean;
 }
+
+/** Linux: tar by its absolute path (never from PATH). */
+export const TAR_PATHS = ["/usr/bin/tar", "/bin/tar"] as const;
 
 export const STAGING_PREFIX = ".mcp-for-novelai-update-";
 const W_OK = 2;
@@ -182,7 +188,9 @@ export async function stageLinuxUpdate(input: { deps: InstallDeps; archive: stri
     const extract = p.join(staging, "extract"), next = p.join(staging, "new");
     await deps.fs.mkdir(extract, { mode: 0o700 });
     await deps.fs.mkdir(next, { mode: 0o700 });
-    const untar = await deps.run("tar", ["-xzf", input.archive, "-C", extract], { timeoutMs: 10 * 60_000 });
+    const tar = TAR_PATHS.find(candidate => (deps.exists ?? fs.existsSync)(candidate));
+    if (!tar) throw new InstallError("extract_failed", "tar is not installed (neither /usr/bin/tar nor /bin/tar).");
+    const untar = await deps.run(tar, ["-xzf", input.archive, "-C", extract], { timeoutMs: 10 * 60_000 });
     if (untar.code !== 0) throw new InstallError("extract_failed", "The update package could not be extracted.");
     const folder = await onlyFolder(deps, extract, "");
     const exe = await deps.fs.lstat(p.join(folder, input.executable)).catch(() => null);

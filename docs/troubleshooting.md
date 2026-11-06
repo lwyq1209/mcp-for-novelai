@@ -35,6 +35,8 @@ quits. When no app is running, the server normally starts it in the background a
   once; see [Opening the app the first time](#opening-the-app-the-first-time)); the app's log is in `logs/` of the data
   folder.
 - `starting_not_ready` — the app is starting (by you or another agent) and was slow; call again in a moment.
+- `updating` — the app is installing an update and opens again by itself; the server does not start it meanwhile.
+  Call again in a minute. The state ends when the new version runs, when the update gives up, or after 5 minutes.
 - `recently_started` — this server tried to start the app less than a minute ago (the start failed, or the app closed
   again); it does not try again so soon. Open it yourself or call again later.
 - On Linux, `started_not_ready` can also mean the agent starts its MCP servers without the desktop's variables
@@ -202,9 +204,12 @@ Chromium's sandbox off; avoid it.
 
 - **"The update could not be verified"**: the release's signature, checksum, version or (macOS) code signature did not
   match; nothing was installed. Try again later or use **Download**. A repeated failure on a correct network means a
-  release file was changed after signing: report it (see SECURITY.md).
+  release file was changed after signing, or the release is not signed yet: report it (see SECURITY.md).
+- **"The update file could not be unpacked"**: usually a full disk next to the app; make room and click **Try again**.
 - **"Update after the queue"**: the queue has batches generating or waiting. Wait, or pause them on the queue page
-  (paused batches are kept).
+  (paused batches are kept). It also shows again when a batch arrived while the app was handing over to the update.
+- **Windows: "another copy of this app is running"**: an app with another data folder runs from the same installation;
+  the installer would close it. Close it, then update.
 - **Only Download is offered**: the app cannot replace itself where it is (the reasons are listed in
   [Updates](updates.md#when-the-app-cannot-update-itself)).
 - **"The update to x.y.z did not complete"**: the helper changed nothing or put the old version back; the reason is

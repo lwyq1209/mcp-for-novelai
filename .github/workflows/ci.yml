@@ -2,9 +2,9 @@
 # first (workflow_call). Needs no secrets. Actions are pinned to a full commit SHA (the version is in the comment).
 #
 # A manual run can add the update rehearsal (workflow_dispatch input update-rehearsal): with THROWAWAY keys only — an
-# Ed25519 update key and, on macOS, a self-signed certificate made in the job — it runs the release workflow's signing
-# step (update-signature.mjs release) and the macOS release build signed through the afterPack hook with its
-# packaged-app check, and on every platform installs a packaged rehearsal build, updates it to a second one from a
+# Ed25519 update key and, on macOS, a self-signed certificate made in the job — it runs the maintainer's offline signing
+# script (sign-release.mjs, against a fake gh serving a local draft) and the macOS release build signed through the
+# afterPack hook with its packaged-app check, and on every platform installs a packaged rehearsal build, updates it to a second one from a
 # fake GitHub (dev-tools/update-rehearsal.mjs: Windows through the real NSIS installer, silently; Linux by replacing the
 # extracted folder; macOS by replacing the .app bundle) and checks the failure cases. It never publishes anything and
 # never runs on pushes, pull requests or the release workflow's call.
@@ -183,19 +183,40 @@ jobs:
           npm ci --prefix novelai/client
           node novelai/client/node_modules/electron/install.js
 
-      # The release workflow's signing step, with a throwaway key (the real UPDATE_SIGNING_KEY exists only in the
-      # protected environment "release").
-      - name: Release signing step with a throwaway key
+      # The maintainer's offline signing (sign-release.mjs) with a throwaway key, against a fake gh serving a local
+      # draft (dev-tools/lib/fake-gh.mjs): it signs a draft whose files match SHA256SUMS.txt, the result verifies with
+      # OpenSSL (the documented check), and it refuses a key that is not the app's, a published release and a file that
+      # does not match. The real update key never is in CI.
+      - name: Offline release signing with a throwaway key
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          dir="$RUNNER_TEMP/signing"; mkdir -p "$dir/files"
-          printf '%s  MCP-for-NovelAI-9.9.9-linux-x64.tar.gz\n' "$(printf x | sha256sum | cut -d' ' -f1)" > "$dir/files/SHA256SUMS.txt"
+          dir="$RUNNER_TEMP/signing"; tag=v9.9.9; assets="$dir/gh/$tag/assets"; mkdir -p "$assets"
+          for name in mac-arm64.zip mac-arm64.dmg mac-x64.zip mac-x64.dmg win-x64-setup.exe linux-x64.tar.gz; do
+            head -c 4096 /dev/urandom > "$assets/MCP-for-NovelAI-9.9.9-$name"
+          done
+          head -c 1024 /dev/urandom > "$assets/third-party-sources-9.9.9.tar.gz"
+          (cd "$assets" && find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort | xargs sha256sum > SHA256SUMS.txt)
+          echo '{"isDraft": true}' > "$dir/gh/$tag/release.json"
           public=$(node .github/scripts/update-signature.mjs keygen --out "$dir/key.pem" | node -e 'process.stdin.on("data",d=>process.stdout.write(JSON.parse(d).publicKey))')
-          UPDATE_SIGNING_KEY="$(cat "$dir/key.pem")" node .github/scripts/update-signature.mjs release --dir "$dir/files" --expect-public-key "$public"
-          # Without the key, and with a key that is not the app's, the step fails.
-          if node .github/scripts/update-signature.mjs release --dir "$dir/files"; then echo "::error::signed without a key"; exit 1; fi
-          if UPDATE_SIGNING_KEY="$(cat "$dir/key.pem")" node .github/scripts/update-signature.mjs release --dir "$dir/files"; then echo "::error::signed with a key that is not the app's"; exit 1; fi
+          export FAKE_GH_ROOT="$dir/gh"
+          gh=novelai/client/dev-tools/lib/fake-gh.mjs
+          node .github/scripts/sign-release.mjs "$tag" --key "$dir/key.pem" --gh "$gh" --expect-public-key "$public" | tee "$dir/signed.json"
+          grep -q '"openssl":"verified"' "$dir/signed.json"
+          node .github/scripts/update-signature.mjs verify --in "$assets/SHA256SUMS.txt" --sig "$assets/SHA256SUMS.txt.sig" --public-key "$public"
+          # The documented OpenSSL check, as a user would run it.
+          node -e 'const c=require("node:crypto");process.stdout.write(c.createPublicKey({key:Buffer.concat([Buffer.from("302a300506032b6570032100","hex"),Buffer.from(process.argv[1],"base64")]),format:"der",type:"spki"}).export({format:"pem",type:"spki"}))' "$public" > "$dir/public.pem"
+          base64 -d "$assets/SHA256SUMS.txt.sig" > "$dir/sig.bin"
+          openssl pkeyutl -verify -pubin -inkey "$dir/public.pem" -rawin -in "$assets/SHA256SUMS.txt" -sigfile "$dir/sig.bin"
+          # Refused: the key is not the app's; a published release; a file changed after SHA256SUMS.txt was made.
+          rm "$assets/SHA256SUMS.txt.sig"
+          if node .github/scripts/sign-release.mjs "$tag" --key "$dir/key.pem" --gh "$gh"; then echo "::error::signed with a key that is not the app's"; exit 1; fi
+          echo '{"isDraft": false}' > "$dir/gh/$tag/release.json"
+          if node .github/scripts/sign-release.mjs "$tag" --key "$dir/key.pem" --gh "$gh" --expect-public-key "$public"; then echo "::error::signed a published release"; exit 1; fi
+          echo '{"isDraft": true}' > "$dir/gh/$tag/release.json"
+          printf x >> "$assets/MCP-for-NovelAI-9.9.9-win-x64-setup.exe"
+          if node .github/scripts/sign-release.mjs "$tag" --key "$dir/key.pem" --gh "$gh" --expect-public-key "$public"; then echo "::error::signed a changed file"; exit 1; fi
+          test ! -e "$assets/SHA256SUMS.txt.sig"
           rm -rf "$dir"
 
       # The release build of macOS (the same command and hook as release.yml) signed with a throwaway self-signed

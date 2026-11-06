@@ -9,7 +9,15 @@
 // - the old version (the helper put it back, or the update never started): it shows why the update did not complete
 //   (from <state>/helper-state) and removes what is left of the attempt, except a staging folder that still holds the
 //   old app (old/), which stays for the user;
+// - the old version again while the helper still works (someone reopened it, or an agent's MCP server would): it
+//   quits at once without touching anything (startupUpdate kind "in_progress"; main.ts), so the update can finish;
 // - any other version: the record is dropped.
+//
+// While the update is handed over, <data root>/runtime/updating.json (writeUpdatingMarker) says so: the MCP server's
+// automatic start does not start the app while it is valid (novelai/src/app-autostart.mjs, details.autostart
+// "updating"). It is valid until it expires (UPDATING_MARKER_MS after it was written) and while its helper lives (the
+// helper writes <state>/helper-pid as it starts); the new version removes it once it runs, the helper when it rolls
+// back or gives up, the app when it withdraws the update.
 import fs from "node:fs";
 import path from "node:path";
 import { STAGING_PREFIX } from "./install";
@@ -31,7 +39,12 @@ export interface PendingUpdate {
 
 export const PENDING_FILE = "pending.json";
 export const DOWNLOADS_DIR = "downloads";
-export const STATE_FILES = { started: "started", confirmed: "confirmed", helperState: "helper-state", helperLog: "helper.log", launchEnv: "launch.env" } as const;
+export const STATE_FILES = { started: "started", confirmed: "confirmed", helperState: "helper-state", helperLog: "helper.log", launchEnv: "launch.env", helperPid: "helper-pid" } as const;
+/** <data root>/runtime/<UPDATING_MARKER>: an update is being handed over (see above). */
+export const UPDATING_MARKER = "updating.json";
+export const UPDATING_MARKER_MS = 5 * 60_000;
+/** A helper that has not written its pid this long after the marker is taken as never started. */
+export const HELPER_PID_GRACE_MS = 30_000;
 
 const isText = (value: unknown, max = 4096): value is string => typeof value === "string" && value.length > 0 && value.length <= max && !/[\0\r\n]/.test(value);
 
@@ -84,8 +97,13 @@ export type StartupUpdateResult =
   | { kind: "updated"; from: string; to: string }
   | { kind: "failed"; to: string; reason: string };
 
+/** An update is being handed over right now and this start is the old version: it must quit at once (main.ts). */
+export interface UpdateInProgress { id: string; from: string; to: string }
+
 export interface StartupUpdate {
   result: StartupUpdateResult | null;
+  /** Set when this start must quit at once without touching anything (the helper is still at work). */
+  inProgress?: UpdateInProgress;
   /** The new version's window exists: tell the helper (confirmed). */
   confirm(): void;
   /** Removes what the attempt left (after confirm, a little later; at once for a failed attempt). */
@@ -96,10 +114,11 @@ export interface StartupUpdate {
  * The start of an app with a pending update record. `target`: the installation of this run (installTarget).
  * Synchronous (main.ts calls it before the window exists); file errors only make it do less.
  */
-export function startupUpdate({ updatesDir, version, target, pid, platform }: { updatesDir: string; version: string; target: string | null; pid: number; platform: NodeJS.Platform }): StartupUpdate {
+export function startupUpdate({ updatesDir, version, target, pid, platform, argv = [], now, isAlive }: { updatesDir: string; version: string; target: string | null; pid: number; platform: NodeJS.Platform; argv?: readonly string[]; now?: number; isAlive?: (pid: number) => boolean }): StartupUpdate {
   const pending = readPending(updatesDir);
   const none: StartupUpdate = { result: null, confirm() {}, cleanup() {} };
-  if (!pending) return none;
+  const dataRoot = path.dirname(updatesDir), runtimeDir = path.join(dataRoot, "runtime");
+  if (!pending) { removeUpdatingMarker(runtimeDir); return none; }
   const p = pending.platform === "win32" ? path.win32 : path.posix;
   const sameTarget = Boolean(target) && pending.platform === platform && p.resolve(target!) === p.resolve(pending.target);
   const remove = (what: string | null) => { if (what) { try { fs.rmSync(what, { recursive: true, force: true }); } catch { /* best effort */ } } };
@@ -112,14 +131,27 @@ export function startupUpdate({ updatesDir, version, target, pid, platform }: { 
         if (confirmed) return;
         confirmed = true;
         try { fs.writeFileSync(path.join(pending.stateDir, STATE_FILES.confirmed), `${pid}\n`, { mode: 0o600 }); } catch { /* best effort */ }
+        // This version runs: the MCP server may start or reach the app again.
+        removeUpdatingMarker(runtimeDir, pending.id);
       },
       cleanup() {
         // The old version (staging/old) is no longer needed once this version runs.
         remove(removableStaging(pending));
         remove(path.join(updatesDir, DOWNLOADS_DIR));
         removePending(updatesDir);
+        removeUpdatingMarker(runtimeDir, pending.id);
       },
     };
+  }
+  // The old version while the helper is still at work (not the start the helper makes after a rollback).
+  const rolledBack = argv.some(arg => typeof arg === "string" && arg.startsWith("--update-rolled-back="));
+  if (sameTarget && version === pending.from && !rolledBack) {
+    const marker = activeUpdatingMarker(dataRoot, { now, isAlive });
+    const states = helperStates(pending.stateDir);
+    const last = states[states.length - 1] ?? "";
+    if (marker && marker.id === pending.id && ["", "waiting", "installing", "swapped", "launched"].includes(last)) {
+      return { result: null, inProgress: { id: pending.id, from: pending.from, to: pending.to }, confirm() {}, cleanup() {} };
+    }
   }
   if (sameTarget && version === pending.from) {
     const reason = failureReason(helperStates(pending.stateDir));
@@ -131,11 +163,49 @@ export function startupUpdate({ updatesDir, version, target, pid, platform }: { 
         // A staging folder that still holds an app (old/ after a failed rollback) stays for the user.
         if (staging && !fs.existsSync(p.join(staging, "old"))) remove(staging);
         removePending(updatesDir);
+        removeUpdatingMarker(runtimeDir, pending.id);
       },
     };
   }
   removePending(updatesDir);
+  removeUpdatingMarker(runtimeDir, pending.id);
   return none;
+}
+
+export interface UpdatingMarker { schema: 1; id: string; pid: number; from: string; to: string; startedAt: string; expiresAt: string }
+
+const isAliveDefault = (pid: number) => { try { process.kill(pid, 0); return true; } catch (error: any) { return error?.code === "EPERM"; } };
+
+export function writeUpdatingMarker(runtimeDir: string, marker: UpdatingMarker) {
+  fs.mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
+  const file = path.join(runtimeDir, UPDATING_MARKER), temporary = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, `${JSON.stringify(marker, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(temporary, file);
+}
+
+/** Removes the marker (only the one of update `id` when given). */
+export function removeUpdatingMarker(runtimeDir: string, id?: string) {
+  const file = path.join(runtimeDir, UPDATING_MARKER);
+  try {
+    if (id !== undefined) { const value = JSON.parse(fs.readFileSync(file, "utf8")); if (value?.id !== id) return; }
+    fs.rmSync(file, { force: true });
+  } catch { /* none, or unreadable: an unreadable one is not valid anyway */ }
+}
+
+/**
+ * The valid marker of an update being handed over, or null: well-formed, not expired (and not set more than
+ * UPDATING_MARKER_MS ahead), and its helper alive — or, before the helper wrote its pid, at most HELPER_PID_GRACE_MS old.
+ */
+export function activeUpdatingMarker(dataRoot: string, { now = Date.now(), isAlive = isAliveDefault }: { now?: number; isAlive?: (pid: number) => boolean } = {}): UpdatingMarker | null {
+  let value: any;
+  try { value = JSON.parse(fs.readFileSync(path.join(dataRoot, "runtime", UPDATING_MARKER), "utf8")); } catch { return null; }
+  if (!value || value.schema !== 1 || !/^[0-9a-f]{16,64}$/.test(value.id ?? "")) return null;
+  const started = Date.parse(value.startedAt), expires = Date.parse(value.expiresAt);
+  if (!Number.isFinite(started) || !Number.isFinite(expires) || expires <= now || expires - started > UPDATING_MARKER_MS || started > now + 60_000) return null;
+  let helperPid: number | null = null;
+  try { const text = fs.readFileSync(path.join(dataRoot, "updates", value.id, STATE_FILES.helperPid), "utf8").trim(); helperPid = /^\d+$/.test(text) ? Number(text) : null; } catch { helperPid = null; }
+  if (helperPid === null) return now - started <= HELPER_PID_GRACE_MS ? value as UpdatingMarker : null;
+  return isAlive(helperPid) ? value as UpdatingMarker : null;
 }
 
 /** Removes state folders of earlier attempts (not the one in pending.json) older than `maxAgeMs`. */

@@ -260,9 +260,15 @@ build from source does not check on its own.
   replaces the installed app in the same place and opens it again. Nothing that fails a check is installed ("The update
   could not be verified"). The download shows its progress, can be cancelled and continues where it stopped. The app
   waits while the queue has batches generating or waiting (**Update after the queue**; pause them on the queue page to
-  update now) and quits the normal way; your library, queue, settings and images stay as they are, and agent
-  configurations stay valid. If the new version does not start, the old one is put back. The first start afterwards
-  says **Updated to x.y.z**, with a link to what changed.
+  update now) and quits the normal way; in the few seconds it hands over to its update helper it starts no image, and a
+  batch that arrives then calls the update off. Your library, queue, settings and images stay as they are, and agent
+  configurations stay valid. On macOS and Linux, if the new version does not start, the old one is put back.
+  **Windows has no rollback of its own**: it relies on the NSIS installer (which leaves the old version when it stops
+  before replacing files; otherwise run the setup by hand), and the installer ends agents' running MCP servers: a call
+  under way fails, and the agent must start the server again (many do so with their next call, some need it
+  reconnected, for example `/mcp` in Claude Code). During the update MCP servers do not start the app (`unavailable`,
+  `details.autostart: "updating"`; call again in a minute). The first start afterwards says **Updated to x.y.z**, with
+  a link to what changed.
 - **Download** opens the release page, as before. It is the only choice where the app cannot replace itself: macOS run
   from Downloads or the disk image, a folder you cannot write to, Windows installed for all users, a Linux folder whose
   `chrome-sandbox` root set up.

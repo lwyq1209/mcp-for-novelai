@@ -203,13 +203,26 @@ let libraryBatchFacts: (() => BatchFacts) | undefined;
 // Whether the queue has batches generating or waiting (manual ones included; paused ones do not count): the
 // self-update does not restart the app meanwhile. Set once the batch service exists (registerIpc).
 let queueBusyNow: () => boolean = () => hasActiveGenerationJobs();
+// From the hand-over to the update helper until the app quits (or the update is withdrawn), no image starts: batches
+// still queue, and list_queue / the enqueue receipt show this as their stopReason (batch-service.ts holdReason).
+const UPDATE_HOLD = { code: "update_pending", message: "The app is handing over to its update helper; no image starts until the update is withdrawn (a batch arrived) or the app restarted." };
+let updateHold = false;
+let updateHoldChanged: () => void = () => {};
 // Self-update (update/): the source of this build, the record of an update that just ran, "Update and restart".
 const appUpdater = createAppUpdater({
   electronDir: __dirname, dataRoot: dataPaths.root, customDataRoot: isCustomDataRoot(), version: app.getVersion(), packaged: app.isPackaged,
   env: process.env, argv: process.argv, requestConfig: () => proxyConfig("update"), queueBusy: () => queueBusyNow(),
+  holdQueue: hold => { updateHold = hold; updateHoldChanged(); },
   quit: () => app.quit(), log: message => logInfo(message),
   emit: progress => { if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send("app:updateProgressEvent", progress); },
 });
+// The old version reopened (by someone, or by an agent's MCP server) while its update helper is still at work: it quits
+// at once, before any window, and leaves everything to the helper; the new version opens in a moment.
+if (appUpdater.startup.inProgress) {
+  logInfo(`[update] an update to ${appUpdater.startup.inProgress.to} is being installed; this start of ${appUpdater.startup.inProgress.from} quits at once`);
+  app.exit(0);
+  process.exit(0);
+}
 const updateNotice: UpdateNotice | null = appUpdater.startup.result
   ? { ...appUpdater.startup.result, releaseUrl: appUpdater.source.releasePageUrl(`v${appUpdater.startup.result.to}`) }
   : null;
@@ -608,6 +621,7 @@ function registerIpc() {
   });
   const batch = createBatchService({
     generation, isBusy: hasActiveGenerationJobs, runtimeDir: dataPaths.runtime,
+    holdReason: () => updateHold ? UPDATE_HOLD : null,
     // Queue safety setting "total queue limit" (null = no limit), read at every enqueue.
     pendingItemLimit: () => getSettings().queueMaxPendingItems,
     // A restart matches an image that was in flight with what the library saved for it (history queueOrigin).
@@ -620,6 +634,7 @@ function registerIpc() {
     onRemoved(batchIds) { if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send("novelai:queue:removed", { batchIds }); },
   });
   disposeBatch = batch.dispose;
+  updateHoldChanged = () => batch.holdChanged();
   // The self-update waits while a batch (manual or an agent's) generates, waits or is being paused or cancelled.
   queueBusyNow = () => hasActiveGenerationJobs() || batch.list({ workspaceId: QUEUE_WORKSPACE }).batches.some(job => ["queued", "running", "pausing", "cancelling"].includes(job.status));
   // The batches list_queue shows (queued recipe batches, manual ones of this run included).

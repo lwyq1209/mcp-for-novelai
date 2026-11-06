@@ -18,6 +18,12 @@
  *
  * Concurrent calls of one server share one wait. NOVELAI_MCP_AUTOSTART=0 turns starting off (waiting for an app that
  * is already starting stays); test processes never start anything unless a test injects its own launcher.
+ *
+ * While the app installs an update (<data root>/runtime/updating.json, written by the app when it hands over to its
+ * update helper: client/electron/update/journal.ts), nothing is started: a start then could run the old version in the
+ * middle of the swap, or be ended by the Windows installer. Such a call answers unavailable, details.autostart
+ * "updating"; the new version removes the marker once it runs, the helper when it gives up, and it expires after
+ * 5 minutes or as soon as the helper is gone.
  */
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -42,6 +48,26 @@ export const AUTOSTART_LIMITS = Object.freeze({
 });
 /** <data root>/runtime/<CLAIM_FILE>: which server started the app last, and when (its age is what counts). */
 export const CLAIM_FILE = 'mcp-autostart.json';
+/** <data root>/runtime/<UPDATING_FILE>: the app is installing an update (see above). */
+export const UPDATING_FILE = 'updating.json';
+const UPDATING_MS = 5 * 60_000, HELPER_PID_GRACE_MS = 30_000;
+
+/**
+ * Whether the app of this data root is installing an update right now: its marker is well-formed, not expired (nor
+ * set more than 5 minutes ahead), and its helper lives (<data root>/updates/<id>/helper-pid) — or, before the helper
+ * wrote its pid, the marker is at most 30 s old. The same rule as the app's (client/electron/update/journal.ts).
+ */
+export async function updateInProgress(dataRoot, { now = Date.now(), isAlive = pid => alive(pid) } = {}) {
+  let value;
+  try { value = JSON.parse(await readFile(join(dataRoot, 'runtime', UPDATING_FILE), 'utf8')); } catch { return false; }
+  if (!value || value.schema !== 1 || typeof value.id !== 'string' || !/^[0-9a-f]{16,64}$/.test(value.id)) return false;
+  const started = Date.parse(value.startedAt), expires = Date.parse(value.expiresAt);
+  if (!Number.isFinite(started) || !Number.isFinite(expires) || expires <= now || expires - started > UPDATING_MS || started > now + 60_000) return false;
+  let helper = null;
+  try { const text = (await readFile(join(dataRoot, 'updates', value.id, 'helper-pid'), 'utf8')).trim(); helper = /^\d+$/.test(text) ? Number(text) : null; } catch { helper = null; }
+  if (helper === null) return now - started <= HELPER_PID_GRACE_MS;
+  return isAlive(helper);
+}
 
 const OFF_VALUES = new Set(['0', 'false', 'off', 'no']);
 /**
@@ -170,6 +196,7 @@ const MESSAGES = {
   started_exited: 'The NovelAI app was not running; this server started it in the background, but it closed again before it was ready. Nothing was sent. Ask the user to open the app and check what it reports.',
   starting_not_ready: 'The NovelAI app is starting but was not ready within 30 seconds. Nothing was sent. Call again in a moment.',
   lost: 'The NovelAI app became ready, but its connection was gone again before this call reached it. Nothing was sent. Call again in a moment.',
+  updating: 'The NovelAI app is installing an update and opens again by itself in a moment; this server does not start it meanwhile. Nothing was sent. Call again in a minute.',
 };
 const unavailable = (state, reason) => new BridgeError('unavailable', typeof MESSAGES[state] === 'function' ? MESSAGES[state](reason) : MESSAGES[state], { autostart: state });
 export const AUTOSTART_STATES = Object.freeze(Object.keys(MESSAGES));
@@ -206,6 +233,7 @@ export function createAutostartBridge(bridgeClient, options = {}) {
   const instance = options.instanceState ?? (() => appInstanceState(paths.root));
   const bridgeFingerprint = options.bridgeFingerprint ?? (() => readBridgeFingerprint(paths.runtime));
   const claims = options.claims ?? createStartClaim(paths.runtime, { claimMs: limits.claimMs });
+  const updating = options.updateInProgress ?? (() => updateInProgress(paths.root));
   const log = options.log ?? (message => { try { process.stderr.write(`${message}\n`); } catch { /* no stderr */ } });
   let lastStartAt = null;
   let pending = null;
@@ -246,6 +274,8 @@ export function createAutostartBridge(bridgeClient, options = {}) {
       if (waited === 'ready') return { startedHere: false, deadline };
       if (waited === 'timeout') throw unavailable('starting_not_ready');
     }
+    // The app is installing an update: never a start in the middle of it.
+    if (await updating().catch(() => false)) throw unavailable('updating');
     if (!policy.launch) throw unavailable(policy.reason ?? 'off');
     const app = launcher.resolve();
     if (!app?.ok) throw unavailable('unsupported');

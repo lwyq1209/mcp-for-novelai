@@ -7,9 +7,13 @@
 //              checksum) → staged and checked next to the app (install.ts) → ready. When the queue has nothing running
 //              or waiting, it goes on to install() at once; otherwise it stays ready until the user clicks again.
 //   install()  only from ready and only while the queue is idle (no running, waiting, pausing or cancelling batch,
-//              manual ones included; paused batches stay paused and are kept): writes the helper script and
-//              pending.json, starts the helper (it must answer within a few seconds) and quits the app normally
-//              (before-quit closes the bridge, the queue and the library), never forcefully.
+//              manual ones included; paused batches stay paused and are kept): checks the staged version once more
+//              (macOS signature and certificate, Windows the installer's SHA-256), holds the queue (no image starts
+//              from now on; new batches still queue), writes the helper script, pending.json and the updating marker
+//              (runtime/updating.json: the MCP server starts no app meanwhile), starts the helper (it must answer
+//              within a few seconds), looks at the queue once more — a batch that arrived meanwhile withdraws the
+//              update (the helper sees its state folder gone and stops) and lifts the hold — and otherwise quits the
+//              app normally (before-quit closes the bridge, the queue and the library), never forcefully.
 //   cancel()   stops a download or check (the partial file stays for a later resume) and removes a staged version.
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
@@ -19,9 +23,11 @@ import { isNewerVersion } from "../ipc/update";
 import { downloadFile, downloadSmall, DownloadError } from "./download";
 import { CHECKSUMS_FILE, CHECKSUMS_MAX_BYTES, ManifestError, SIGNATURE_FILE, SIGNATURE_MAX_BYTES, ed25519PublicKey, verifyReleaseManifest, versionOfTag, type VerifiedManifest } from "./release-files";
 import type { UpdateSource } from "./source";
+import { createHash } from "node:crypto";
 import { InstallError, installSupport, installTarget, macCertificateSha256, safePathArgument, stageLinuxUpdate, stageMacUpdate, type InstallDeps, type InstallUnsupportedReason, type StagedUpdate } from "./install";
-import { DOWNLOADS_DIR, STATE_FILES, removePending, writePending, type PendingUpdate } from "./journal";
+import { DOWNLOADS_DIR, STATE_FILES, UPDATING_MARKER_MS, removePending, removeUpdatingMarker, writePending, writeUpdatingMarker, type PendingUpdate } from "./journal";
 import { POSIX_HELPER_SCRIPT } from "./helper-posix";
+import { helperEnvironment, linuxAppEnvironment } from "./environment";
 import { WINDOWS_HELPER_SCRIPT } from "./helper-windows";
 
 export type UpdatePhase = "idle" | "checking" | "downloading" | "verifying" | "preparing" | "ready" | "installing" | "failed";
@@ -70,11 +76,15 @@ export interface UpdaterOptions {
   bundleId?: string;
   /** <data root>/updates */
   updatesDir: string;
+  /** <data root>/runtime (the updating marker; default: next to updatesDir). */
+  runtimeDir?: string;
   env: Record<string, string | undefined>;
   installDeps: InstallDeps;
   fetchLatest(): Promise<LatestRelease | null>;
   requestConfig(): Record<string, unknown>;
   queueBusy(): boolean;
+  /** Holds the queue (no image starts; batches still queue) from the hand-over on, or lifts the hold. */
+  holdQueue?(hold: boolean): void;
   quit(): void;
   startHelper(launch: HelperLaunch): Promise<{ ok: true } | { ok: false; reason: string }>;
   emit(progress: UpdateProgress): void;
@@ -85,10 +95,12 @@ export interface UpdaterOptions {
   launchArgs(): string[];
   /** Rehearsal builds: the restarted app starts in the background (open -g, SW_SHOWNOACTIVATE). */
   background: boolean;
+  /** Rehearsal builds only: a pause between the helper's answer and the last queue check (to catch it on purpose). */
+  handoverDelayMs?: number;
   sleep?(ms: number): Promise<void>;
 }
 
-interface Prepared { manifest: VerifiedManifest; file: string; staged: StagedUpdate | null; target: string; executable: string }
+interface Prepared { manifest: VerifiedManifest; file: string; staged: StagedUpdate | null; target: string; executable: string; certificateSha256?: string }
 
 export interface Updater {
   status(): UpdateProgress;
@@ -122,6 +134,8 @@ export function createUpdater(options: UpdaterOptions): Updater {
     supportCache = reason ? { supported: false, reason } : { supported: true };
     return supportCache;
   }
+
+  const runtimeDir = options.runtimeDir ?? path.join(path.dirname(options.updatesDir), "runtime");
 
   async function removeStaged() {
     const staging = prepared?.staged?.staging;
@@ -160,8 +174,9 @@ export function createUpdater(options: UpdaterOptions): Updater {
       // The certificate of the running app; an ad-hoc signed app has none, then the one built into it.
       const scratch = path.join(options.updatesDir, DOWNLOADS_DIR);
       const current = await macCertificateSha256(options.installDeps, located.target, scratch);
-      const staged = await stageMacUpdate({ deps: options.installDeps, archive: file, target: located.target, version: manifest.version, bundleId: options.bundleId ?? "", expectedCertificateSha256: current ?? options.source.macCertificateSha256 });
-      return { manifest, file, staged, ...located };
+      const certificateSha256 = (current ?? options.source.macCertificateSha256).toLowerCase();
+      const staged = await stageMacUpdate({ deps: options.installDeps, archive: file, target: located.target, version: manifest.version, bundleId: options.bundleId ?? "", expectedCertificateSha256: certificateSha256 });
+      return { manifest, file, staged, ...located, certificateSha256 };
     }
     if (options.platform === "linux") {
       const staged = await stageLinuxUpdate({ deps: options.installDeps, archive: file, target: located.target, executable: located.executable, version: manifest.version });
@@ -227,21 +242,46 @@ export function createUpdater(options: UpdaterOptions): Updater {
     return install();
   }
 
-  function helperLaunch(id: string, stateDir: string, ready: Prepared): HelperLaunch {
+  function helperLaunch(stateDir: string, ready: Prepared): HelperLaunch {
     const { platform } = options;
     const from = options.currentVersion, to = ready.manifest.version;
     for (const value of [ready.target, stateDir, ready.file, ...(ready.staged ? [ready.staged.staging] : [])]) if (!safePathArgument(platform, value)) throw new InstallError("install_unsupported", "A path of this installation cannot be handed to the update helper.", "unknown_layout");
-    const env = Object.fromEntries(Object.entries(options.env).filter((entry): entry is [string, string] => typeof entry[1] === "string" && !/^ELECTRON_RUN_AS_NODE$/i.test(entry[0])));
+    // Never the app's whole environment (environment.ts): the helper gets what it needs to run, the restarted app what
+    // a start from the desktop would have plus the hand-over lines.
+    const env = helperEnvironment(platform, options.env, options.launchEnv());
     if (platform === "win32") {
       const script = path.win32.join(stateDir, "helper.ps1");
       return { platform, script, command: "powershell.exe", cwd: stateDir, env, args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", script,
-        "-State", stateDir, "-AppPid", String(options.pid), "-Installer", ready.file, "-InstallDir", ready.target, "-Exe", ready.executable, "-From", from, "-To", to, "-Background", options.background ? "1" : "0"] };
+        "-State", stateDir, "-AppPid", String(options.pid), "-Installer", ready.file, "-Sha256", ready.manifest.sha256, "-InstallDir", ready.target, "-Exe", ready.executable, "-From", from, "-To", to, "-Background", options.background ? "1" : "0"] };
     }
     const script = path.posix.join(stateDir, "helper.sh");
     const launcher = platform === "darwin" ? "/usr/bin/open" : ready.executable;
-    // Linux: bash where there is one (it closes every inherited descriptor before it starts the new app; sh only 3-9).
+    // -p: no ENV/BASH_ENV file, no shell functions from the environment (which is minimal anyway). Linux: bash where
+    // there is one, which can close every descriptor the helper inherited (dash only 3-9) before the new app starts.
     const shell = platform === "linux" && fs.existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh";
-    return { platform: platform as "darwin" | "linux", script, command: shell, cwd: stateDir, env, args: [script, platform, stateDir, String(options.pid), ready.target, ready.staged!.staging, from, to, launcher, options.background ? "1" : "0"] };
+    return { platform: platform as "darwin" | "linux", script, command: shell, cwd: stateDir, env, args: ["-p", script, platform, stateDir, String(options.pid), ready.target, ready.staged!.staging, from, to, launcher, options.background ? "1" : "0", platform === "darwin" ? ready.certificateSha256 ?? "" : "-"] };
+  }
+
+  /** The staged version once more, right before it is handed over (it may have waited for the queue for hours). */
+  async function recheck(ready: Prepared) {
+    if (options.platform === "darwin" && ready.staged) {
+      const verify = await options.installDeps.run("/usr/bin/codesign", ["--verify", "--deep", "--strict", ready.staged.staged], { timeoutMs: 10 * 60_000 });
+      const certificate = verify.code === 0 ? await macCertificateSha256(options.installDeps, ready.staged.staged, ready.staged.staging) : null;
+      if (!certificate || certificate !== ready.certificateSha256) throw new InstallError("signature_mismatch", "The staged update no longer has a valid signature of this app's certificate.");
+    }
+    if (options.platform === "win32" || options.platform === "linux") {
+      // The downloaded file, read back from the disk.
+      const hash = createHash("sha256");
+      for await (const chunk of fs.createReadStream(ready.file)) hash.update(chunk as Buffer);
+      if (hash.digest("hex") !== ready.manifest.sha256) throw new InstallError("package_invalid", "The downloaded update file changed after it was checked.");
+    }
+  }
+
+  /** Takes back an update handed to the helper that must not run (the queue got busy): the helper stops by itself. */
+  async function withdraw(stateDir: string, id: string) {
+    removePending(options.updatesDir);
+    removeUpdatingMarker(runtimeDir, id);
+    await options.installDeps.fs.rm(stateDir, { recursive: true, force: true }).catch(() => undefined);
   }
 
   async function install(): Promise<UpdateProgress> {
@@ -250,19 +290,32 @@ export function createUpdater(options: UpdaterOptions): Updater {
     if (!ready) return fail("install_failed", "Nothing is ready to install.", true);
     const version = ready.manifest.version;
     if (options.queueBusy()) return set({ phase: "ready", version, queueBusy: true });
+    try { await recheck(ready); }
+    catch (error) {
+      options.log(`[update] ${ready.manifest.asset}: ${message(error)}; nothing is installed`);
+      await removeStaged();
+      return fail("verify_failed", message(error), false, error instanceof InstallError ? error.code : undefined, version);
+    }
+    // The recheck took a moment: a batch may have arrived meanwhile.
+    if (options.queueBusy()) return set({ phase: "ready", version, queueBusy: true });
     set({ phase: "installing", version });
+    // From here on no image starts (batches still queue); a batch that arrives withdraws the update below.
+    options.holdQueue?.(true);
     const id = randomBytes(12).toString("hex");
     const stateDir = path.join(options.updatesDir, id);
     try {
-      const launch = helperLaunch(id, stateDir, ready);
+      const launch = helperLaunch(stateDir, ready);
       await options.installDeps.fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
       await options.installDeps.fs.writeFile(launch.script, launch.platform === "win32" ? WINDOWS_HELPER_SCRIPT : POSIX_HELPER_SCRIPT, { mode: 0o700 });
       const lines = (values: string[]) => values.filter(value => value && !/[\0\r\n]/.test(value)).join("\n");
       if (launch.platform === "darwin") await options.installDeps.fs.writeFile(path.join(stateDir, STATE_FILES.launchEnv), `${lines(options.launchEnv())}\n`, { mode: 0o600 });
+      if (launch.platform === "linux") await options.installDeps.fs.writeFile(path.join(stateDir, STATE_FILES.launchEnv), `${lines(linuxAppEnvironment(options.env, options.launchEnv()))}\n`, { mode: 0o600 });
       const extra = options.launchArgs().filter(value => !/[\0\r\n"]/.test(value) && !value.endsWith("\\"));
       if (extra.length) await options.installDeps.fs.writeFile(path.join(stateDir, "launch.args"), `${lines(extra)}\n`, { mode: 0o600 });
       const pending: PendingUpdate = { schema: 1, id, platform: launch.platform, from: options.currentVersion, to: version, target: ready.target, staging: ready.staged?.staging ?? null, stateDir, createdAt: new Date().toISOString() };
       writePending(options.updatesDir, pending);
+      const now = Date.now();
+      writeUpdatingMarker(runtimeDir, { schema: 1, id, pid: options.pid, from: options.currentVersion, to: version, startedAt: new Date(now).toISOString(), expiresAt: new Date(now + UPDATING_MARKER_MS).toISOString() });
       const started = await options.startHelper(launch);
       if (!started.ok) throw new Error(started.reason);
       // The helper says it runs (its first state) before the app quits.
@@ -271,11 +324,19 @@ export function createUpdater(options: UpdaterOptions): Updater {
         if (Date.now() > until) throw new Error("The update helper did not start.");
         await sleep(100);
       }
+      if (options.handoverDelayMs) await sleep(options.handoverDelayMs);
     } catch (error) {
-      removePending(options.updatesDir);
-      await options.installDeps.fs.rm(stateDir, { recursive: true, force: true }).catch(() => undefined);
+      await withdraw(stateDir, id);
+      options.holdQueue?.(false);
       options.log(`[update] the update could not be handed over: ${message(error)}`);
       return fail("install_failed", message(error), true, undefined, version);
+    }
+    // The last look at the queue, right before quitting (nothing can be enqueued between it and quit()).
+    if (options.queueBusy()) {
+      await withdraw(stateDir, id);
+      options.holdQueue?.(false);
+      options.log(`[update] a batch arrived while the update was handed over; the update is withdrawn and waits for the queue`);
+      return set({ phase: "ready", version, queueBusy: true });
     }
     options.log(`[update] ${options.currentVersion} → ${version}: the helper runs; the app quits now`);
     prepared = null; // the helper owns the staged version now

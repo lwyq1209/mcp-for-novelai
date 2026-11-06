@@ -96,6 +96,28 @@ describe('durable frozen recipe FIFO', () => {
     expect(h.accepted.every(item => item.request.expectedRevision === 7)).toBe(true);
   });
 
+  it('starts no image while the queue holds for an update, still queues batches and shows the hold as their stop reason', async () => {
+    let hold: { code: string; message: string } | null = { code: 'update_pending', message: 'The app is handing over to its update helper.' };
+    const seen: BatchJob[] = [];
+    const h = await queueSetup({ holdReason: () => hold, onBatch: batch => seen.push(batch) });
+    const batch = await h.service.enqueue(queued({ requestKey: 'during-update' }));
+    // The receipt and list_queue name the hold; nothing is submitted.
+    expect(batch.status).toBe('queued');
+    expect(batch.error).toEqual({ code: 'update_pending', message: 'The app is handing over to its update helper.' });
+    await new Promise(resolve => setTimeout(resolve, 60));
+    expect(h.accepted).toHaveLength(0);
+    expect(h.service.list({ workspaceId: 'viewer' }).batches[0].error?.code).toBe('update_pending');
+    // The hold is lifted (the update was withdrawn): published again without it, and the batch runs.
+    hold = null;
+    seen.length = 0;
+    h.service.holdChanged();
+    expect(seen.some(item => item.batchId === batch.batchId && !item.error)).toBe(true);
+    await expectCount(h, 1); h.settle(0); await expectStatus(h, batch, 'succeeded');
+    // The hold is never stored with the batch.
+    const state = JSON.parse(await fs.readFile(path.join(h.runtimeDir, 'frozen-queue', `${batch.batchId}.state.json`), 'utf8'));
+    expect(state.job.error ?? null).toBeNull();
+  });
+
   it('names the durable batch item on every queued child (issue #1)', async () => {
     const h = await queueSetup();
     const a = await h.service.enqueue(queued({ count: 2, requestKey: 'mcp-queued-key' }));

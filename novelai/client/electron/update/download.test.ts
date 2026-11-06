@@ -6,7 +6,8 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import fsp from "node:fs/promises";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { downloadFile, downloadSmall, DownloadError } from "./download";
 
 type Handler = (request: http.IncomingMessage, response: http.ServerResponse) => void;
@@ -70,6 +71,28 @@ describe("downloadFile", () => {
     expect(await code(downloadFile({ url: `${server}/a`, allows: onlyLoopback, destination, expectedSha256: sha(body), maxBytes: 1e7 }))).toBe("checksum_mismatch");
     expect(fs.existsSync(destination)).toBe(false);
     expect(fs.existsSync(`${destination}.part`)).toBe(false);
+  });
+
+  it("hashes the file on the disk once more: a short write that the stream's hash cannot see is refused (P3-2)", async () => {
+    const server = await serve((_request, response) => { response.writeHead(200, { "content-length": body.length }); response.end(body); });
+    const destination = path.join(dir, "app.zip");
+    const realOpen = fsp.open.bind(fsp);
+    const spy = vi.spyOn(fsp, "open").mockImplementation(async (...args: Parameters<typeof fsp.open>) => {
+      const handle = await realOpen(...args);
+      if (String(args[0]).endsWith(".part") && args[1] !== "r") {
+        const write = handle.write.bind(handle) as (chunk: Buffer) => Promise<unknown>;
+        let first = true;
+        (handle as any).write = (chunk: Buffer) => { if (first) { first = false; return write(chunk.subarray(1)); } return write(chunk); };
+      }
+      return handle;
+    });
+    try {
+      expect(await code(downloadFile({ url: `${server}/a`, allows: onlyLoopback, destination, expectedSha256: sha(body), maxBytes: 1e7 }))).toBe("checksum_mismatch");
+    } finally { spy.mockRestore(); }
+    expect(fs.existsSync(destination)).toBe(false);
+    expect(fs.existsSync(`${destination}.part`)).toBe(false);
+    // Without the fault the same download passes.
+    expect(await code(downloadFile({ url: `${server}/a`, allows: onlyLoopback, destination, expectedSha256: sha(body), maxBytes: 1e7 }))).toBe("ok");
   });
 
   it("resumes a broken download with a Range request and checks the whole file", async () => {

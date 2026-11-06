@@ -58,11 +58,13 @@ function app(running = true) {
   return { pid: child.pid!, quit: () => child.kill("SIGTERM") };
 }
 function behaviour(...steps: string[]) { fs.writeFileSync(path.join(root, "behaviour"), `${steps.join("\n")}\n`); }
-function runHelper(pid: number, { exitTimeout = 5, confirmTimeout = 2, stagingPath = staging } = {}) {
-  const child = spawn("/bin/sh", [path.join(state, "helper.sh"), process.platform === "darwin" ? "darwin" : "linux", state, String(pid), target, stagingPath, "0.1.3", "0.1.4", launcher, "0", String(exitTimeout), String(confirmTimeout)], { stdio: "ignore" });
+function runHelper(pid: number, { exitTimeout = 5, confirmTimeout = 2, stagingPath = staging, certificate = "-", env = undefined as NodeJS.ProcessEnv | undefined } = {}) {
+  const child = spawn("/bin/sh", ["-p", path.join(state, "helper.sh"), process.platform === "darwin" ? "darwin" : "linux", state, String(pid), target, stagingPath, "0.1.3", "0.1.4", launcher, "0", certificate, String(exitTimeout), String(confirmTimeout)], { stdio: "ignore", ...(env ? { env } : {}) });
   children.push(child);
   return new Promise<number | null>(resolve => child.once("exit", code => resolve(code)));
 }
+const markerFile = () => path.join(root, "data", "runtime", "updating.json");
+function writeMarker() { fs.mkdirSync(path.dirname(markerFile()), { recursive: true }); fs.writeFileSync(markerFile(), "{}"); }
 const version = () => fs.readFileSync(path.join(target, "Contents", "version"), "utf8");
 const states = () => fs.readFileSync(path.join(state, "helper-state"), "utf8").trim().split("\n");
 const launches = () => { try { return fs.readFileSync(path.join(root, "launches"), "utf8").trim().split("\n").map(line => line.split("|")[1]); } catch { return []; } };
@@ -83,15 +85,19 @@ describe.runIf(posix)("the POSIX update helper", () => {
     expect(launches()).toEqual(["--updated-from=0.1.3"]);
     expect(fs.existsSync(staging)).toBe(false);
     expect(fs.readFileSync(path.join(state, "helper.log"), "utf8")).toMatch(/helper started for 0\.1\.3 -> 0\.1\.4/);
+    expect(fs.readFileSync(path.join(state, "helper-pid"), "utf8").trim()).toMatch(/^\d+$/);
   });
 
   it("puts the old version back and starts it when the new one quits without confirming", async () => {
     behaviour("exit", "none");
+    writeMarker();
     expect(await runHelper(app(false).pid)).toBe(1);
     expect(version()).toBe("0.1.3");
     expect(states()).toEqual(["waiting", "swapped", "launched", "rolling_back:new_app_exited", "rolled_back:new_app_exited"]);
     expect(launches()).toEqual(["--updated-from=0.1.3", "--update-rolled-back=0.1.4"]);
     expect(fs.existsSync(staging)).toBe(false);
+    // The marker that keeps the MCP server from starting the app is gone with the attempt.
+    expect(fs.existsSync(markerFile())).toBe(false);
   });
 
   it("rolls back when the new version never starts, or cannot be started", async () => {
@@ -127,8 +133,9 @@ describe.runIf(posix)("the POSIX update helper", () => {
     expect(version()).toBe("0.1.3");
     expect(launches()).toEqual([]);
 
+    // Withdrawn (pending.json gone): a clean stop.
     fs.rmSync(path.join(updates, "pending.json"));
-    expect(await runHelper(app(false).pid)).toBe(1);
+    expect(await runHelper(app(false).pid)).toBe(0);
     expect(version()).toBe("0.1.3");
     expect(launches()).toEqual([]);
 
@@ -136,6 +143,53 @@ describe.runIf(posix)("the POSIX update helper", () => {
     expect(await runHelper(app(false).pid, { stagingPath: path.join(root, ".mcp-for-novelai-update-x") })).toBe(2);
     expect(version()).toBe("0.1.3");
     expect(fs.existsSync(path.join(staging, "new"))).toBe(true);
+  });
+
+  it("stops at once, changing nothing, when the app withdraws the update while it waits (a batch arrived)", async () => {
+    behaviour("confirm");
+    const running = app();
+    const started = Date.now();
+    const done = runHelper(running.pid, { exitTimeout: 60 });
+    const until = Date.now() + 5000;
+    while (!fs.existsSync(path.join(state, "helper-state")) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20));
+    // The app removes pending.json and the state folder, and keeps running.
+    fs.rmSync(path.join(updates, "pending.json"));
+    fs.rmSync(state, { recursive: true, force: true });
+    expect(await done).toBe(0);
+    expect(Date.now() - started).toBeLessThan(5000);
+    running.quit();
+    expect(version()).toBe("0.1.3");
+    expect(fs.existsSync(path.join(staging, "new"))).toBe(true);
+    expect(launches()).toEqual([]);
+  });
+
+  it("ignores BASH_ENV, ENV and shell functions from its environment (-p and a minimal environment)", async () => {
+    behaviour("confirm");
+    const hook = path.join(root, "hook.sh");
+    fs.writeFileSync(hook, `touch "${root}/PWNED"\n`);
+    const env = { PATH: "/usr/bin:/bin", BASH_ENV: hook, ENV: hook, "BASH_FUNC_mv%%": `() { touch "${root}/PWNED-mv"; }` };
+    expect(await runHelper(app(false).pid, { env })).toBe(0);
+    expect(version()).toBe("0.1.4");
+    expect(fs.existsSync(path.join(root, "PWNED"))).toBe(false);
+    expect(fs.existsSync(path.join(root, "PWNED-mv"))).toBe(false);
+  });
+
+  it.runIf(process.platform === "darwin")("macOS: checks the new app's signature once more right before it moves it, and changes nothing when it is gone", async () => {
+    behaviour("none");
+    writeMarker();
+    // A folder that is no signed app at all, and a certificate it cannot have.
+    expect(await runHelper(app(false).pid, { certificate: "ab".repeat(32) })).toBe(1);
+    expect(version()).toBe("0.1.3");
+    expect(states()).toEqual(["waiting", "aborted:signature_changed"]);
+    expect(launches()).toEqual(["--update-rolled-back=0.1.4"]);
+    expect(fs.existsSync(staging)).toBe(false);
+    expect(fs.existsSync(markerFile())).toBe(false);
+  });
+
+  it("refuses a certificate argument that is not a SHA-256", async () => {
+    expect(await runHelper(app(false).pid, { certificate: "not-a-hash" })).toBe(2);
+    expect(await runHelper(app(false).pid, { certificate: "ab" })).toBe(2);
+    expect(version()).toBe("0.1.3");
   });
 
   it("changes nothing and starts the old app again when the app cannot be moved (no permission)", async () => {
@@ -180,7 +234,7 @@ describe.runIf(posix)("the POSIX update helper", () => {
       fs.rmSync(path.join(root, "fds"), { force: true });
       // An extra descriptor the helper inherits (as from the old app), at a two-digit number.
       const stdio: Array<"ignore" | "pipe"> = [...Array(53).fill("ignore"), "pipe"];
-      const child = spawn(shell, [path.join(state, "helper.sh"), "linux", state, String(app_(false)), target, staging, "0.1.3", "0.1.4", "mcp-for-novelai", "0", "5", "5"], { stdio });
+      const child = spawn(shell, ["-p", path.join(state, "helper.sh"), "linux", state, String(app_(false)), target, staging, "0.1.3", "0.1.4", "mcp-for-novelai", "0", "-", "5", "5"], { stdio });
       children.push(child);
       fs.writeFileSync(path.join(root, "helper-pid"), String(child.pid));
       expect(await new Promise(resolve => child.once("exit", resolve))).toBe(0);

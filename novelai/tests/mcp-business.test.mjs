@@ -442,7 +442,7 @@ test('queue outputs say why a batch is paused or blocked (stopReason), and how m
   const text = JSON.stringify([listed, read, ok(await call('read_queue', { batchId: halted.batchId })), ok(await call('control_queue', { batchId: odd.batchId, action: 'resume' }))]);
   for (const hidden of ['secret prompt text', 'host text that is not passed on', 'queue.window_only', '"params"', '"reason"']) assert.ok(!text.includes(hidden), hidden);
   // Every code the host queue stops a batch with has an explanation (electron/batch-service.ts).
-  for (const code of ['queue_halted', 'child_stopped', 'child_rejected', 'submission_unconfirmed', 'restart_unconfirmed', 'restart_blocked', 'recovered_paused', 'child_lookup_failed', 'child_status_unavailable', 'cancel_unconfirmed', 'queue_storage_error', 'scheduler_stopped', 'scheduler_closed']) assert.ok(BATCH_REASONS[code], code);
+  for (const code of ['queue_halted', 'child_stopped', 'child_rejected', 'submission_unconfirmed', 'restart_unconfirmed', 'restart_blocked', 'recovered_paused', 'child_lookup_failed', 'child_status_unavailable', 'cancel_unconfirmed', 'queue_storage_error', 'scheduler_stopped', 'scheduler_closed', 'update_pending']) assert.ok(BATCH_REASONS[code], code);
   // Every explanation is plain English for the model.
   for (const message of Object.values(BATCH_REASONS)) assert.ok(/^[\x20-\x7e]+$/.test(message), message);
 });

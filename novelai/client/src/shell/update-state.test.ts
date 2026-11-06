@@ -44,7 +44,7 @@ describe('the self-update in the window', () => {
 
   it('has a text for every reason code in both languages', () => {
     for (const reason of ['signature_invalid', 'manifest_invalid', 'version_mismatch', 'checksum_mismatch', 'redirect_refused', 'signature_mismatch', 'package_invalid', 'extract_failed', 'network', 'stalled', 'http_status', 'too_large',
-      'translocated', 'read_only', 'not_writable', 'per_machine', 'not_installed', 'sandbox_helper', 'not_packaged', 'asset_missing', 'unknown_layout', 'app_running', 'not_movable', 'move_failed', 'launch_failed', 'new_app_exited', 'not_started', 'installer_failed', 'stopped_waiting', undefined])
+      'translocated', 'read_only', 'not_writable', 'per_machine', 'not_installed', 'sandbox_helper', 'not_packaged', 'asset_missing', 'unknown_layout', 'app_running', 'not_movable', 'move_failed', 'launch_failed', 'new_app_exited', 'not_started', 'installer_failed', 'other_instance', 'signature_changed', 'installer_changed', 'missing', 'stopped_waiting', undefined])
       expect(UI_STRINGS[updateReasonKey(reason)], String(reason)).toBeDefined();
   });
 

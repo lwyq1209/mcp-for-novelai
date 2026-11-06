@@ -64,7 +64,7 @@ export function restartHandOver({ testBuild, env, argv, customDataRoot, dataRoot
   const lines: string[] = [];
   if (customDataRoot) lines.push(`NOVELAI_DATA_DIR=${dataRoot}`);
   if (typeof env.NOVELAI_PROJECT_ROOT === "string" && env.NOVELAI_PROJECT_ROOT) lines.push(`NOVELAI_PROJECT_ROOT=${env.NOVELAI_PROJECT_ROOT}`);
-  if (testBuild) for (const key of [TEST_ENV.feed, TEST_ENV.publicKey, TEST_ENV.macCertificate, "NAI_DEV_TOOLS_BACKGROUND"]) { const value = env[key]; if (typeof value === "string" && value) lines.push(`${key}=${value}`); }
+  if (testBuild) for (const key of [TEST_ENV.feed, TEST_ENV.publicKey, TEST_ENV.macCertificate, "NAI_DEV_TOOLS_BACKGROUND", "NAI_UPDATE_TEST_HANDOVER_DELAY_MS"]) { const value = env[key]; if (typeof value === "string" && value) lines.push(`${key}=${value}`); }
   return { env: lines, args: testBuild ? argv.slice(1).filter(arg => REHEARSAL_SWITCHES.test(arg)) : [], background: testBuild && env.NAI_DEV_TOOLS_BACKGROUND === "1" };
 }
 
@@ -78,6 +78,8 @@ export interface AppUpdaterOptions {
   argv: readonly string[];
   requestConfig(): Record<string, unknown>;
   queueBusy(): boolean;
+  /** Holds the queue from the hand-over to the helper on (no image starts), or lifts the hold. */
+  holdQueue(hold: boolean): void;
   quit(): void;
   emit(progress: UpdateProgress): void;
   log(message: string): void;
@@ -98,16 +100,21 @@ export function createAppUpdater(options: AppUpdaterOptions): AppUpdater {
   const updatesDir = path.join(options.dataRoot, "updates");
   const located = installTarget(process.platform, process.execPath);
   const startup = options.packaged
-    ? startupUpdate({ updatesDir, version: options.version, target: located?.target ?? null, pid: process.pid, platform: process.platform })
+    ? startupUpdate({ updatesDir, version: options.version, target: located?.target ?? null, pid: process.pid, platform: process.platform, argv: options.argv })
     : { result: null, confirm() {}, cleanup() {} };
-  if (options.packaged) removeOldStateFolders(updatesDir);
+  if (options.packaged && !startup.inProgress) {
+    removeOldStateFolders(updatesDir);
+  }
   const fetchLatest = () => fetchLatestRelease(source.latestApiUrl);
   const handOver = restartHandOver({ testBuild, env: options.env, argv: options.argv, customDataRoot: options.customDataRoot, dataRoot: options.dataRoot });
   const updater = createUpdater({
     source, currentVersion: options.version, platform: process.platform, arch: process.arch, execPath: process.execPath, packaged: options.packaged, pid: process.pid,
     bundleId: process.platform === "darwin" && located ? bundleIdentifier(located.target) : undefined,
     updatesDir, env: { ...options.env }, installDeps: nodeInstallDeps, fetchLatest, requestConfig: options.requestConfig,
-    queueBusy: options.queueBusy, quit: options.quit, startHelper, emit: options.emit, log: options.log, background: handOver.background,
+    queueBusy: options.queueBusy, holdQueue: options.holdQueue, quit: options.quit, startHelper, emit: options.emit, log: options.log, background: handOver.background,
+    runtimeDir: path.join(options.dataRoot, "runtime"),
+    // Rehearsal builds only: time to enqueue a batch while the update is handed over (dev-tools/update-rehearsal.mjs).
+    handoverDelayMs: testBuild && /^\d{1,5}$/.test(options.env.NAI_UPDATE_TEST_HANDOVER_DELAY_MS ?? "") ? Number(options.env.NAI_UPDATE_TEST_HANDOVER_DELAY_MS) : 0,
     launchEnv: () => handOver.env,
     launchArgs: () => handOver.args,
   });

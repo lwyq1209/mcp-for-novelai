@@ -20,6 +20,7 @@ export const QUEUE_ERROR_TEXTS: HostErrorTexts = {
   restart_blocked: { "zh-CN": "批次已有未成功的图片，未提交的图片不会继续。", "en-US": "An image of this batch did not succeed; the images not yet submitted do not continue." },
   recovered_paused: { "zh-CN": "已恢复冻结的配方；尚未提交的图片等待手动继续，不会在启动时自动执行。", "en-US": "The frozen recipes were recovered; the images not yet submitted wait for you to resume and do not start on launch." },
   queue_storage_error: { "zh-CN": "冻结队列无法安全读取或写入；文件已保留，新的提交已停止。", "en-US": "The frozen queue cannot be read or written safely; its files are kept and new submissions are stopped." },
+  update_pending: { "zh-CN": "应用正准备重启安装更新，暂不开始出图；这一批还没有发出任何请求。此时有新批次加入就会取消这次更新，批次照常执行。", "en-US": "The app is about to restart to install an update, so no image starts right now; nothing of this batch was sent. A batch that arrives now calls the update off, and the batch then runs as usual." },
   "queue.stray_entry": { "zh-CN": "冻结队列文件夹里有本应用不使用的条目：{entry}（在数据文件夹内）。冻结队列已停止，没有改动任何文件。把这个条目移走或删除，然后重新启动应用即可恢复。", "en-US": "The frozen queue folder holds an entry this app does not use: {entry} (in the data folder). The frozen queue stopped without changing any file. Move or delete that entry, then restart the app." },
   // Queue operations
   batch_not_found: { "zh-CN": "本次运行中没有这个批次。", "en-US": "This run of the app has no such batch." },

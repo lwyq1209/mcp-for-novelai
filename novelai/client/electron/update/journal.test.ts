@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { failureReason, readPending, removableStaging, removeOldStateFolders, startupUpdate, writePending, type PendingUpdate } from "./journal";
+import { activeUpdatingMarker, failureReason, readPending, removableStaging, removeOldStateFolders, removeUpdatingMarker, startupUpdate, writePending, writeUpdatingMarker, type PendingUpdate } from "./journal";
 
 let root: string, updates: string;
 beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), "nai-update-journal-")); updates = path.join(root, "updates"); });
@@ -89,3 +89,69 @@ describe("the next start", () => {
     expect(fs.existsSync(pending().stateDir)).toBe(true);
   });
 });
+
+describe("the updating marker (runtime/updating.json)", () => {
+  const runtime = () => path.join(root, "runtime");
+  const marker = (startedAt = Date.now(), overrides = {}) => ({ schema: 1 as const, id, pid: 1, from: "0.1.3", to: "0.1.4", startedAt: new Date(startedAt).toISOString(), expiresAt: new Date(startedAt + 5 * 60_000).toISOString(), ...overrides });
+  const helperPid = (pid: number) => { fs.mkdirSync(path.join(updates, id), { recursive: true }); fs.writeFileSync(path.join(updates, id, "helper-pid"), `${pid}\n`); };
+
+  it("is valid while it has not expired and its helper lives (or has not started yet)", () => {
+    writeUpdatingMarker(runtime(), marker());
+    expect(activeUpdatingMarker(root)?.id).toBe(id);
+    // No helper pid yet: valid only shortly after it was written.
+    expect(activeUpdatingMarker(root, { now: Date.now() + 60_000 })).toBeNull();
+    helperPid(process.pid);
+    expect(activeUpdatingMarker(root, { now: Date.now() + 60_000 })?.id).toBe(id);
+    expect(activeUpdatingMarker(root, { isAlive: () => false })).toBeNull();
+    expect(activeUpdatingMarker(root, { now: Date.now() + 6 * 60_000 })).toBeNull();
+    writeUpdatingMarker(runtime(), marker(Date.now(), { expiresAt: new Date(Date.now() + 60 * 60_000).toISOString() }));
+    expect(activeUpdatingMarker(root)).toBeNull();
+    fs.writeFileSync(path.join(runtime(), "updating.json"), "{garbage");
+    expect(activeUpdatingMarker(root)).toBeNull();
+  });
+
+  it("is removed only for its own update id when one is named", () => {
+    writeUpdatingMarker(runtime(), marker());
+    removeUpdatingMarker(runtime(), "bbbbbbbbbbbbbbbbbbbbbbbb");
+    expect(fs.existsSync(path.join(runtime(), "updating.json"))).toBe(true);
+    removeUpdatingMarker(runtime(), id);
+    expect(fs.existsSync(path.join(runtime(), "updating.json"))).toBe(false);
+  });
+
+  it("makes the old version quit at once while the helper works, and not after a rollback or once the helper is gone", () => {
+    fs.mkdirSync(path.join(updates, id), { recursive: true });
+    writePending(updates, pending());
+    writeUpdatingMarker(runtime(), marker());
+    helperPid(process.pid);
+    fs.writeFileSync(path.join(updates, id, "helper-state"), "waiting\n");
+    const start = (argv: string[] = [], isAlive = (pid: number) => pid === process.pid) => startupUpdate({ updatesDir: updates, version: "0.1.3", target: pending().target, pid: 9, platform: pending().platform, argv, isAlive });
+    const during = start();
+    expect(during.inProgress).toEqual({ id, from: "0.1.3", to: "0.1.4" });
+    expect(during.result).toBeNull();
+    // It touched nothing.
+    expect(readPending(updates)).not.toBeNull();
+    expect(fs.existsSync(path.join(runtime(), "updating.json"))).toBe(true);
+    expect(fs.existsSync(path.join(updates, id, "started"))).toBe(false);
+    // The start the helper makes after a rollback is an ordinary start that reports it.
+    expect(start(["exe", "--update-rolled-back=0.1.4"]).inProgress).toBeUndefined();
+    writePending(updates, pending());
+    writeUpdatingMarker(runtime(), marker());
+    // A helper that died: the old version reports the attempt and removes the marker.
+    const after = start([], () => false);
+    expect(after.inProgress).toBeUndefined();
+    expect(after.result).toEqual({ kind: "failed", to: "0.1.4", reason: "stopped_waiting" });
+    after.cleanup();
+    expect(fs.existsSync(path.join(runtime(), "updating.json"))).toBe(false);
+  });
+
+  it("is removed by the new version as soon as it confirms its start", () => {
+    fs.mkdirSync(path.join(updates, id), { recursive: true });
+    writePending(updates, pending());
+    writeUpdatingMarker(runtime(), marker());
+    const next = startupUpdate({ updatesDir: updates, version: "0.1.4", target: pending().target, pid: 9, platform: pending().platform });
+    expect(fs.existsSync(path.join(runtime(), "updating.json"))).toBe(true);
+    next.confirm();
+    expect(fs.existsSync(path.join(runtime(), "updating.json"))).toBe(false);
+  });
+});
+

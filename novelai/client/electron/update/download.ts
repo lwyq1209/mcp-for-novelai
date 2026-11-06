@@ -1,6 +1,6 @@
 // Downloads of update files: only from allowed URLs, redirects checked one by one, through the app's proxy setting,
 // with a size limit, a stall timeout, cancellation, resumption of an interrupted download (HTTP Range) and the
-// SHA-256 of what was written. No URL with its query (GitHub's signed download links) ever reaches a message or log.
+// SHA-256 of what arrived and of what was written (read back from the disk). No URL with its query (GitHub's signed download links) ever reaches a message or log.
 import axios from "axios";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -186,7 +186,11 @@ export async function downloadFile(request: FileDownload): Promise<{ bytes: numb
   request.onProgress?.(received, total);
   if (total !== null && received !== total) throw new DownloadError("network", "The download ended early.", true);
   const sha256 = hash.digest("hex");
-  if (sha256 !== request.expectedSha256.toLowerCase()) {
+  // Both what arrived and what is on the disk now (a short write or a changed file) must have the signed checksum.
+  const readBack = createHash("sha256");
+  const size = await hashFile(part, readBack);
+  const onDisk = readBack.digest("hex");
+  if (sha256 !== request.expectedSha256.toLowerCase() || onDisk !== sha256 || size !== received) {
     await fsp.rm(part, { force: true });
     throw new DownloadError("checksum_mismatch", "The downloaded file does not match the signed checksum.", false);
   }

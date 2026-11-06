@@ -40,7 +40,7 @@ function deps(pkg: MacPackage = {}, calls: string[][] = []): InstallDeps {
         if (cert) fs.writeFileSync(`${prefix}0`, cert);
         return { code: 0, stdout: "", stderr: "" };
       }
-      if (command === "tar") {
+      if (command === "/usr/bin/tar" || command === "/bin/tar") {
         fs.mkdirSync(path.join(args[3], "MCP-for-NovelAI-0.1.4-linux-x64", "resources"), { recursive: true });
         fs.writeFileSync(path.join(args[3], "MCP-for-NovelAI-0.1.4-linux-x64", "mcp-for-novelai"), "#!/bin/sh\n", { mode: 0o755 });
         return { code: 0, stdout: "", stderr: "" };
@@ -48,6 +48,7 @@ function deps(pkg: MacPackage = {}, calls: string[][] = []): InstallDeps {
       return { code: 127, stdout: "", stderr: "unexpected" };
     },
     packagedVersion: async () => pkg.version ?? "0.1.4",
+    exists: file => file === "/usr/bin/tar",
   };
 }
 function macApp() {

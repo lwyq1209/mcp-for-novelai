@@ -14,6 +14,12 @@ export class BatchError extends Error {
 export interface BatchDependencies {
   generation: BatchGenerationPort;
   isBusy?(): boolean;
+  /**
+   * Why the queue holds now (the app is handing over to its update helper), or null. While it is set no image starts
+   * (a batch waits right before its next submit, as for isBusy); batches still queue, and every queued batch without a
+   * stop reason of its own shows this one (expose). holdChanged() publishes the queued batches again when it changes.
+   */
+  holdReason?(): { code: string; message: string } | null;
   onBatch?(batch: BatchJob): void;
   randomSeed?(): number;
   wait?(milliseconds: number): Promise<void>;
@@ -228,7 +234,8 @@ export function createBatchService(deps: BatchDependencies) {
     catch { /* A colliding child identity cannot replace the tracked projection. */ }
   });
   // Compaction metadata is a projection only; it is never written into the state chain.
-  const expose = (entry: Entry, workspaceId = entry.public.checkpointWorkspaceId): BatchJob & { inputCompacted?: true; compactedAt?: string } => structuredClone({ ...entry.public, workspaceId, ...(entry.compactedAt ? { inputCompacted: true as const, compactedAt: entry.compactedAt } : {}) });
+  const held = (entry: Entry) => { const reason = entry.public.status === 'queued' && !entry.public.error ? deps.holdReason?.() ?? null : null; return reason ? { error: { code: reason.code, message: reason.message } } : {}; };
+  const expose = (entry: Entry, workspaceId = entry.public.checkpointWorkspaceId): BatchJob & { inputCompacted?: true; compactedAt?: string } => structuredClone({ ...entry.public, workspaceId, ...held(entry), ...(entry.compactedAt ? { inputCompacted: true as const, compactedAt: entry.compactedAt } : {}) });
   const push = (entry: Entry) => { try { deps.onBatch?.(expose(entry)); } catch { /* Closing UI must not alter an accepted batch. */ } };
   /** Large batches: the last push and a pending trailing push per batch (BATCH_EVENT_THROTTLE). */
   const pushed = new Map<string, { at: number; status: string; timer: ReturnType<typeof setTimeout> | null }>();
@@ -473,7 +480,8 @@ export function createBatchService(deps: BatchDependencies) {
         if (entry.pauseRequested || entry.public.cancelRequested || disposed) continue;
         // The accepted recipe is independent of all later editor changes.
         // Wait only for the real local generation reservation, not renderer UI.
-        while (deps.isBusy?.() && !entry.pauseRequested && !entry.public.cancelRequested && !disposed && !stoppedByStorage(entry)) await wait(100);
+        // A queue hold (the app is about to restart for its update) waits here too: nothing is submitted meanwhile.
+        while ((deps.isBusy?.() || deps.holdReason?.()) && !entry.pauseRequested && !entry.public.cancelRequested && !disposed && !stoppedByStorage(entry)) await wait(100);
         if (entry.pauseRequested || entry.public.cancelRequested || disposed) continue;
         const childRequest = { workspaceId: entry.public.originWorkspaceId, expectedRevision: entry.public.submittedRevision, requestKey: item.requestKey, mode: entry.public.mode };
         // Written together with the possibly-sent mark below (nothing is sent before it; a restart reads this item as not sent).
@@ -684,6 +692,8 @@ export function createBatchService(deps: BatchDependencies) {
   return {
     ready,
     lookup,
+    /** The hold reason changed: the queued batches are published again (with or without it). */
+    holdChanged() { for (const entry of entries.values()) if (entry.public.status === 'queued') emit(entry); },
     async enqueue(raw: unknown): Promise<BatchJob> {
       await ready;
       const work = accepting.then(async () => {

@@ -87,6 +87,7 @@ When the server does not start the app, `unavailable` says why in its message an
 | `started_not_ready`, `started_exited` | It was started but was not ready within 30 seconds, or closed again |
 | `starting_not_ready` | It was already starting and was not ready within 30 seconds |
 | `lost` | It became ready, but its connection was gone again before the call reached it |
+| `updating` | The app is installing an update (it hands over to its update helper, quits, and the new version opens by itself): the server does not start the old version meanwhile. Call again in a minute |
 
 In every one of these cases nothing was sent. `NOVELAI_MCP_AUTOSTART=0` turns off only the start: a server still
 waits for an app that is already starting.
@@ -312,8 +313,14 @@ anything (`stopReason.code: "queue_halted"`) until someone checks and resumes th
 resent. `read_queue`, `list_queue` and `control_queue` report `stopReason` as `{code, message}`; the codes the queue
 sets are `queue_halted`, `child_stopped`, `child_rejected`, `submission_unconfirmed`, `restart_unconfirmed`,
 `restart_blocked`, `recovered_paused`, `child_lookup_failed`, `child_status_unavailable`, `cancel_unconfirmed`,
-`queue_storage_error`, `scheduler_stopped` and `scheduler_closed`. Resuming a batch the queue paused itself asks for
-confirmation in the app, because it lifts the protection.
+`queue_storage_error`, `scheduler_stopped`, `scheduler_closed` and `update_pending`. Resuming a batch the queue paused
+itself asks for confirmation in the app, because it lifts the protection.
+
+`update_pending` is not a pause: while the app hands over to its update helper (Settings › About › Update and restart,
+a few seconds) it starts no image; queued batches show it with status `queued`. A batch enqueued in that moment calls
+the update off, and the queue then runs as usual. Otherwise the app quits for the update; calls meanwhile answer
+`unavailable` (`details.autostart: "updating"` once the app is gone) until the new version runs (see
+[Updates](updates.md)).
 
 ## Queue retention and cleaned batches
 

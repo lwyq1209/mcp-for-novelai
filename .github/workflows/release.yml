@@ -1,25 +1,30 @@
 # Builds the installers on GitHub-hosted runners and, for a version tag, drafts a GitHub Release with them.
 #
 #   push of a tag v<version>          tests (ci.yml) → 4 builds and checks, third-party sources → SHA256SUMS.txt →
-#                                     draft release (after approval)
+#                                     UNSIGNED draft release (after approval)
 #   workflow_dispatch on a tag        the same
-#   workflow_dispatch on a branch     everything but the draft release (the files stay artifacts of the run)
+#   workflow_dispatch on a branch     everything but the draft release (the files stay artifacts of the run); the two
+#                                     macOS builds fail there: their certificate is available to v* tags only (below)
 #
 # Release files: MCP-for-NovelAI-<version>-mac-arm64.{dmg,zip}, …-mac-x64.{dmg,zip}, …-win-x64-setup.exe (NSIS),
 # …-linux-x64.tar.gz, third-party-sources-<version>.tar.gz (source code of the libraries in the bundled libvips, some of
-# them LGPL; .github/scripts/third-party-sources.mjs), SHA256SUMS.txt and SHA256SUMS.txt.sig.
+# them LGPL; .github/scripts/third-party-sources.mjs) and SHA256SUMS.txt. SHA256SUMS.txt.sig is NOT made here.
 #
 # The in-app update (novelai/client/electron/update/) trusts a release only through SHA256SUMS.txt.sig: the Ed25519
-# signature (base64 of the raw 64 bytes) over the exact bytes of SHA256SUMS.txt, made in the last job with the secret
-# UPDATE_SIGNING_KEY of the environment "release" (.github/scripts/update-signature.mjs). SHA256SUMS.txt is the update
+# signature (base64 of the raw 64 bytes) over the exact bytes of SHA256SUMS.txt. The signing key is held OFFLINE by the
+# maintainer and never is in CI or on GitHub: after this workflow made the draft, the maintainer runs
+# `node .github/scripts/sign-release.mjs <tag> --key <key file>` on their own computer, which checks the draft's files
+# against SHA256SUMS.txt, signs it and uploads SHA256SUMS.txt.sig, and then publishes the draft (docs/updates.md). A
+# release without the signature is refused by the app (it offers the download page only). SHA256SUMS.txt is the update
 # manifest: the app takes its platform's file by the fixed names above (macOS the zip of its architecture, Windows the
 # setup, Linux the tar.gz) and checks that every MCP-for-NovelAI file in it carries the tag's version.
 #
-# macOS builds are signed with the project's fixed self-signed certificate (repository secrets MAC_CSC_LINK, the base64
-# .p12, and MAC_CSC_KEY_PASSWORD) by electron-builder's afterPack hook (novelai/client/scripts/mac-sign.mjs; electron-
-# builder itself does not sign with an untrusted certificate), so the designated requirement is the same in every
-# version; the build fails when the secrets are missing (never an ad-hoc fallback), and packaged-app-check.mjs checks
-# the certificate's SHA-256, the requirement and that the dmg and the zip hold the same signature.
+# macOS builds are signed with the project's fixed self-signed certificate (secrets MAC_CSC_LINK, the base64 .p12, and
+# MAC_CSC_KEY_PASSWORD of the environment "release-build", whose deployments are limited to v* tags) by electron-
+# builder's afterPack hook (novelai/client/scripts/mac-sign.mjs; electron-builder itself does not sign with an untrusted
+# certificate), so the designated requirement is the same in every version; the build fails when the secrets are
+# missing (never an ad-hoc fallback), and packaged-app-check.mjs checks the certificate's SHA-256, the requirement and
+# that the dmg and the zip hold the same signature. Only the two macOS builds use that environment.
 #
 # electron-builder never publishes (--publish never, build.publish null). The draft release is created by the last job,
 # which runs in the protected environment "release" (required reviewers, deployments limited to v* tags: configure it in
@@ -131,6 +136,9 @@ jobs:
     name: build (${{ matrix.name }})
     needs: [prepare, test]
     runs-on: ${{ matrix.os }}
+    # The macOS signing certificate's secrets live in the environment "release-build" (deployments: v* tags only); the
+    # Windows and Linux builds use no environment (an empty name) and never see them.
+    environment: ${{ matrix.environment }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -144,20 +152,24 @@ jobs:
             os: macos-15
             script: dist:mac
             arch: arm64
+            environment: release-build
           # Intel runner: npm ci installs sharp's x64 macOS binaries from the lockfile and the check below runs the
           # x64 app natively. macos-15-intel is GitHub's last x86_64 macOS image (available until August 2027).
           - name: mac-x64
             os: macos-15-intel
             script: dist:mac
             arch: x64
+            environment: release-build
           - name: win-x64
             os: windows-2025
             script: dist
             arch: x64
+            environment: ''
           - name: linux-x64
             os: ubuntu-24.04
             script: dist:linux
             arch: x64
+            environment: ''
     env:
       # The reserved Windows signing steps run only when this is true (no SignPath secret yet: they are skipped).
       SIGNING_CONFIGURED: ${{ secrets.SIGNPATH_API_TOKEN != '' && vars.SIGNPATH_ORGANIZATION_ID != '' }}
@@ -196,7 +208,7 @@ jobs:
           MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
         run: |
           if [ -z "$MAC_CSC_LINK" ] || [ -z "$MAC_CSC_KEY_PASSWORD" ]; then
-            echo "::error::The repository secrets MAC_CSC_LINK and MAC_CSC_KEY_PASSWORD are needed to sign the macOS app."
+            echo "::error::The secrets MAC_CSC_LINK and MAC_CSC_KEY_PASSWORD of the environment release-build are needed to sign the macOS app (a v* tag only)."
             exit 1
           fi
 
@@ -337,16 +349,11 @@ jobs:
           node-version: 24
           package-manager-cache: false
 
-      # The update signature: SHA256SUMS.txt.sig (base64 of the raw Ed25519 signature over SHA256SUMS.txt). Fails when
-      # the secret is missing, when the key is not the one whose public half is built into the app
-      # (electron/update/source.ts), and when OpenSSL does not verify the result (the check docs/updates.md gives users).
-      # The CI update rehearsal runs the same command with a throwaway key (ci.yml, update-rehearsal-signing).
-      - name: Sign SHA256SUMS.txt for the in-app update
-        env:
-          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+      # No update signature here: the maintainer signs the draft offline (sign-release.mjs), so nothing in this
+      # workflow can make a release the app installs.
+      - name: No signature in the release files
         run: |
-          node .github/scripts/update-signature.mjs release --dir files | tee "$RUNNER_TEMP/signature.json"
-          { echo '```json'; cat "$RUNNER_TEMP/signature.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          if [ -e files/SHA256SUMS.txt.sig ]; then echo "::error::SHA256SUMS.txt.sig must not come from CI."; exit 1; fi
 
       - name: Release notes from CHANGELOG.md
         env:
@@ -375,7 +382,8 @@ jobs:
           - `third-party-sources-<version>.tar.gz`: the source code of the libraries in the bundled libvips, some of them
             under the LGPL (see THIRD_PARTY_NOTICES.md).
           - `SHA256SUMS.txt`: the SHA-256 checksum of every file of this release; `SHA256SUMS.txt.sig`: its Ed25519
-            signature, which the in-app update checks (docs/updates.md shows how to check it yourself).
+            signature, made offline by the maintainer, which the in-app update checks (docs/updates.md shows how to
+            check it yourself).
           FILES
 
       - name: Create or update the draft release
@@ -392,10 +400,20 @@ jobs:
               echo "::error::Release $TAG is already published; this workflow does not change a published release."
               exit 1
             fi
-            # A re-run replaces the files of the existing draft.
+            # A re-run replaces the files of the existing draft; a signature made for the old files is removed with
+            # them (the app would refuse it anyway), so the new files must be signed again.
+            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -qx 'SHA256SUMS.txt.sig'; then
+              gh release delete-asset "$TAG" SHA256SUMS.txt.sig --repo "$GITHUB_REPOSITORY" --yes
+            fi
             gh release upload "$TAG" files/* --repo "$GITHUB_REPOSITORY" --clobber
           else
             gh release create "$TAG" files/* --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
               --title "MCP for NovelAI $VERSION" --notes-file "$RUNNER_TEMP/notes.md" "${flags[@]}"
           fi
-          echo "Draft release $TAG is ready: check it, then publish it by hand." >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "Draft release $TAG is ready, UNSIGNED. On the maintainer's computer, with the offline update key:"
+            echo ''
+            echo "    node .github/scripts/sign-release.mjs $TAG --key <update key file>"
+            echo ''
+            echo 'Then check the draft and publish it by hand (docs/updates.md).'
+          } >> "$GITHUB_STEP_SUMMARY"

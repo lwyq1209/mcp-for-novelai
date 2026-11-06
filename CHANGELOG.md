@@ -21,8 +21,16 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
   The app quits normally before it installs; it is never killed.
 - The first start after an update says **Updated to x.y.z** with a link to its release notes, or why the update did not
   complete; what the update left (the old version, the download) is removed.
-- Releases carry `SHA256SUMS.txt.sig`; [docs/updates.md](docs/updates.md) shows how to check it and describes the
+- Releases carry `SHA256SUMS.txt.sig`, made offline by the maintainer with `.github/scripts/sign-release.mjs` (the
+  update key is never in CI or on GitHub); [docs/updates.md](docs/updates.md) shows how to check it and describes the
   threat model.
+- From the hand-over to the update helper until the app quits, the queue starts no image (agents see
+  `stopReason.code: "update_pending"`); a batch that arrives then calls the update off. While an update installs, MCP
+  servers do not start the app: `unavailable` with `details.autostart: "updating"`. An old version opened during the
+  update quits at once. Windows: the helper gives up when another copy of the app (another data folder) runs from the
+  same installation, since the installer would end it.
+- The helper runs with a minimal environment (`/bin/sh -p`), and the downloaded file, the staged app (macOS code
+  signature and certificate) and the Windows installer are checked again right before they are used.
 - `dev-tools/update-rehearsal.mjs` and a fake GitHub release (`dev-tools/lib/fake-release-server.mjs`): a real update
   between two rehearsal builds with throwaway keys; the CI workflow runs it on all three platforms on request.
 

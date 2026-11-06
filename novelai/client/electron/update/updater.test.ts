@@ -62,29 +62,31 @@ function source(): UpdateSource {
 const tarDeps: InstallDeps = {
   fs: { mkdtemp: p => fsp.mkdtemp(p), mkdir: (d, o) => fsp.mkdir(d, o), rm: (t, o) => fsp.rm(t, o), rename: (a, b) => fsp.rename(a, b), readdir: d => fsp.readdir(d), lstat: t => fsp.lstat(t), readFile: f => fsp.readFile(f), writeFile: (f, d, o) => fsp.writeFile(f, d, o), access: (t, m) => fsp.access(t, m) },
   async run(command, args) {
-    if (command !== "tar") return { code: 127, stdout: "", stderr: "" };
+    if (command !== "/usr/bin/tar" && command !== "/bin/tar") return { code: 127, stdout: "", stderr: "" };
     const folder = path.join(args[3], "MCP-for-NovelAI-0.1.4-linux-x64");
     fs.mkdirSync(path.join(folder, "resources"), { recursive: true });
     fs.writeFileSync(path.join(folder, "mcp-for-novelai"), "#!/bin/sh\n", { mode: 0o755 });
     return { code: 0, stdout: "", stderr: "" };
   },
   packagedVersion: async () => "0.1.4",
+  exists: file => file === "/usr/bin/tar",
 };
 
-interface Harness { updater: ReturnType<typeof createUpdater>; launches: HelperLaunch[]; quits: number; events: UpdateProgress[]; busy: { value: boolean } }
+interface Harness { updater: ReturnType<typeof createUpdater>; launches: HelperLaunch[]; quits: number; events: UpdateProgress[]; busy: { value: boolean }; holds: boolean[] }
 function harness(overrides: Partial<UpdaterOptions> = {}, helperAnswers = true): Harness {
-  const h: Harness = { updater: null as any, launches: [], quits: 0, events: [], busy: { value: false } };
+  const h: Harness = { updater: null as any, launches: [], quits: 0, events: [], busy: { value: false }, holds: [] };
   h.updater = createUpdater({
     source: source(), currentVersion: "0.1.3", platform: "linux", arch: "x64", execPath: path.join(root, "apps", "mcp-for-novelai", "mcp-for-novelai"), packaged: true, pid: 4242,
-    updatesDir: path.join(root, "data", "updates"), env: { PATH: "/usr/bin", ELECTRON_RUN_AS_NODE: "1", NOVELAI_DATA_DIR: path.join(root, "data") }, installDeps: tarDeps,
+    updatesDir: path.join(root, "data", "updates"), installDeps: tarDeps,
+    env: { PATH: "/usr/bin", HOME: "/home/u", ELECTRON_RUN_AS_NODE: "1", NOVELAI_DATA_DIR: path.join(root, "data"), DISPLAY: ":1", BASH_ENV: "/tmp/hook", "BASH_FUNC_mv%%": "() { :; }", OPENAI_API_KEY: "secret", HTTPS_PROXY: "http://p" },
     fetchLatest: async () => { const response = await fetch(`${origin}/latest`); const data = await response.json(); return { tag: data.tag_name, releaseUrl: data.html_url }; },
-    requestConfig: () => ({}), queueBusy: () => h.busy.value, quit: () => { h.quits++; },
+    requestConfig: () => ({}), queueBusy: () => h.busy.value, holdQueue: hold => { h.holds.push(hold); }, quit: () => { h.quits++; },
     async startHelper(launch) {
       h.launches.push(launch);
       if (helperAnswers) fs.writeFileSync(path.join(launch.cwd, "helper-state"), "waiting\n");
       return { ok: true };
     },
-    emit: progress => h.events.push(progress), log: () => {}, launchEnv: () => [], launchArgs: () => [], background: false, sleep: async () => {},
+    emit: progress => h.events.push(progress), log: () => {}, launchEnv: () => [`NOVELAI_DATA_DIR=${path.join(root, "data")}`], launchArgs: () => [], background: false, sleep: async () => {},
     ...overrides,
   });
   return h;
@@ -104,10 +106,18 @@ describe.runIf(process.platform !== "win32")("Update and restart", () => {
     const pending = readPending(path.join(root, "data", "updates"))!;
     expect(pending).toMatchObject({ platform: "linux", from: "0.1.3", to: "0.1.4", target: path.join(root, "apps", "mcp-for-novelai") });
     expect(launch.command).toBe(fs.existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh");
-    expect(launch.args).toEqual([path.join(pending.stateDir, "helper.sh"), "linux", pending.stateDir, "4242", pending.target, pending.staging, "0.1.3", "0.1.4", "mcp-for-novelai", "0"]);
-    expect(fs.readFileSync(launch.args[0], "utf8")).toMatch(/^#!\/bin\/sh/);
-    expect(launch.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
-    expect(launch.env.NOVELAI_DATA_DIR).toBe(path.join(root, "data"));
+    expect(launch.args).toEqual(["-p", path.join(pending.stateDir, "helper.sh"), "linux", pending.stateDir, "4242", pending.target, pending.staging, "0.1.3", "0.1.4", "mcp-for-novelai", "0", "-"]);
+    expect(fs.readFileSync(launch.args[1], "utf8")).toMatch(/^#!\/bin\/sh/);
+    // The helper runs with a minimal environment; the restarted app gets the session it needs and the data folder.
+    expect(launch.env).toEqual({ PATH: "/usr/bin:/bin:/usr/sbin:/sbin", HOME: "/home/u" });
+    const appEnv = fs.readFileSync(path.join(pending.stateDir, "launch.env"), "utf8").trim().split("\n");
+    expect(appEnv).toEqual(expect.arrayContaining(["PATH=/usr/bin", "HOME=/home/u", "DISPLAY=:1", `NOVELAI_DATA_DIR=${path.join(root, "data")}`]));
+    expect(appEnv.some(line => /^(ELECTRON_RUN_AS_NODE|BASH_ENV|BASH_FUNC_|OPENAI_API_KEY|HTTPS_PROXY)/.test(line))).toBe(false);
+    // The queue was held from the hand-over on; the marker says an update is being installed.
+    expect(h.holds).toEqual([true]);
+    const marker = JSON.parse(fs.readFileSync(path.join(root, "data", "runtime", "updating.json"), "utf8"));
+    expect(marker).toMatchObject({ schema: 1, id: pending.id, pid: 4242, from: "0.1.3", to: "0.1.4" });
+    expect(Date.parse(marker.expiresAt) - Date.parse(marker.startedAt)).toBe(5 * 60_000);
     expect(fs.existsSync(path.join(pending.staging!, "new", "mcp-for-novelai", "mcp-for-novelai"))).toBe(true);
     expect(fs.readFileSync(path.join(root, "data", "updates", "downloads", "MCP-for-NovelAI-0.1.4-linux-x64.tar.gz")).equals(asset)).toBe(true);
   });
@@ -157,6 +167,49 @@ describe.runIf(process.platform !== "win32")("Update and restart", () => {
     expect(readPending(path.join(root, "data", "updates"))).toBeNull();
   });
 
+  it("withdraws the update and does not quit when a batch arrives while it is handed over (the hold lifted again)", async () => {
+    let checks = 0;
+    const h = harness({
+      queueBusy: () => { checks++; return h.busy.value; },
+      async startHelper(launch) {
+        h.launches.push(launch);
+        // An agent enqueues a batch while the helper is starting (before it writes its first state); once.
+        if (h.launches.length === 1) h.busy.value = true;
+        setTimeout(() => fs.writeFileSync(path.join(launch.cwd, "helper-state"), "waiting\n"), 300);
+        return { ok: true };
+      },
+      sleep: (ms: number) => new Promise(resolve => setTimeout(resolve, Math.min(ms, 50))),
+    });
+    const result = await h.updater.start();
+    expect({ phase: result.phase, queueBusy: result.queueBusy, quits: h.quits }).toEqual({ phase: "ready", queueBusy: true, quits: 0 });
+    expect(checks).toBeGreaterThanOrEqual(3);
+    expect(h.holds).toEqual([true, false]);
+    // Withdrawn: the helper finds its state folder and pending.json gone and stops; the marker is gone too.
+    expect(readPending(path.join(root, "data", "updates"))).toBeNull();
+    expect(fs.existsSync(h.launches[0].cwd)).toBe(false);
+    expect(fs.existsSync(path.join(root, "data", "runtime", "updating.json"))).toBe(false);
+    // The staged version stays; once the queue is idle the next click installs it.
+    expect(staging().length).toBe(1);
+    h.busy.value = false;
+    expect((await h.updater.start()).phase).toBe("installing");
+    expect(h.quits).toBe(1);
+    expect(h.holds).toEqual([true, false, true]);
+  });
+
+  it("checks the downloaded file once more before the hand-over and installs nothing when it changed", async () => {
+    const h = harness();
+    h.busy.value = true;
+    expect((await h.updater.start()).phase).toBe("ready");
+    fs.appendFileSync(path.join(root, "data", "updates", "downloads", "MCP-for-NovelAI-0.1.4-linux-x64.tar.gz"), "x");
+    h.busy.value = false;
+    const result = await h.updater.start();
+    expect([result.phase, result.error?.code, result.error?.reason]).toEqual(["failed", "verify_failed", "package_invalid"]);
+    expect(h.quits).toBe(0);
+    expect(h.launches).toEqual([]);
+    expect(h.holds).toEqual([]);
+    expect(staging()).toEqual([]);
+  });
+
   it("offers only the download page where the app cannot replace itself", async () => {
     if (process.getuid?.() === 0) return;
     fs.chmodSync(path.join(root, "apps"), 0o555);
@@ -192,5 +245,7 @@ describe.runIf(process.platform !== "win32")("Update and restart", () => {
     expect(h.quits).toBe(0);
     expect(readPending(path.join(root, "data", "updates"))).toBeNull();
     expect(fs.existsSync(h.launches[0].cwd)).toBe(false);
+    expect(h.holds).toEqual([true, false]);
+    expect(fs.existsSync(path.join(root, "data", "runtime", "updating.json"))).toBe(false);
   });
 });

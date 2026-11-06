@@ -6,14 +6,14 @@ import { lstat, mkdir, mkdtemp, readdir, rm, symlink, writeFile, utimes } from '
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BridgeError, undeliveredError } from '../src/bridge-client.mjs';
-import { AUTOSTART_LIMITS, AUTOSTART_STATES, CANVAS_RETRY_METHODS, CLAIM_FILE, CLOCK_SLACK_MS, STILL_LOADING, appInstanceState, autostartPolicy, createAutostartBridge, createStartClaim, processStartTime } from '../src/app-autostart.mjs';
+import { AUTOSTART_LIMITS, AUTOSTART_STATES, CANVAS_RETRY_METHODS, CLAIM_FILE, CLOCK_SLACK_MS, STILL_LOADING, UPDATING_FILE, appInstanceState, autostartPolicy, createAutostartBridge, createStartClaim, processStartTime, updateInProgress } from '../src/app-autostart.mjs';
 
 const noBridge = () => undeliveredError('no_bridge', 'unavailable', 'no app');
 const refused = fingerprint => undeliveredError('refused', 'unavailable', 'gone', undefined, fingerprint);
 const APP = { ok: true, kind: 'packaged', platform: 'darwin', executable: '/A.app/Contents/MacOS/A', args: [], macApp: '/A.app' };
 
 /** A world with a fake clock: `bridge` is the bridge.json fingerprint (null: none), `running` the app's lock. */
-function world({ policy = { launch: true, reason: null }, app = APP, launchResult = { ok: true, via: 'open' }, onLaunch, fresh = false, claimWins = true, limits } = {}) {
+function world({ policy = { launch: true, reason: null }, app = APP, launchResult = { ok: true, via: 'open' }, onLaunch, fresh = false, claimWins = true, limits, updating = false } = {}) {
   const state = { now: 0, bridge: null, running: false, launches: [], sleeps: 0, fresh, claimWins };
   const launcher = { resolve: () => app, launch: async (resolved, options) => { state.launches.push({ resolved, options }); await onLaunch?.(state); return launchResult; } };
   const options = {
@@ -24,6 +24,7 @@ function world({ policy = { launch: true, reason: null }, app = APP, launchResul
     bridgeFingerprint: async () => state.bridge,
     // As the real claim file: losing the claim means another server's claim is fresh.
     claims: { fresh: async () => state.fresh, claim: async () => { if (!state.claimWins) state.fresh = true; return state.claimWins; } },
+    updateInProgress: async () => updating,
     log: () => {},
   };
   return { state, options };
@@ -173,7 +174,47 @@ test('what an unavailable says when the app is not started: off, off in tests, u
     assert.ok(w.state.now <= AUTOSTART_LIMITS.waitMs, `${state} waited at most 30 s`);
     assert.equal(w.state.launches.length, ['off', 'off_in_tests', 'unsupported'].includes(state) ? 0 : 1, state);
   }
-  assert.ok(AUTOSTART_STATES.includes('lost') && AUTOSTART_STATES.length === 9);
+  assert.ok(AUTOSTART_STATES.includes('lost') && AUTOSTART_STATES.includes('updating') && AUTOSTART_STATES.length === 10);
+});
+
+test('while the app installs an update nothing is started: unavailable, details.autostart updating; a new version that is starting is waited for', async () => {
+  for (const policy of [{ launch: true, reason: null }, { launch: false, reason: 'off' }]) {
+    const w = world({ updating: true, policy });
+    await assert.rejects(createAutostartBridge(client([noBridge()]), w.options).call('enqueue_queue_recipes', { requestKey: 'k' }), error => {
+      assert.equal(error.code, 'unavailable'); assert.deepEqual(error.details, { autostart: 'updating' });
+      assert.match(error.message, /installing an update and opens again by itself in a moment/); assert.match(error.message, /Nothing was sent\./); return true;
+    });
+    assert.equal(w.state.launches.length, 0);
+  }
+  // The new version is already starting (its lock): waited for, then the call is sent.
+  const w = world({ updating: true });
+  w.state.running = true; w.state.tick = x => { if (x.now >= 1000) x.bridge = 'new'; };
+  const bridge = client([noBridge()]);
+  assert.deepEqual(await createAutostartBridge(bridge, w.options).call('list_queue', {}), { ok: 'list_queue' });
+  assert.equal(w.state.launches.length, 0);
+});
+
+test('updateInProgress reads the app\'s marker: valid while not expired and its helper lives (or briefly before it wrote its pid)', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'nai-updating-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const id = 'a'.repeat(24), now = Date.parse('2026-11-06T12:00:00Z');
+  await mkdir(join(root, 'runtime'), { recursive: true });
+  await mkdir(join(root, 'updates', id), { recursive: true });
+  const marker = (startedAt, extra = {}) => writeFile(join(root, 'runtime', UPDATING_FILE), JSON.stringify({ schema: 1, id, pid: 1, from: '0.1.3', to: '0.1.4', startedAt: new Date(startedAt).toISOString(), expiresAt: new Date(startedAt + 5 * 60_000).toISOString(), ...extra }));
+  assert.equal(await updateInProgress(root, { now }), false, 'no marker');
+  await marker(now - 1000);
+  assert.equal(await updateInProgress(root, { now }), true, 'fresh, no helper pid yet');
+  assert.equal(await updateInProgress(root, { now: now + 60_000 }), false, 'no helper ever wrote its pid');
+  await writeFile(join(root, 'updates', id, 'helper-pid'), '4242\n');
+  assert.equal(await updateInProgress(root, { now: now + 60_000, isAlive: pid => pid === 4242 }), true, 'helper alive');
+  assert.equal(await updateInProgress(root, { now: now + 60_000, isAlive: () => false }), false, 'helper gone');
+  assert.equal(await updateInProgress(root, { now: now + 6 * 60_000, isAlive: () => true }), false, 'expired');
+  await marker(now, { expiresAt: new Date(now + 60 * 60_000).toISOString() });
+  assert.equal(await updateInProgress(root, { now, isAlive: () => true }), false, 'too far ahead');
+  await marker(now, { id: '../x' });
+  assert.equal(await updateInProgress(root, { now, isAlive: () => true }), false, 'not an id');
+  await writeFile(join(root, 'runtime', UPDATING_FILE), '{nope');
+  assert.equal(await updateInProgress(root, { now }), false, 'garbage');
 });
 
 test('after a start by this call, workspace_not_ready is sent again every 500 ms within the same 30 s; nothing else is', async () => {
