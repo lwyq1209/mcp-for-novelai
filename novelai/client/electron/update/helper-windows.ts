@@ -35,6 +35,8 @@ param(
   [int]$OthersTimeout = 15
 )
 $ErrorActionPreference = 'Continue'
+# The modules it uses, by name: no command discovery over every installed module before the first step.
+Import-Module Microsoft.PowerShell.Management, Microsoft.PowerShell.Utility, CimCmdlets -ErrorAction SilentlyContinue
 
 function Write-Log([string]$Message) {
   try { Add-Content -LiteralPath (Join-Path $State 'helper.log') -Value ('{0} {1}' -f [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'), $Message) -Encoding UTF8 } catch { }

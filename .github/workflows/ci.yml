@@ -196,7 +196,7 @@ jobs:
             head -c 4096 /dev/urandom > "$assets/MCP-for-NovelAI-9.9.9-$name"
           done
           head -c 1024 /dev/urandom > "$assets/third-party-sources-9.9.9.tar.gz"
-          (cd "$assets" && find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort | xargs sha256sum > SHA256SUMS.txt)
+          (cd "$assets" && find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort | xargs sha256sum > "$dir/SHA256SUMS.txt") && mv "$dir/SHA256SUMS.txt" "$assets/"
           echo '{"isDraft": true}' > "$dir/gh/$tag/release.json"
           public=$(node .github/scripts/update-signature.mjs keygen --out "$dir/key.pem" | node -e 'process.stdin.on("data",d=>process.stdout.write(JSON.parse(d).publicKey))')
           export FAKE_GH_ROOT="$dir/gh"

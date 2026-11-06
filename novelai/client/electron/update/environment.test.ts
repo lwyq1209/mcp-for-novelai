@@ -21,11 +21,11 @@ describe("the update helper's environment", () => {
 
   it("Windows: the system's folders and facts plus the hand-over lines (the restarted app gets it through WMI)", () => {
     const env = { SystemRoot: "C:\\Windows", windir: "C:\\Windows", ComSpec: "C:\\Windows\\system32\\cmd.exe", Path: "C:\\Windows\\system32", PATHEXT: ".COM;.EXE", TEMP: "C:\\T", TMP: "C:\\T",
-      USERPROFILE: "C:\\Users\\u", APPDATA: "C:\\Users\\u\\AppData\\Roaming", LOCALAPPDATA: "C:\\Users\\u\\AppData\\Local", PSModulePath: "C:\\Program Files\\WindowsPowerShell\\Modules",
+      USERPROFILE: "C:\\Users\\u", APPDATA: "C:\\Users\\u\\AppData\\Roaming", LOCALAPPDATA: "C:\\Users\\u\\AppData\\Local", PSModulePath: "C:\\Program Files\\WindowsPowerShell\\Modules", PSModuleAnalysisCachePath: "C:\\PSModuleAnalysisCachePath\\ModuleAnalysisCache",
       "ProgramFiles(x86)": "C:\\Program Files (x86)", NUMBER_OF_PROCESSORS: "8", PROCESSOR_ARCHITECTURE: "AMD64", OS: "Windows_NT",
       PSExecutionPolicyPreference: "Unrestricted", ELECTRON_RUN_AS_NODE: "1", OPENAI_API_KEY: "x", HTTPS_PROXY: "http://p", NOVELAI_DATA_DIR: "D:\\old", BASH_ENV: "x" };
     const helper = helperEnvironment("win32", env, ["NOVELAI_DATA_DIR=D:\\data"]);
-    expect(Object.keys(helper).sort()).toEqual(["APPDATA", "ComSpec", "LOCALAPPDATA", "NOVELAI_DATA_DIR", "NUMBER_OF_PROCESSORS", "OS", "PATHEXT", "PROCESSOR_ARCHITECTURE", "PSModulePath", "Path", "ProgramFiles(x86)", "SystemRoot", "TEMP", "TMP", "USERPROFILE", "windir"].sort());
+    expect(Object.keys(helper).sort()).toEqual(["APPDATA", "ComSpec", "LOCALAPPDATA", "NOVELAI_DATA_DIR", "NUMBER_OF_PROCESSORS", "OS", "PATHEXT", "PROCESSOR_ARCHITECTURE", "PSModuleAnalysisCachePath", "PSModulePath", "Path", "ProgramFiles(x86)", "SystemRoot", "TEMP", "TMP", "USERPROFILE", "windir"].sort());
     expect(helper.NOVELAI_DATA_DIR).toBe("D:\\data");
     // Case-insensitive names: one PATH only.
     expect(Object.keys(helperEnvironment("win32", { PATH: "a", Path: "b" }, []))).toHaveLength(1);

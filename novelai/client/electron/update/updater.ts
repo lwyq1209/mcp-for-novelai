@@ -52,6 +52,8 @@ export const UPDATE_FILE_MAX_BYTES = 1024 * 1024 * 1024;
 export const DOWNLOAD_ATTEMPTS = 3;
 /** The helper must have written its first state within this time, else the app does not quit. */
 export const HELPER_START_TIMEOUT_MS = 10_000;
+/** Windows: PowerShell started through WMI can take much longer on a cold or busy system. */
+export const HELPER_START_TIMEOUT_WINDOWS_MS = 30_000;
 
 export interface HelperLaunch {
   platform: "darwin" | "linux" | "win32";
@@ -323,7 +325,7 @@ export function createUpdater(options: UpdaterOptions): Updater {
       const started = await options.startHelper(launch);
       if (!started.ok) throw new Error(started.reason);
       // The helper says it runs (its first state) before the app quits.
-      const until = Date.now() + HELPER_START_TIMEOUT_MS;
+      const until = Date.now() + (options.platform === "win32" ? HELPER_START_TIMEOUT_WINDOWS_MS : HELPER_START_TIMEOUT_MS);
       while (!helperAnswered(stateDir)) {
         if (Date.now() > until) throw new Error("The update helper did not start.");
         await sleep(100);

@@ -8,12 +8,13 @@
 //   bus, XDG folders, input methods, scaling) plus the hand-over lines (NOVELAI_DATA_DIR of a custom data root,
 //   NOVELAI_PROJECT_ROOT, a rehearsal build's test variables).
 // - Windows helper (and so the restarted app, which gets the helper's environment through WMI): Windows' system
-//   folders, user profile and processor facts plus the same hand-over lines.
+//   folders, user profile and processor facts, PowerShell's module path and module analysis cache (without the cache
+//   a cold PowerShell analyses every installed module first: 25 s on a CI runner), plus the same hand-over lines.
 // - macOS restarted app: LaunchServices gives it the user session's environment; `open --env` adds the hand-over lines.
 export const HELPER_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
 
 const KEEP = {
-  win32: /^(SystemRoot|windir|ComSpec|PATHEXT|PATH|TEMP|TMP|USERPROFILE|APPDATA|LOCALAPPDATA|HOMEDRIVE|HOMEPATH|USERNAME|USERDOMAIN|COMPUTERNAME|ProgramFiles|ProgramFiles\(x86\)|ProgramW6432|CommonProgramFiles|CommonProgramFiles\(x86\)|CommonProgramW6432|ProgramData|ALLUSERSPROFILE|PUBLIC|SystemDrive|PSModulePath|NUMBER_OF_PROCESSORS|PROCESSOR_[A-Z0-9_]+|OS)$/i,
+  win32: /^(SystemRoot|windir|ComSpec|PATHEXT|PATH|TEMP|TMP|USERPROFILE|APPDATA|LOCALAPPDATA|HOMEDRIVE|HOMEPATH|USERNAME|USERDOMAIN|COMPUTERNAME|ProgramFiles|ProgramFiles\(x86\)|ProgramW6432|CommonProgramFiles|CommonProgramFiles\(x86\)|CommonProgramW6432|ProgramData|ALLUSERSPROFILE|PUBLIC|SystemDrive|PSModulePath|PSModuleAnalysisCachePath|NUMBER_OF_PROCESSORS|PROCESSOR_[A-Z0-9_]+|OS)$/i,
   linuxApp: /^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LANGUAGE|LC_[A-Z_]+|TZ|TMPDIR|DISPLAY|WAYLAND_DISPLAY|XAUTHORITY|XDG_[A-Z0-9_]+|DBUS_SESSION_BUS_ADDRESS|DESKTOP_SESSION|GNOME_DESKTOP_SESSION_ID|KDE_FULL_SESSION|KDE_SESSION_VERSION|GTK_IM_MODULE|QT_IM_MODULE|XMODIFIERS|SDL_IM_MODULE|GDK_SCALE|GDK_DPI_SCALE|QT_SCALE_FACTOR|QT_AUTO_SCREEN_SCALE_FACTOR)$/,
   posixHelper: /^(HOME|TMPDIR|USER|LOGNAME|LANG|LC_[A-Z_]+)$/,
 };
