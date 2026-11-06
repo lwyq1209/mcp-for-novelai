@@ -129,6 +129,12 @@ describe('canvas capture keeps the canvas prompt assembly', () => {
   });
 });
 
+/** A V5 Full canvas on Medium effort whose stored steps, sampler, CFG rescale, UC preset and negatives Medium replaces. */
+const mediumCanvas = (over: Record<string, any> = {}) => canvas({
+  params: { ...canvas().params, model: 'nai-diffusion-5-full', effort: 'medium', steps: 28, sampler: 'k_dpmpp_2m', cfgRescale: 0.2, ucPreset: 2, noiseSchedule: 'karras' },
+  charCaptions: [{ id: 'c1', prompt: 'girl A', negativePrompt: 'hat', useCoords: false, x: 0.5, y: 0.5 }], ...over,
+});
+
 /** Fields the canvas freeze has and the queue deliberately does not take over (user decisions, 2026-11-02). */
 const comparable = (snapshot: any) => { const copy = structuredClone(snapshot); delete copy.extras?.historyGroupId; delete copy.batchCount; return copy; };
 const modes: Array<[string, GenerationMode, () => any]> = [
@@ -144,6 +150,11 @@ const modes: Array<[string, GenerationMode, () => any]> = [
   ['inpaint, legacy recipe, historical assembly', 'inpaint', () => canvas({ params: legacyParams(), inpaintMask: MASK, inpaintPositivePrompt: 'red coat, red coat' })],
   ['inpaint, independent version-1 recipe', 'inpaint', () => canvas({ inpaintMask: MASK, inpaintRecipe: { ...DEFAULT_PARAMS, model: 'nai-diffusion-4-5-full', positivePrompt: 'silver brooch', steps: 24, seed: 9, seedMode: 'fixed' } })],
   ['inpaint, independent recipe, historical assembly', 'inpaint', () => canvas({ inpaintMask: MASK, inpaintRecipe: legacyRecipe() })],
+  ['t2i, V5 Full Medium effort', 't2i', () => mediumCanvas({ workbenchImage: null })],
+  ['i2i, V5 Full Medium effort', 'i2i', () => mediumCanvas()],
+  ['inpaint, legacy recipe, V5 Full Medium effort', 'inpaint', () => mediumCanvas({ inpaintMask: MASK, inpaintPositivePrompt: 'red coat', inpaintModel: 'nai-diffusion-5-full-inpainting', charCaptions: [] })],
+  ['inpaint, independent recipe, V5 Full Medium effort', 'inpaint', () => canvas({ inpaintMask: MASK, inpaintModel: 'nai-diffusion-5-full-inpainting', inpaintRecipe: { ...DEFAULT_PARAMS, model: 'nai-diffusion-5-full', effort: 'medium', positivePrompt: 'silver brooch', negativePrompt: 'lowres', steps: 24, seed: 9, seedMode: 'fixed' } })],
+  ['enhance, Max✨ (runs High)', 'enhance', () => mediumCanvas({ enhanceScale: 'max', charCaptions: [] })],
 ];
 
 describe('captured canvas recipes freeze what the retired canvas submit froze', () => {
@@ -159,5 +170,42 @@ describe('captured canvas recipes freeze what the retired canvas submit froze', 
     const review = await h.review(mode);
     if (review.effective?.request?.input !== undefined) expect(saved.snapshot.reviewInput.effective.request.input).toBe(review.effective.request.input);
     expect(saved.snapshot.reviewInput.effective).toEqual(review.effective);
+  });
+});
+
+describe('canvas capture of V5 Full Effort and Enhance Max✨ (read_prompt_review and prepare_recipe {canvas} agree)', () => {
+  it('a Medium canvas is captured as the Medium request: model id, fixed values, Heavy UC, no negatives', async () => {
+    const h = await setup(); h.setCanvas(mediumCanvas({ workbenchImage: null }));
+    const review = await h.review('t2i'), saved = await h.capture('t2i');
+    expect(saved.snapshot.reviewInput.effective).toEqual(review.effective);
+    const request = saved.snapshot.reviewInput.effective.request;
+    expect(request.model).toBe('nai-diffusion-5-full-medium');
+    expect(request.parameters).toMatchObject({ steps: 14, sampler: 'k_euler_ancestral', cfg_rescale: 0, ucPreset: 0, tag_hint_uc_preset: 2 });
+    expect(request.parameters.uc).toMatch(/^nsfw, lowres, artistic error, /);
+    expect(request.parameters.v4_negative_prompt.caption.char_captions).toEqual([]);
+    // The canvas keeps its own values (they come back on High); the frozen queue input carries what runs.
+    expect(saved.snapshot.reviewInput.authored.params).toMatchObject({ effort: 'medium', steps: 28, sampler: 'k_dpmpp_2m' });
+    expect((await h.freeze(saved)).params).toMatchObject({ effort: 'medium', steps: 14, sampler: 'k_euler_ancestral', cfgRescale: 0, ucPreset: 0, negativePrompt: '' });
+  });
+
+  it('inpaint follows the inpainting model; Medium on V4.5 is listed as unused', async () => {
+    const h = await setup();
+    h.setCanvas(mediumCanvas({ inpaintMask: MASK, inpaintPositivePrompt: 'red coat', inpaintModel: 'nai-diffusion-5-full-inpainting', charCaptions: [] }));
+    expect((await h.capture('inpaint')).snapshot.reviewInput.effective.request.model).toBe('nai-diffusion-5-full-medium-inpainting');
+    h.setCanvas(mediumCanvas({ params: { ...mediumCanvas().params, model: 'nai-diffusion-4-5-full' }, workbenchImage: null }));
+    const review = await h.review('t2i');
+    expect(review.effective!.request.model).toBe('nai-diffusion-4-5-full');
+    expect(review.effective!.request.parameters.steps).toBe(28);
+    expect(review.unusedInputs).toContain('params.effort');
+  });
+
+  it('Enhance Max✨: upscaled_enhance with the source at its own (64-aligned) size, and the expected result size', async () => {
+    const h = await setup(); h.setCanvas(mediumCanvas({ enhanceScale: 'max', charCaptions: [], workbenchImage: { filePath: '/canvas/source.png', fileUrl: 'source', width: 64, height: 96 } }));
+    const saved = await h.capture('enhance');
+    const effective = saved.snapshot.reviewInput.effective;
+    expect(effective.request.model).toBe('nai-diffusion-5-full');
+    expect(effective.request.parameters).toMatchObject({ upscaled_enhance: true, width: 64, height: 128, steps: 28 });
+    expect(effective.sampling.processing).toEqual({ inputWidth: 64, inputHeight: 128, outputWidth: 128, outputHeight: 256, resizedInput: true, alphaFlattened: false, upscaledEnhance: true });
+    expect(saved.snapshot.reviewInput.unusedInputs).toContain('params.effort');
   });
 });

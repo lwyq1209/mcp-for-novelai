@@ -45,7 +45,7 @@ export interface EditablePatch {
   inpaintPositivePrompt?: string;
   inpaintRecipe?: Partial<GenerateParams> | null;
   enhanceMagnitude?: number;
-  enhanceScale?: number;
+  enhanceScale?: number | "max";
   upscaleScale?: number;
   directorTool?: DirectorTool;
   augmentOptions?: Partial<AugmentOptions>;
@@ -155,7 +155,7 @@ export function validatePatch(input: unknown, current: CreativeState): EditableP
   const patch: EditablePatch = {};
   if ("params" in source) {
     const params = record(source.params, "params");
-    keysOnly(params, new Set([...Object.keys(DEFAULT_PARAMS), "preservePromptText", "metadataReplay"]), "params");
+    keysOnly(params, new Set([...Object.keys(DEFAULT_PARAMS), "preservePromptText", "metadataReplay", "effort"]), "params");
     for (const [key, value] of Object.entries(params)) {
       if (key === "metadataReplay") {
         const replay = record(value, "metadataReplay");
@@ -167,6 +167,8 @@ export function validatePatch(input: unknown, current: CreativeState): EditableP
         for (const role of ["positive", "negative"] as const) if (replay[role]) keysOnly(record(replay[role], `metadataReplay.${role}`), new Set(["use_order", "legacy_uc"]), `metadataReplay.${role}`);
         continue;
       }
+      // V5 Full Effort: "high" clears it (absent = high), "medium" sets it (src/nai-effort.ts).
+      if (key === "effort") { if (value !== "high" && value !== "medium") throw new WorkspaceError("invalid_argument", "params.effort must be \"high\" or \"medium\"."); continue; }
       const exemplar = key === "preservePromptText" ? true : DEFAULT_PARAMS[key as keyof GenerateParams];
       if (typeof value !== typeof exemplar || (typeof value === "number" && !Number.isFinite(value)) || (key === "promptAssemblyVersion" && value !== 1)) throw new WorkspaceError("invalid_argument", `Invalid params.${key}.`);
     }
@@ -201,7 +203,9 @@ export function validatePatch(input: unknown, current: CreativeState): EditableP
   if ("inpaintStrength" in source) patch.inpaintStrength = number(source.inpaintStrength, "inpaintStrength", 0, 1);
   if ("inpaintNoise" in source) patch.inpaintNoise = number(source.inpaintNoise, "inpaintNoise", 0, 0.99);
   if ("inpaintPositivePrompt" in source) patch.inpaintPositivePrompt = string(source.inpaintPositivePrompt, "inpaintPositivePrompt");
-  for (const key of ["enhanceMagnitude", "enhanceScale", "upscaleScale"] as const) if (key in source) {
+  // Enhance Max✨ (V5): enhanceScale "max" (src/nai-dimensions.ts maxEnhanceInputSize).
+  if (source.enhanceScale === "max") patch.enhanceScale = "max";
+  for (const key of ["enhanceMagnitude", "enhanceScale", "upscaleScale"] as const) if (key in source && !(key === "enhanceScale" && source[key] === "max")) {
     const value = number(source[key], key, 1, key === "enhanceMagnitude" ? 10 : key === "upscaleScale" ? 4 : 2);
     if (!Number.isInteger(value) || (key === "upscaleScale" && ![2, 4].includes(value))) throw new WorkspaceError("invalid_argument", `Invalid ${key}.`);
     patch[key] = value;

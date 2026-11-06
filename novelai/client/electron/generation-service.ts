@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { createHash, randomInt, randomUUID } from 'node:crypto';
 import { NAI_MODELS, NAI_INPAINT_MODELS, normalizeGenerateParams, type GenerateResult, type HistoryItem } from '../src/types';
+import { applyNAIEffort, naiEffortOf, naiRequestModel } from '../src/nai-effort';
 import { GENERATION_MODES, isSeededGeneration } from "../src/workspace/generation-types";
 import { QUEUE_UPSCALE_MODEL, resolvePostprocessRecipe } from "../src/workspace/generation-postprocess";
 import type { GenerationJob, GenerationRequest, GenerationSnapshot, GenerationResult } from '../src/workspace/generation-types';
@@ -226,6 +227,11 @@ export function createGenerationService(deps: Dependencies) {
       if (args.mode === 'inpaint' && snapshot.extras.charCaptions.length) return fail('unsupported_configuration', 'Queued inpaint does not send character prompts yet; keep the setup and use another mode.');
       if (!manual && args.mode === 'inpaint' && snapshot.extras.modelMode === 'furry') return fail('unsupported_configuration', 'Queued inpaint does not send the Furry mode yet; keep the setup and use another mode.');
       snapshot.params = normalizeGenerateParams(snapshot.params);
+      // V5 Full Effort: what runs (fixed Medium values, or no effort at all) on this mode's execution model; enhance
+      // (also a manual Max✨ enhance, an i2i request with upscaledEnhance) always runs High.
+      const effortModel = args.mode === 'inpaint' ? snapshot.inpaint?.model ?? '' : args.mode === 't2i' || (args.mode === 'i2i' && snapshot.i2i?.upscaledEnhance !== true) ? snapshot.params.model : '';
+      snapshot.params = applyNAIEffort(snapshot.params, effortModel).params;
+      const requestModel = naiRequestModel(effortModel || snapshot.params.model, naiEffortOf(snapshot.params, effortModel));
       if (!isSeededGeneration(args.mode)) snapshot.extras = { ...snapshot.extras, vibeImages: [], preciseReferences: [], charCaptions: [] };
       if (isSeededGeneration(args.mode) && !snapshot.params.positivePrompt.trim()) return fail('invalid_arguments', 'Enter a positive prompt.', 'generation.no_prompt');
       const actualSeed = !isSeededGeneration(args.mode) ? null : snapshot.params.seedMode === 'random' || snapshot.params.seed < 0 ? randomInt(1, 2_147_483_647) : snapshot.params.seed;
@@ -273,7 +279,7 @@ export function createGenerationService(deps: Dependencies) {
       const historySeedMode = manual && isSeededGeneration(args.mode) && record(raw).historySeedMode === 'random' ? 'random' as const : undefined;
       const entry: Entry = { snapshot, sourceBytes, maskSummary, controller: new AbortController(), items: [], release, ...(queue ? { queue } : {}), ...(manual ? { manual: true as const } : {}), ...(historySeedMode ? { historySeedMode } : {}), public: {
         jobId, workspaceId: args.workspaceId, originWorkspaceId: args.workspaceId, submittedRevision, expectedRevision: args.expectedRevision, requestKey: args.requestKey, mode: args.mode, ...(args.draftId === undefined ? {} : { draftId: args.draftId }),
-        status: 'preparing', createdAt: now, updatedAt: now, startedAt: null, finishedAt: null, model: args.mode === 'inpaint' ? snapshot.inpaint!.model : args.mode === 'upscale' ? QUEUE_UPSCALE_MODEL : args.mode === 'director' ? `director-${snapshot.director!.tool}` : snapshot.params.model,
+        status: 'preparing', createdAt: now, updatedAt: now, startedAt: null, finishedAt: null, model: args.mode === 'upscale' ? QUEUE_UPSCALE_MODEL : args.mode === 'director' ? `director-${snapshot.director!.tool}` : requestModel,
         actualSeed, providerRequestId: null, inputSummary: { sampleCount: 1, width: snapshot.processing?.outputWidth ?? snapshot.params.width, height: snapshot.processing?.outputHeight ?? snapshot.params.height, steps: snapshot.params.steps, sampler: snapshot.params.sampler, cfgScale: snapshot.params.cfgScale, characterCount: snapshot.extras.charCaptions.length, ...(source ? { source } : {}), ...(snapshot.batchCount && snapshot.batchCount > 1 ? { ignoredBatchCount: snapshot.batchCount } : {}) },
         quote: { source: 'unavailable', amount: null }, error: null, results: [], cancelRequested: false, providerOutcome: 'not_submitted',
       } };

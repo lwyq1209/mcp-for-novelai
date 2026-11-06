@@ -5,6 +5,7 @@ import { WorkspaceError } from "./protocol";
 import type { CreativeState } from "./state";
 import { isSeededGeneration, type GenerationMode, type GenerationSnapshot } from "./generation-types";
 import { resolvePostprocessRecipe } from "./generation-postprocess";
+import { applyNAIEffort } from "../nai-effort";
 
 export async function freezeGenerationInput(
   current: CreativeState,
@@ -20,8 +21,11 @@ export async function freezeGenerationInput(
   if (independentInpaint && params.model !== baseModelForInpaint(state.inpaintModel)) throw new WorkspaceError("invalid_configuration", "The independent recipe model must match the selected inpaint model.");
   if (mode === "inpaint" && !independentInpaint) params.positivePrompt = state.inpaintPositivePrompt;
   if (isSeededGeneration(mode) && !params.positivePrompt.trim()) throw new WorkspaceError("invalid_configuration", "Enter a positive prompt for this generation mode first.");
+  // V5 Full Effort: Medium's fixed steps, sampler, CFG rescale, UC preset and empty negative prompt are frozen as
+  // they will run (its execution model: the inpainting model for inpaint). Enhance drops it (resolvePostprocessRecipe).
+  const effective = mode === "t2i" || mode === "i2i" || mode === "inpaint" ? applyNAIEffort(params, mode === "inpaint" ? state.inpaintModel : params.model).params : params;
   const snapshot: GenerationSnapshot = {
-    params,
+    params: effective,
     extras: {
       vibeImages: [], preciseReferences: [],
       charCaptions: (isSeededGeneration(mode) && !independentInpaint ? state.charCaptions : []).map(({ prompt, negativePrompt, useCoords, x, y }: CharCaption) => ({ prompt, negativePrompt, useCoords, x, y })),
@@ -38,10 +42,10 @@ export async function freezeGenerationInput(
     if (mode === "inpaint") {
       if (!state.inpaintMask) throw new WorkspaceError("invalid_mask", "Paint or apply a mask before submitting inpaint.");
       snapshot.inpaint = { model: state.inpaintModel, maskBase64: state.inpaintMask, strength: state.inpaintStrength, noise: 0 };
-      Object.assign(params, { width: source.width, height: source.height });
+      Object.assign(snapshot.params, { width: source.width, height: source.height });
     } else if (mode === "i2i") {
       snapshot.i2i = { ...state.i2iParams };
-      if (state.i2iSizeMode === "adaptive") Object.assign(params, adaptiveNAIImageSize(source.width, source.height, params));
+      if (state.i2iSizeMode === "adaptive") Object.assign(snapshot.params, adaptiveNAIImageSize(source.width, source.height, snapshot.params));
     }
     if (mode === "enhance") {
       snapshot.enhance = { magnitude: state.enhanceMagnitude, scale: state.enhanceScale, requestedNoise: 0 };

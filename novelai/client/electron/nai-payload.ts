@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { assertPromptAssemblyVersion, isNAIV4PlusModel, isNAIV5Model, maxNAICharacterPrompts, MAX_NAI_SEED,
   normalizeGenerateParams, NAI_INPAINT_MODELS, supportsNAIPreciseReference, supportsNAIVibeTransfer, supportsNAIVariety,
   type GenerateParams, type GenerateExtras } from "../src/types";
+import { applyNAIEffort, naiMediumUndesiredContent, naiRequestModel, NAI_MEDIUM_UC_PRESET_HINT } from "../src/nai-effort";
 
 function isV4Plus(model: string) { return isNAIV4PlusModel(model); }
 function usesModernStructuredPrompt(model: string) { return isNAIV4PlusModel(model); }
@@ -207,6 +208,13 @@ export function buildPayload(
     ...normalizeGenerateParams(params as GenerateParams),
     ...(inpaintModel ? { model: inpaintModel } : {}),
   } as PayloadParams;
+  // V5 Full Effort: Medium fixes steps, sampler, CFG rescale, the UC preset and the negative prompts, and runs the
+  // Medium checkpoint (src/nai-effort.ts, from the official client). params.model stays the execution model, so the
+  // quality and UC tables below keep reading V5 Full; only the model sent changes.
+  const effort = applyNAIEffort(params as GenerateParams, params.model);
+  params = effort.params as PayloadParams;
+  const medium = effort.effort === "medium";
+  const requestModel = naiRequestModel(params.model, effort.effort);
   actualSeed = Math.min(MAX_NAI_SEED, Math.max(0, Math.round(Number.isFinite(Number(actualSeed)) && Number(actualSeed) >= 0 ? Number(actualSeed) : 1)));
   const merge = promptSegmentAssembler(params);
   const replay = params.metadataReplay?.model === params.model ? params.metadataReplay : undefined;
@@ -228,12 +236,17 @@ export function buildPayload(
   const effectivePrompt = transparentBackground
     ? merge(qualityPrompt, "transparent background")
     : qualityPrompt;
-  const effectiveNegative = merge(
-    params.negativePrompt,
-    ucPresetText(params.model, params.ucPreset),
-  );
+  // Medium: the Heavy text alone (its negative prompt is empty), with the official `nsfw, ` rule.
+  const effectiveNegative = medium
+    ? naiMediumUndesiredContent(effectivePrompt, ucPresetText(params.model, params.ucPreset))
+    : merge(
+      params.negativePrompt,
+      ucPresetText(params.model, params.ucPreset),
+    );
   const v4Plus = isV4Plus(params.model);
-  const cleanedCharCaptions = normalizedCharCaptions(extras, params.model, params.preservePromptText, params.preservePromptText || params.promptAssemblyVersion === 1);
+  const cleanedCharCaptions = normalizedCharCaptions(extras, params.model, params.preservePromptText, params.preservePromptText || params.promptAssemblyVersion === 1)
+    // Medium takes no per-character undesired content either (the official builder sends every character's uc as "").
+    .map((caption) => medium ? { ...caption, negativePrompt: "" } : caption);
   const inputPrompt =
     charCaptionMode === "pipe"
       ? withPipeCharCaptions(effectivePrompt, cleanedCharCaptions)
@@ -281,6 +294,8 @@ export function buildPayload(
     parameters.tag_hint_transparent_background = transparentBackground;
     parameters.straight_alpha = transparentBackground;
   }
+  // Every official Medium request names its fixed Heavy preset (even where High leaves the hint out).
+  if (medium) parameters.tag_hint_uc_preset = NAI_MEDIUM_UC_PRESET_HINT;
 
   // "Variety+" is implemented by skipping CFG above a sigma threshold — NovelAI
   // has no boolean `variety` field, so the previous `variety: true` was a no-op.
@@ -400,7 +415,7 @@ export function buildPayload(
 
   return {
     input: inputPrompt,
-    model: params.model,
+    model: requestModel,
     action: "generate",
     parameters,
   };

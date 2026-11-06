@@ -90,6 +90,9 @@ export async function buildPromptReview(preparation: PromptReviewPreparation): P
     };
     const snapshot = await freezeGenerationInput(state, mode, async () => ({ mimeType: source!.mimeType, data: source!.data }));
     for (const key of snapshot.unusedInputs ?? []) unused.add(key);
+    // A Medium effort the execution model does not have (not V5 Full / V5 Full inpainting) is not sent.
+    const scoped = independent ? state.inpaintRecipe : state.params;
+    if (["t2i", "i2i", "inpaint"].includes(mode) && scoped?.effort === "medium" && snapshot.params.effort !== "medium") unused.add(independent ? "inpaintRecipe.effort" : "params.effort");
     if (mode === 't2i') {
       result.effective = buildT2iReviewEffective(snapshot);
       result.unusedInputs = [...unused].sort();

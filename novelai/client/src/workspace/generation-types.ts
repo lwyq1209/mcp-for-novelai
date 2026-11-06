@@ -6,11 +6,13 @@ export type GenerationMode = typeof GENERATION_MODES[number];
 export const isSeededGeneration = (mode: GenerationMode) => mode !== "upscale" && mode !== "director";
 export interface PostprocessRecipe {
   recipeScope?: "independent_inpaint";
-  enhance?: { magnitude: number; scale: 1 | 2; requestedNoise: number };
+  /** scale "max": Enhance Max✨ (V5), the source sent at its own size with upscaled_enhance, about 2× back. */
+  enhance?: { magnitude: number; scale: 1 | 2 | "max"; requestedNoise: number };
   /** Queued recipes take scale 2 only; a manual batch item (the window's Generate) may take 4 (two requests). */
   upscale?: { scale: 2 | 4 };
   director?: { tool: DirectorTool; options: AugmentOptions };
-  processing?: { inputWidth: number; inputHeight: number; outputWidth: number; outputHeight: number; resizedInput: boolean; alphaFlattened: boolean };
+  /** Enhance Max✨: outputWidth/outputHeight are the size the official client expects back (the image decides). */
+  processing?: { inputWidth: number; inputHeight: number; outputWidth: number; outputHeight: number; resizedInput: boolean; alphaFlattened: boolean; upscaledEnhance?: true };
   unusedInputs?: string[];
 }
 export type GenerationStatus = "preparing" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled" | "unknown";

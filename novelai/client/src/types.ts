@@ -111,6 +111,11 @@ export function supportsNAIVariety(model: string): boolean {
   return !isNAIV5Model(model);
 }
 
+/** Enhance Max✨ exists for the V5 models only (official `maxEnhance`: V5 Curated and Full; see nai-dimensions.ts). */
+export function supportsNAIMaxEnhance(model: string): boolean {
+  return isNAIV5Model(model);
+}
+
 export function maxNAICharacterPrompts(model: string): number {
   return isNAIV5Model(model) ? 32 : isNAIV4PlusModel(model) ? 6 : 0;
 }
@@ -272,6 +277,9 @@ export function normalizeGenerateParams(value?: Partial<GenerateParams> | null):
     smeaDyn: smea && (typeof source.smeaDyn === "boolean" ? source.smeaDyn : DEFAULT_PARAMS.smeaDyn),
     variety: typeof source.variety === "boolean" ? source.variety : DEFAULT_PARAMS.variety,
     fileNamePrefix: typeof source.fileNamePrefix === "string" ? source.fileNamePrefix : "",
+    // Only Medium is stored (absent = high): a High recipe keeps exactly the fields it always had. Whether it runs
+    // depends on the execution model (src/nai-effort.ts applyNAIEffort), so it is kept for any model here.
+    ...(source.effort === "medium" ? { effort: "medium" as const } : {}),
   };
 }
 
@@ -323,6 +331,12 @@ export interface I2IParams {
   strength: number;
   noise: number;
   extraNoiseSeed: number;
+  /**
+   * Enhance Max✨ (V5) only, set per request and never stored in the canvas state: the request carries
+   * `upscaled_enhance: true`, sends the source at its own size and NovelAI returns it about 2× larger
+   * (src/nai-dimensions.ts NAI_MAX_ENHANCE_*).
+   */
+  upscaledEnhance?: boolean;
 }
 
 export const DEFAULT_I2I_PARAMS: I2IParams = {
@@ -1101,6 +1115,8 @@ export interface ImportedParams {
   negativePrompt?: string;
   stylePrompt?: string;
   model?: NAIModel;
+  /** V5 Full's Effort (src/nai-effort.ts), from the image's model id or `Source`. */
+  effort?: "high" | "medium";
   steps?: number;
   cfgScale?: number;
   cfgRescale?: number;

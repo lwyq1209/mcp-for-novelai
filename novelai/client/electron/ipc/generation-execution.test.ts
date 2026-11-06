@@ -446,6 +446,39 @@ describe('authored character history snapshots at the backend save boundary', ()
   });
 });
 
+describe('V5 Full Medium effort and Enhance Max✨ through the real generation functions', () => {
+  const medium = { ...params, effort: 'medium' as const, steps: 28, sampler: 'k_dpmpp_2m' as const, cfgRescale: 0.4, ucPreset: 2 as const, negativePrompt: 'hat' };
+  it('sends and records the Medium model with what ran (t2i, i2i, inpaint)', async () => {
+    for (const mode of ['t2i', 'i2i', 'inpaint'] as const) {
+      fixture.post.mockReset(); fixture.post.mockResolvedValueOnce(await archive());
+      const result = mode === 't2i' ? await generateImage(medium, extras, undefined, options())
+        : mode === 'i2i' ? await generateI2I(medium, { strength: 0.5, noise: 0, extraNoiseSeed: 3 }, extras, options(IMAGE))
+          : await inpaintImage(medium, 'nai-diffusion-5-full-inpainting', IMAGE.toString('base64'), 1, 0, options(IMAGE));
+      expect(result.ok, result.message).toBe(true);
+      const model = mode === 'inpaint' ? 'nai-diffusion-5-full-medium-inpainting' : 'nai-diffusion-5-full-medium';
+      expect(fixture.post).toHaveBeenCalledTimes(1);
+      expect(fixture.post.mock.calls[0][1]).toMatchObject({ model, parameters: { steps: 14, sampler: 'k_euler_ancestral', cfg_rescale: 0, tag_hint_uc_preset: 2 } });
+      expect(result.items[0]).toMatchObject({ model, params: { model: 'nai-diffusion-5-full', effort: 'medium', steps: 14, sampler: 'k_euler_ancestral', cfgRescale: 0, ucPreset: 0, negativePrompt: '' } });
+    }
+  });
+
+  it('Max✨ sends upscaled_enhance at the source size, runs High and records the size the image came back with', async () => {
+    const big = new PNG({ width: 128, height: 128 }); big.data.fill(200);
+    const zip = new JSZip(); zip.file('image_0.png', PNG.sync.write(big));
+    fixture.post.mockResolvedValueOnce({ data: await zip.generateAsync({ type: 'nodebuffer' }) });
+    const result = await generateI2I(medium, { strength: 0.2, noise: 0, extraNoiseSeed: 3, upscaledEnhance: true }, extras, options(IMAGE));
+    expect(result.ok, result.message).toBe(true);
+    const payload = fixture.post.mock.calls[0][1];
+    expect(payload).toMatchObject({ model: 'nai-diffusion-5-full', action: 'img2img', parameters: { upscaled_enhance: true, width: 64, height: 64, steps: 28 } });
+    expect(result.items[0]).toMatchObject({ model: 'nai-diffusion-5-full', width: 128, height: 128 });
+    expect(result.items[0].params).not.toHaveProperty('effort');
+    fixture.post.mockReset();
+    const refused = await generateI2I({ ...params, model: 'nai-diffusion-4-5-full' }, { strength: 0.2, noise: 0, extraNoiseSeed: 3, upscaledEnhance: true }, extras, options(IMAGE));
+    expect(refused).toMatchObject({ ok: false, reason: 'generation.max_enhance_model' });
+    expect(fixture.post).not.toHaveBeenCalled();
+  });
+});
+
 it('keeps raw history characters beyond provider filtering/trimming/model capacity without changing provider construction', async () => {
   const legacy = { ...params, model: 'nai-diffusion-4-full' as const }; delete legacy.promptAssemblyVersion;
   const chars = Array.from({ length: 8 }, (_, i) => ({ prompt: `  adult gardener ${i}, gardener  `, negativePrompt: ' blur, blur ', useCoords: false, x: .25, y: .75 }));

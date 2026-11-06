@@ -1,5 +1,6 @@
-import { DIRECTOR_TOOLS, EMOTION_OPTIONS, MAX_NAI_UPSCALE_INPUT_PIXELS, MAX_NAI_UPSCALE_OUTPUT_DIMENSION, MAX_NAI_DIRECTOR_INPUT_PIXELS } from "../types";
-import { adaptiveNAIImageSize, resolveNAIEnhanceOutputSize } from "../nai-dimensions";
+import { DIRECTOR_TOOLS, EMOTION_OPTIONS, MAX_NAI_UPSCALE_INPUT_PIXELS, MAX_NAI_UPSCALE_OUTPUT_DIMENSION, MAX_NAI_DIRECTOR_INPUT_PIXELS, supportsNAIMaxEnhance } from "../types";
+import { adaptiveNAIImageSize, maxEnhanceInputSize, maxEnhanceOutputSize, resolveNAIEnhanceOutputSize } from "../nai-dimensions";
+import { applyNAIEffort } from "../nai-effort";
 import { WorkspaceError } from "./protocol";
 import type { GenerationMode, GenerationSnapshot } from "./generation-types";
 
@@ -11,15 +12,29 @@ export function resolvePostprocessRecipe(snapshot: GenerationSnapshot, mode: Gen
   if (!["enhance", "upscale", "director"].includes(mode)) return;
   if (mode === "enhance") {
     const recipe = snapshot.enhance;
-    if (!recipe || !Number.isInteger(recipe.magnitude) || recipe.magnitude < 1 || recipe.magnitude > 10 || ![1, 2].includes(recipe.scale)) throw new WorkspaceError("invalid_configuration", "Enhance requires magnitude 1–10 and scale 1 or 2.");
-    const requested = resolveNAIEnhanceOutputSize(source.width, source.height, recipe.scale, snapshot.params);
-    if (recipe.scale === 2 && requested.exceedsLimit) throw new WorkspaceError("invalid_configuration", "The requested 2× Enhance size exceeds the generation pixel limit.");
-    const size = adaptiveNAIImageSize(requested.width, requested.height, snapshot.params);
+    if (!recipe || !Number.isInteger(recipe.magnitude) || recipe.magnitude < 1 || recipe.magnitude > 10 || ![1, 2, "max"].includes(recipe.scale)) throw new WorkspaceError("invalid_configuration", "Enhance requires magnitude 1–10 and scale 1, 2 or max.");
+    // Enhance runs on High: the V5 Full Effort toggle is a txt2img, img2img and inpaint setting (src/nai-effort.ts).
+    const hadEffort = snapshot.params.effort === "medium";
+    snapshot.params = applyNAIEffort(snapshot.params, "").params;
+    const max = recipe.scale === "max";
+    if (max && !supportsNAIMaxEnhance(snapshot.params.model)) throw Object.assign(new WorkspaceError("invalid_configuration", "Enhance Max✨ exists only for the V5 models (V5 Full and V5 Curated)."), { reason: "generation.max_enhance_model" });
+    let size: { width: number; height: number };
+    let output: { width: number; height: number };
+    if (max) {
+      // Max✨ sends the source at its own size (64-aligned, under 0.8 × 3,145,728 pixels) and returns about 2× of it.
+      size = maxEnhanceInputSize(source.width, source.height);
+      output = maxEnhanceOutputSize(size.width, size.height);
+    } else {
+      const requested = resolveNAIEnhanceOutputSize(source.width, source.height, recipe.scale, snapshot.params);
+      if (recipe.scale === 2 && requested.exceedsLimit) throw new WorkspaceError("invalid_configuration", "The requested 2× Enhance size exceeds the generation pixel limit.");
+      size = adaptiveNAIImageSize(requested.width, requested.height, snapshot.params);
+      output = size;
+    }
     Object.assign(snapshot.params, size);
     recipe.requestedNoise = Math.min(.22, .018 + recipe.magnitude * .014);
-    snapshot.i2i = { strength: Math.min(.48, .10 + recipe.magnitude * .034), noise: 0, extraNoiseSeed: snapshot.i2i?.extraNoiseSeed ?? 0 };
-    snapshot.processing = { inputWidth: size.width, inputHeight: size.height, outputWidth: size.width, outputHeight: size.height, resizedInput: size.width !== source.width || size.height !== source.height, alphaFlattened: false };
-    snapshot.unusedInputs = ["i2iParams.strength", "i2iParams.noise", "inpaintMask", "inpaintPositivePrompt"];
+    snapshot.i2i = { strength: Math.min(.48, .10 + recipe.magnitude * .034), noise: 0, extraNoiseSeed: snapshot.i2i?.extraNoiseSeed ?? 0, ...(max ? { upscaledEnhance: true } : {}) };
+    snapshot.processing = { inputWidth: size.width, inputHeight: size.height, outputWidth: output.width, outputHeight: output.height, resizedInput: size.width !== source.width || size.height !== source.height, alphaFlattened: false, ...(max ? { upscaledEnhance: true as const } : {}) };
+    snapshot.unusedInputs = ["i2iParams.strength", "i2iParams.noise", "inpaintMask", "inpaintPositivePrompt", ...(hadEffort ? ["params.effort"] : [])];
     return;
   }
   const cap = mode === "upscale" ? MAX_NAI_UPSCALE_INPUT_PIXELS : MAX_NAI_DIRECTOR_INPUT_PIXELS;

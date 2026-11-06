@@ -29,6 +29,7 @@ import {
   MAX_NAI_DIRECTOR_INPUT_PIXELS,
   MAX_NAI_UPSCALE_INPUT_PIXELS,
   MAX_NAI_UPSCALE_OUTPUT_DIMENSION,
+  supportsNAIMaxEnhance,
   type AccountSummary,
   type AnlasQuoteRequest,
   type AnlasQuoteResult,
@@ -51,6 +52,7 @@ import {
 } from "../../src/types";
 import { inspectImageMetadata, parseImageMeta } from "../../src/png-meta";
 import { calculateFeatureAnlasQuote } from "../../src/anlas";
+import { applyNAIEffort, naiRequestModel } from "../../src/nai-effort";
 import { compactRemoteErrorText, describeRemoteError, type RemoteError } from "../../src/error-message";
 import { hostError, type HostErrorParams } from "../host-error";
 import { cleanUpstreamText, type UpstreamReason } from "../upstream-reason";
@@ -174,6 +176,12 @@ export function buildDirectorPayload(image: { base64: string; width: number; hei
 export function applyI2IParameters(payload: ReturnType<typeof buildPayload>, image: string, i2i: I2IParams, extraNoiseSeed: number) {
   payload.action = "img2img";
   Object.assign(payload.parameters, { image, strength: clamp01(i2i.strength, 0.7), noise: 0, extra_noise_seed: extraNoiseSeed });
+  // Enhance Max✨ (V5): the source goes at its own size and NovelAI returns it about 2× larger (official
+  // generateEnhance, see src/nai-dimensions.ts maxEnhanceInputSize). Only the V5 models have it.
+  if (i2i.upscaledEnhance === true) {
+    if (!supportsNAIMaxEnhance(payload.model)) throw generationRefusal("generation.max_enhance_model", "Enhance Max✨ exists only for the V5 models.", undefined, "invalid_configuration");
+    payload.parameters.upscaled_enhance = true;
+  }
   return payload;
 }
 
@@ -1559,6 +1567,8 @@ interface HistorySaveOptions {
   historySeedMode?: "random";
   /** A manual item: the mode of its click (GenerationExecutionOptions.generationMode). */
   feature?: string;
+  /** Record each image with the size it decodes to, not the requested size (Enhance Max✨ returns about 2× the request). */
+  measureImageSize?: boolean;
 }
 
 /** The history record generation saves for one image (saveBuffers); without a file yet, the record a generation is
@@ -1570,14 +1580,15 @@ function generatedHistoryItem(
   actualSeed: number,
   modelOverride?: string,
   saveOptions?: HistorySaveOptions,
+  imageSize?: { width: number; height: number },
 ): HistoryItem {
   return {
     ...file,
     params: { ...params, seed: actualSeed, ...(saveOptions?.historySeedMode ? { seedMode: saveOptions.historySeedMode } : {}) },
     actualSeed,
     model: modelOverride ?? params.model,
-    width: params.width,
-    height: params.height,
+    width: imageSize?.width ?? params.width,
+    height: imageSize?.height ?? params.height,
     groupId,
     ...(saveOptions?.characterSnapshot ? { characterSnapshot: structuredClone(saveOptions.characterSnapshot) } : {}),
     ...(saveOptions?.characterPrompts ? { characterPrompts: [...saveOptions.characterPrompts] } : {}),
@@ -1654,7 +1665,9 @@ async function saveBuffers(
       buffers[index],
       settings.keepImageMetadata !== false,
     );
-    const item = generatedHistoryItem({ id, filePath, fileUrl: toLocalMediaUrl(filePath), date, createdAt: now.toISOString() }, activeGroup?.groupId, params, actualSeed, modelOverride, saveOptions);
+    const measured = saveOptions?.measureImageSize ? nativeImage.createFromBuffer(buffers[index]) : null;
+    if (measured?.isEmpty()) throw generationRefusal("generation.image_undecodable", "The returned image cannot be decoded.");
+    const item = generatedHistoryItem({ id, filePath, fileUrl: toLocalMediaUrl(filePath), date, createdAt: now.toISOString() }, activeGroup?.groupId, params, actualSeed, modelOverride, saveOptions, measured ? measured.getSize() : undefined);
     if (repository) fileOperations.push(beginLibraryFileOperation(repository, 'create', { kind: 'history', id, item, target: filePath, byteLength: outBuffer.length, sha256: crypto.createHash('sha256').update(outBuffer).digest('hex') }));
     await fs.writeFile(filePath, outBuffer, { flag: 'wx' });
     items.push(item);
@@ -2385,7 +2398,11 @@ export async function generateImage(
   assertQueueReferences(extras, execution);
   const characterSnapshot = snapshotCharacters(extras?.charCaptions ?? []);
   const frozenSaveOptions = queueGenerationSaveOptions(execution);
-  params = normalizeGenerateParams(params);
+  // The record keeps what ran: Medium effort's fixed values, and the Medium model id (src/nai-effort.ts).
+  const normalized = normalizeGenerateParams(params);
+  const effort = applyNAIEffort(normalized, normalized.model);
+  params = effort.params;
+  const requestModel = naiRequestModel(params.model, effort.effort);
   const token = getToken();
   if (!token)
     return {
@@ -2401,11 +2418,11 @@ export async function generateImage(
   const actualSeed = useFixedSeed
     ? params.seed
     : crypto.randomInt(1, 2_147_483_647);
-  const unsavable = refuseUnsavableHistory(generatedHistoryItem(PLANNED_FILE, undefined, params, actualSeed, undefined, { ...frozenSaveOptions, characterSnapshot }));
+  const unsavable = refuseUnsavableHistory(generatedHistoryItem(PLANNED_FILE, undefined, params, actualSeed, requestModel, { ...frozenSaveOptions, characterSnapshot }));
   if (unsavable) return unsavable;
 
   logInfo(
-    `generate: model=${params.model} size=${params.width}x${params.height} steps=${params.steps} ` +
+    `generate: model=${requestModel} size=${params.width}x${params.height} steps=${params.steps} ` +
       `cfg=${params.cfgScale} vibe=${extras?.vibeImages?.length ?? 0} precise=${extras?.preciseReferences?.length ?? 0}`,
   );
   const job = beginJob(execution ? { signal: execution.signal, isolated: true } : undefined);
@@ -2464,7 +2481,7 @@ export async function generateImage(
       params,
       actualSeed,
       "t2i",
-      undefined,
+      requestModel,
       { ...(frozenSaveOptions ?? ordinarySaveOptions), characterSnapshot, characterPrompts },
     );
     if (!strictQueue(execution)) void refreshStoredAccount();
@@ -2492,9 +2509,15 @@ export async function generateI2I(
   assertQueueReferences(extras, execution);
   const characterSnapshot = snapshotCharacters(extras?.charCaptions ?? []);
   const frozenSaveOptions = queueGenerationSaveOptions(execution);
-  params = normalizeGenerateParams(params);
+  const maxEnhance = i2i?.upscaledEnhance === true;
+  // Enhance (Max✨ included) always runs High: Medium effort is a txt2img/img2img/inpaint setting only.
+  const normalized = normalizeGenerateParams(params);
+  const effort = applyNAIEffort(normalized, maxEnhance ? "" : normalized.model);
+  params = effort.params;
+  const requestModel = naiRequestModel(params.model, effort.effort);
   const token = getToken();
   if (!token) return { ok: false, message: "Set up your NovelAI API token in Settings first.", reason: "generation.no_token", items: [] };
+  if (maxEnhance && !supportsNAIMaxEnhance(params.model)) return { ok: false, message: "Enhance Max✨ exists only for the V5 models.", reason: "generation.max_enhance_model", items: [], failureKind: "validation" };
   if (!params.positivePrompt.trim())
     return { ok: false, message: "Enter a positive prompt.", reason: "generation.no_prompt", items: [] };
   if (!execution?.sourceBytes && !workbenchImagePath)
@@ -2503,10 +2526,10 @@ export async function generateI2I(
     params.seedMode !== "random" && params.seed >= 0
       ? params.seed
       : crypto.randomInt(1, 2_147_483_647);
-  const unsavable = refuseUnsavableHistory(generatedHistoryItem(PLANNED_FILE, undefined, params, actualSeed, undefined, { ...frozenSaveOptions, characterSnapshot }));
+  const unsavable = refuseUnsavableHistory(generatedHistoryItem(PLANNED_FILE, undefined, params, actualSeed, requestModel, { ...frozenSaveOptions, characterSnapshot }));
   if (unsavable) return unsavable;
   logInfo(
-    `img2img: model=${params.model} size=${params.width}x${params.height} strength=${i2i?.strength}`,
+    `img2img: model=${requestModel} size=${params.width}x${params.height} strength=${i2i?.strength}${maxEnhance ? " enhance=max" : ""}`,
   );
 
   const job = beginJob(execution ? { signal: execution.signal, isolated: true } : undefined);
@@ -2551,7 +2574,7 @@ export async function generateI2I(
     }
     if (buffers.length === 0)
       return { ok: false, message: "The request succeeded but returned no image.", reason: "generation.empty_response", items: [] };
-    const items = await saveBuffers(buffers, params, actualSeed, "i2i", undefined, { ...frozenSaveOptions, characterSnapshot, characterPrompts });
+    const items = await saveBuffers(buffers, params, actualSeed, "i2i", requestModel, { ...frozenSaveOptions, characterSnapshot, characterPrompts, ...(maxEnhance ? { measureImageSize: true } : {}) });
     if (!strictQueue(execution)) void refreshStoredAccount();
     return {
       ok: true,
@@ -2577,7 +2600,9 @@ export async function inpaintImage(
   const invalidAssembly = invalidPromptAssemblyResult(params);
   if (invalidAssembly) return invalidAssembly;
   const frozenSaveOptions = queueGenerationSaveOptions(execution);
-  params = normalizeGenerateParams(params);
+  // Inpaint's effort follows the inpainting model (V5 Full inpainting has Medium); the record keeps what ran.
+  const effort = applyNAIEffort(normalizeGenerateParams(params), inpaintModel);
+  params = effort.params;
   const token = getToken();
   if (!token) return { ok: false, message: "Set up your NovelAI API token in Settings first.", reason: "generation.no_token", items: [] };
   if (!params.positivePrompt.trim())
@@ -2625,13 +2650,14 @@ export async function inpaintImage(
         normalizedNoise,
         actualSeed,
       );
-      return { payload, historyParams, model };
+      return { payload, historyParams, model: naiRequestModel(model, effort.effort) };
     };
 
     let chosen: ReturnType<typeof buildInpaintPayload> | null = null;
     let buffers: Buffer[] | null = null;
     let lastError: any = null;
-    const candidates = strictQueue(execution) ? [inpaintModel] : inpaintModelCandidates(inpaintModel);
+    // Medium runs exactly its own model; the compatibility fallback is for the curated models.
+    const candidates = strictQueue(execution) || effort.effort === "medium" ? [inpaintModel] : inpaintModelCandidates(inpaintModel);
     // Every candidate saves the same parameters; only the record's model name differs.
     const planned = buildInpaintPayload(candidates[0]);
     const unsavable = refuseUnsavableHistory(generatedHistoryItem(PLANNED_FILE, undefined, planned.historyParams, actualSeed, planned.model, { ...frozenSaveOptions, characterSnapshot: snapshotCharacters([]), characterPrompts: [] }));
