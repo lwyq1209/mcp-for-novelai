@@ -6,7 +6,7 @@
  * field again (per mode) before any host call; the mask is validated only there,
  * so its errors carry details {reason, path}.
  */
-import { DIRECTOR_EMOTIONS, DIRECTOR_TOOLS, MAX_DIMENSION, MAX_QUEUE_ITEMS, MAX_QUEUE_SEED, MAX_TEXT, NOISE_SCHEDULES, QUALITY_PRESETS, QUEUE_FILE_PREFIX_MAX, QUEUE_FILE_PREFIX_PATTERN, QUEUE_HISTORY_GROUP_MAX, RECIPE_HOST_METHODS, RECIPE_MODES, RECIPE_SOURCE_HOST_METHODS, T2I_MODELS, T2I_SAMPLERS } from './recipe-queue.mjs';
+import { DIRECTOR_EMOTIONS, DIRECTOR_TOOLS, EFFORT_VALUES, MAX_DIMENSION, MAX_QUEUE_ITEMS, MAX_QUEUE_SEED, MAX_TEXT, NOISE_SCHEDULES, QUALITY_PRESETS, QUEUE_FILE_PREFIX_MAX, QUEUE_FILE_PREFIX_PATTERN, QUEUE_HISTORY_GROUP_MAX, RECIPE_HOST_METHODS, RECIPE_MODES, RECIPE_SOURCE_HOST_METHODS, T2I_MODELS, T2I_SAMPLERS } from './recipe-queue.mjs';
 
 const schema = (properties = {}, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
 const positive = { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER };
@@ -38,6 +38,7 @@ const PREPARE_RECIPE_SCHEMA = schema({
     properties: { kind: { enum: ['history', 'study'] }, historyId: identity, historyRevision: positive, assetId: identity, studyId: uuid, studyRevision: positive } },
   mask: { type: 'object', description: 'inpaint only: {units:"fraction"|"px", layers:[1–16]} applied in order to an empty mask, first layer add. Layer {op:"add"|"subtract", shape|alpha, growPx? −256…256 (+ grow, − shrink), invert?}; per layer rasterize → grow → invert → combine. shape: {type:"rect",x,y,width,height} | {type:"ellipse",cx,cy,rx,ry} | {type:"polygon",points:[[x,y],…] 3–256, even-odd} | {type:"stroke",points 1–512,widthPx 1–512 (≥12 for thin lines)}. alpha (≤2 layers): {historyId,historyRevision,assetId,threshold? 1–255, default 128} of a PNG history original; alpha ≥ threshold selects. fraction scales x by width and y by height; px are source pixels; origin top-left. Coordinates are rounded (fraction 4 decimals, px whole pixels). The host repaints whole 8×8 latent cells; 0 selected cells is refused (mask_empty).' },
   model: { type: 'string', enum: [...T2I_MODELS] },
+  effort: { type: 'string', enum: [...EFFORT_VALUES], description: 'Optional, default high; medium: see the description.' },
   width: side, height: side,
   steps: { type: 'integer', minimum: 1, maximum: 50 },
   cfgScale: { type: 'number', minimum: 0, maximum: 10 },
@@ -57,7 +58,7 @@ const PREPARE_RECIPE_SCHEMA = schema({
   strength: { type: 'number', minimum: 0, maximum: 1, description: 'i2i: how much to change the source; inpaint: repaint strength (1 = full).' },
   extraNoiseSeed: { type: ['integer', 'null'], minimum: 1, maximum: MAX_QUEUE_SEED, description: 'i2i/enhance, optional: fixed extra noise seed; omit or null for a random one per image.' },
   magnitude: { type: 'integer', minimum: 1, maximum: 10, description: 'enhance: 1–10 (strength is derived from it).' },
-  scale: { type: 'integer', enum: [1, 2], description: 'enhance: 1 or 2; upscale: 2.' },
+  scale: { enum: [1, 2, 'max'], description: 'enhance: 1, 2 or "max" (V5 only); upscale: 2.' },
   tool: { type: 'string', enum: [...DIRECTOR_TOOLS], description: 'director tool.' },
   defry: { ...level, description: 'director, optional, default 0.' },
   colorizePrompt: { ...promptText, description: 'director tool colorize only (may be empty).' },
@@ -77,15 +78,16 @@ const LOOKUP_ENQUEUE_SCHEMA = schema({ requestKey });
 
 const PREPARE_RECIPE_DESCRIPTION = 'Freeze one independent recipe revision in the shared host recipe store from inline fields (no inbox file) or from the live canvas, or dry-run it with preview:true. Six modes; a field of another mode is refused, never ignored, and nothing the host would clamp, snap, resize, convert or drop is accepted silently. '
   + 't2i: model; width/height multiples of 64 with width×height ≤ 3,145,728; steps 1–50; cfgScale 0–10; optional cfgRescale 0–1; sampler; noiseSchedule (V5: karras); ucPreset 0–3; qualityPreset standard/light (V5 only)/none; stylePrompt; non-blank positivePrompt; negativePrompt; seed 0–2147483646 or null for random at enqueue; optional characters (V4+ only, at most 6, V5 32) and transparentBackground (V5 only). '
+  + 'effort (t2i/i2i/inpaint, default high): medium runs the distilled V5 Full Medium model (nai-diffusion-5-full only; sent as nai-diffusion-5-full-medium[-inpainting], about 42% cheaper) with fixed steps 14, k_euler_ancestral, cfgRescale 0, Heavy UC (nsfw-prefixed unless the prompt has nsfw) and no negative prompts; omit those, or given values are replaced (warning). '
   + 'Image modes take source {kind:"history", historyId, historyRevision, assetId} from asset_library (look at it first with action:image; read_queue/get_queue_result give the historyId of queue results), or {kind:"study", studyId, studyRevision} of an imported image (material_studies id/revision): a PNG/JPEG/WebP original; nothing else is a source. '
   + 'i2i: the t2i fields without transparentBackground, plus source and strength 0–1, optional extraNoiseSeed; width/height must keep the source aspect within 3% (the host stretches). '
-  + 'enhance: the t2i fields without width/height/transparentBackground, plus source, magnitude 1–10, scale 1|2, optional extraNoiseSeed; the size is source × scale, so the source must be 64-aligned and the result ≤ 3,145,728 px. '
+  + 'enhance: the t2i fields without width/height/transparentBackground, plus source, magnitude 1–10, scale 1|2|"max", optional extraNoiseSeed; for 1|2 the size is source × scale, so the source must be 64-aligned and the result ≤ 3,145,728 px. "max" (Max✨, V5 only) sends the source at its own size (made 64-aligned, < 2,516,582 px) and returns about 2× (≤ ~3.1 MP), costs Anlas on Opus too. '
   + 'inpaint: the generation fields without width/height/characters/transparentBackground (model: no furry-3; runs as <model>-inpainting), plus source (64-aligned, ≤ 1600 px per side), strength 0–1 and mask (shapes and alpha layers, see mask). '
   + 'upscale: source, scale 2. director: source, tool, optional defry 0–5, colorizePrompt (colorize only), emotion + emotionLevel 0–5 (emotion only). upscale/director use no seed and refuse a source over 1,048,576 px unless acceptDownscale:true. '
   + 'preview:true runs the same checks and the host builder without saving anything; for inpaint it returns a WebP of the actual request source with the latent cells the mask selects tinted red, so check the mask, adjust and preview again before saving. '
   + 'To revise, pass recipeId with its current expectedRevision, the same mode and every field again (source too); the host saves a new immutable revision. '
   + 'canvas {workspaceId, expectedRevision, draftId?|patch?} with mode (and optional preview) instead captures the live canvas at exactly that revision into a new recipe: every input of that mode as the canvas holds it, its source and mask copied in. draftId reads that unapplied draft, patch a detached t2i text patch (params/charCaptions), as read_prompt_review does; nothing is adopted or changed, and a newer revision is a conflict (read the workspace again). A canvas recipe takes no other field, cannot be revised and does not inherit the canvas history group (pass historyGroup to enqueue_recipes); to show a draft on the canvas, apply_edit it. '
-  + 'Returns recipeId, recipeRevision, inputHash and a readback of the actual effective input from the host builder: final prompts with the automatic quality text (and the transparent-background text when enabled), final negative with the UC preset text, characters, sampling, mode parameters, source (identity, sha256, size), mask (selected cells, layers, spec) and warnings. Check the readback before enqueueing. Does not generate or enqueue. An unknown save outcome is never retried automatically.';
+  + 'Returns recipeId, recipeRevision, inputHash and a readback of the actual effective input from the host builder: the model id sent, final prompts with the automatic quality text (and the transparent-background text when enabled), final negative with the UC preset text, characters, sampling, mode parameters, source (identity, sha256, size), mask (selected cells, layers, spec) and warnings. Check the readback before enqueueing. Does not generate or enqueue. An unknown save outcome is never retried automatically.';
 
 const { put, read, preview, lookup, enqueue, list, capture } = RECIPE_HOST_METHODS;
 /**

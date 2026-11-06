@@ -63,12 +63,12 @@ export default { get: forbidden, post: forbidden, request: forbidden, create: fo
   const load = file => jiti.import(fileURLToPath(new URL(`../client/${file}`, import.meta.url)));
   // Loaded one after another: concurrent jiti imports can instantiate a shared module twice (two BatchInputError classes).
   // queue-bridge-error.ts shares this module cache, so its instanceof checks see the classes the services throw.
-  let service, batch, storage, dimensions, types, bridgeError;
+  let service, batch, storage, dimensions, types, bridgeError, effort;
   const modules = [];
-  for (const file of ['electron/queue-recipe-service.ts', 'electron/batch-service.ts', 'electron/batch-storage.ts', 'src/nai-dimensions.ts', 'src/types.ts', 'electron/queue-bridge-error.ts']) modules.push(await load(file));
-  [service, batch, storage, dimensions, types, bridgeError] = modules;
+  for (const file of ['electron/queue-recipe-service.ts', 'electron/batch-service.ts', 'electron/batch-storage.ts', 'src/nai-dimensions.ts', 'src/types.ts', 'electron/queue-bridge-error.ts', 'src/nai-effort.ts']) modules.push(await load(file));
+  [service, batch, storage, dimensions, types, bridgeError, effort] = modules;
   host = { createQueueRecipeService: service.createQueueRecipeService, RECIPE_ASSET_LIMITS: service.RECIPE_ASSET_LIMITS, RECIPE_STORE_LIMITS: service.RECIPE_STORE_LIMITS, queueBridgeError: bridgeError.queueBridgeError,
-    createBatchService: batch.createBatchService, queuedExtraNoiseSeed: batch.queuedExtraNoiseSeed, createBatchStorage: storage.createBatchStorage, BatchInputError: storage.BatchInputError, dimensions, types };
+    createBatchService: batch.createBatchService, queuedExtraNoiseSeed: batch.queuedExtraNoiseSeed, createBatchStorage: storage.createBatchStorage, BatchInputError: storage.BatchInputError, dimensions, types, effort };
 });
 after(async () => {
   globalThis.fetch = originalFetch;
@@ -1405,6 +1405,108 @@ test('P13 enqueue freezes the study source bytes; a deleted or replaced study so
   assert.equal(revise.code, 'recipe_source_changed'); assert.match(revise.message, /prepare a new recipe \(without recipeId\)/);
   h.studies.set(key, entry);
   assert.equal(ok(await call('enqueue_recipes', { requestKey: 'study-gone', items: [{ ...ref(a), seeds: [1] }] })).status, 'enqueued', 'the same key works once the original is back');
+});
+
+// ------------------------------------------------------------------------------------------------ V5 Full Effort, Enhance Max✨
+// Official web client (https://novelai.net/image, build b94bdee-production, read 2026-11-06): see client/src/nai-effort.ts
+// and client/src/nai-dimensions.ts for the facts these requests mirror.
+const HEAVY = 'lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone, screentone, multiple views, logo, too many watermarks, negative space, blank page';
+const V5_GEN = { ...GEN, model: 'nai-diffusion-5-full' };
+test('effort medium: t2i, i2i and inpaint replace the fixed fields (with a warning each) instead of refusing; the readback shows the Medium request', async t => {
+  const h = await realHost(t);
+  const { call } = await connect(t, h.bridge);
+  const source = h.addHistory('history-medium', gradient(832, 1216), { width: 832, height: 1216 }), r = recipes(source);
+  const t2i = ok(await call('prepare_recipe', { mode: 't2i', ...V5_GEN, width: 832, height: 1216, effort: 'medium', steps: 28, sampler: 'k_dpmpp_2m', cfgRescale: 0.3, ucPreset: 2,
+    characters: [{ prompt: 'girl', negativePrompt: 'hat', useCoords: false }] }));
+  assert.equal(t2i.effective.model, 'nai-diffusion-5-full-medium');
+  assert.deepEqual([t2i.effective.steps, t2i.effective.sampler, t2i.effective.cfgRescale, t2i.effective.cfgScale], [14, 'k_euler_ancestral', 0, 5]);
+  assert.equal(t2i.effective.negativePrompt, `nsfw, ${HEAVY}`);
+  assert.deepEqual(t2i.effective.ucPreset, { preset: 0, text: `nsfw, ${HEAVY}`, derivedFromBuilderOutput: true, fixedByEffort: true });
+  assert.equal(t2i.effective.effort.level, 'medium');
+  assert.deepEqual(t2i.effective.effort.fixed, { steps: 14, sampler: 'k_euler_ancestral', cfgRescale: 0, ucPreset: 'Heavy', undesiredContent: `nsfw, ${HEAVY}`, nsfwPrefixed: true, characterNegativePrompts: 'not sent', tagHintUcPreset: 2 });
+  assert.deepEqual(t2i.effective.characters, [{ index: 0, prompt: 'girl', negativePrompt: '', center: { x: 0.5, y: 0.5 } }]);
+  assert.deepEqual(t2i.authored, { ...t2i.authored, effort: 'medium', steps: 14, sampler: 'k_euler_ancestral', cfgRescale: 0, ucPreset: 0, negativePrompt: '' });
+  const fixed = t2i.warnings.filter(warning => warning.code === 'effort_medium_fixed');
+  assert.deepEqual(fixed.map(warning => warning.field), ['steps', 'sampler', 'cfgRescale', 'ucPreset', 'negativePrompt', 'characters.negativePrompt']);
+  assert.equal(fixed[0].message, 'effort medium fixes steps to 14; your 28 was replaced.');
+  // Medium may leave its fixed fields out; nothing to replace, so no warning.
+  const bare = ok(await call('prepare_recipe', omit({ mode: 't2i', ...V5_GEN, width: 832, height: 1216, effort: 'medium', positivePrompt: '1girl, nsfw' }, 'steps', 'sampler', 'ucPreset', 'negativePrompt')));
+  assert.equal(bare.effective.negativePrompt, HEAVY, 'a prompt that asks for nsfw gets no nsfw in the UC');
+  assert.deepEqual(bare.warnings, []);
+  // High (or no effort) keeps exactly the fields and inputHash it always had.
+  const high = ok(await call('prepare_recipe', { mode: 't2i', ...V5_GEN, width: 832, height: 1216, effort: 'high' }));
+  const plain = ok(await call('prepare_recipe', { mode: 't2i', ...V5_GEN, width: 832, height: 1216 }));
+  assert.equal(high.inputHash, plain.inputHash); assert.equal(plain.effective.model, 'nai-diffusion-5-full'); assert.equal(plain.authored.effort, 'high');
+  assert.equal(Object.hasOwn(json(await h.service.read_queue_recipe({ recipeId: plain.recipeId, recipeRevision: plain.recipeRevision })).snapshot.reviewInput.authored.params, 'effort'), false);
+  const i2i = ok(await call('prepare_recipe', r.i2i({ ...V5_GEN, effort: 'medium' })));
+  assert.deepEqual([i2i.effective.model, i2i.effective.steps, i2i.effectiveRequest.action], ['nai-diffusion-5-full-medium', 14, 'img2img']);
+  const inpaint = ok(await call('prepare_recipe', r.inpaint(RECT_MASK, { ...V5_GEN, effort: 'medium', strength: 0.6 })));
+  assert.equal(inpaint.effective.model, 'nai-diffusion-5-full-medium-inpainting');
+  assert.deepEqual(inpaint.effectiveRequest.parameters.img2img, { strength: 0.6, color_correct: true });
+  assert.deepEqual(inpaint.warnings.filter(warning => warning.code === 'effort_medium_fixed').map(warning => warning.field), ['steps', 'negativePrompt']);
+});
+
+test('effort medium is refused only where it cannot run: another model, enhance, upscale, director; high is accepted everywhere', async t => {
+  const h = await realHost(t);
+  const { call } = await connect(t, h.bridge);
+  const source = h.addHistory('history-effort', gradient(832, 1216), { width: 832, height: 1216 }), r = recipes(source);
+  const before = h.calls.length;
+  for (const [args, pattern] of [
+    [{ mode: 't2i', ...GEN, width: 832, height: 1216, effort: 'medium' }, /effort medium exists only for nai-diffusion-5-full; nai-diffusion-4-5-full has no Medium effort/],
+    [{ mode: 't2i', ...V5_GEN, model: 'nai-diffusion-5-curated', width: 832, height: 1216, effort: 'medium' }, /nai-diffusion-5-curated has no Medium effort/],
+    [r.enhance({ ...V5_GEN, effort: 'medium' }), /mode enhance runs without it/],
+    [r.upscale({ effort: 'medium' }), /mode upscale runs without it/],
+    [r.director({ effort: 'medium' }), /mode director runs without it/],
+    [{ mode: 't2i', ...V5_GEN, width: 832, height: 1216, effort: 'low' }, /effort/],
+  ]) {
+    const error = errorOf(await call('prepare_recipe', args));
+    assert.equal(error.code, 'invalid_arguments'); assert.match(error.message, pattern);
+  }
+  assert.equal(h.calls.length, before, 'refused before any host call');
+  ok(await call('prepare_recipe', r.upscale({ effort: 'high' })));
+  ok(await call('prepare_recipe', r.enhance({ ...V5_GEN, effort: 'high' })));
+});
+
+test('Enhance Max✨: V5 only; the size is worked out (never refused), and the readback gives the expected result and the Opus cost', async t => {
+  const h = await realHost(t);
+  const { call } = await connect(t, h.bridge);
+  const source = h.addHistory('history-max', gradient(832, 1216), { width: 832, height: 1216 });
+  const odd = h.addHistory('history-max-odd', gradient(830, 1210), { width: 830, height: 1210 });
+  const max = ok(await call('prepare_recipe', recipes(source).enhance({ ...V5_GEN, scale: 'max' })));
+  assert.equal(max.effective.model, 'nai-diffusion-5-full');
+  assert.deepEqual([max.effective.width, max.effective.height, max.effectiveRequest.parameters.upscaled_enhance], [832, 1216, true]);
+  assert.deepEqual(max.effective.enhance, { magnitude: 3, scale: 'max', derivedStrength: 0.202, max: true, upscaledEnhance: true, expectedOutput: { width: 1440, height: 2144 }, costsAnlasOnOpus: true });
+  assert.deepEqual(max.effective.processing, { inputWidth: 832, inputHeight: 1216, outputWidth: 1440, outputHeight: 2144, resizedInput: false, alphaFlattened: false, upscaledEnhance: true });
+  assert.deepEqual(max.warnings.map(warning => warning.code), ['enhance_max_paid']);
+  assert.match(max.warnings[0].message, /returns about 1440×2144 .*costs Anlas on Opus too/);
+  const adjusted = ok(await call('prepare_recipe', recipes(odd).enhance({ ...V5_GEN, scale: 'max' })));
+  assert.deepEqual([adjusted.effective.width, adjusted.effective.height], [832, 1216]);
+  assert.deepEqual(adjusted.warnings.map(warning => warning.code), ['enhance_max_source_adjusted', 'enhance_max_paid']);
+  const before = h.calls.length;
+  const refused = errorOf(await call('prepare_recipe', recipes(source).enhance({ scale: 'max' })));
+  assert.equal(refused.code, 'invalid_arguments'); assert.match(refused.message, /Max✨ exists only for the V5 models/);
+  assert.equal(h.calls.length, before);
+  // 1× and 2× are unchanged: a 1× enhance of an unaligned source is still refused, as before.
+  assert.equal(errorOf(await call('prepare_recipe', recipes(odd).enhance({ ...V5_GEN, scale: 1 }))).details.reason, 'enhance_source_not_aligned');
+});
+
+test('parity: the Medium constants and the Max✨ size ports mirror the client', () => {
+  const { effort, dimensions } = host;
+  assert.deepEqual({ ...recipeQueue.MEDIUM_FIXED }, { ...effort.NAI_MEDIUM_FIXED, negativePrompt: '' });
+  assert.deepEqual([...recipeQueue.MEDIUM_MODELS], [effort.NAI_MEDIUM_MODEL, effort.NAI_MEDIUM_INPAINT_MODEL]);
+  assert.equal(recipeQueue.EFFORT_MODEL, effort.NAI_EFFORT_MODEL);
+  assert.deepEqual([...recipeQueue.EFFORT_VALUES], [...effort.NAI_EFFORT_VALUES]);
+  assert.equal(recipeQueue.MAX_ENHANCE_INPUT_LIMIT, dimensions.NAI_MAX_ENHANCE_INPUT_LIMIT);
+  let seed = 0x3a11;
+  const random = () => { seed = (seed * 1103515245 + 12345) >>> 0; return seed / 2 ** 32; };
+  const sizes = [[832, 1216], [1216, 832], [1024, 1024], [64, 64], [1, 1], [830, 1210], [1600, 1600], [2048, 2048], [49152, 64], [100000, 64]];
+  while (sizes.length < 200) sizes.push([1 + Math.floor(random() * 3200), 1 + Math.floor(random() * 3200)]);
+  for (const [width, height] of sizes) {
+    const input = recipeQueue.maxEnhanceInputSize(width, height);
+    assert.deepEqual(input, dimensions.maxEnhanceInputSize(width, height), `${width}×${height}`);
+    assert.ok(input.width * input.height < recipeQueue.MAX_ENHANCE_INPUT_LIMIT && input.width % 64 === 0 && input.height % 64 === 0, `${width}×${height} → ${input.width}×${input.height}`);
+    assert.deepEqual(recipeQueue.maxEnhanceOutputSize(input.width, input.height), dimensions.maxEnhanceOutputSize(input.width, input.height));
+  }
 });
 
 test('every host method observed across this file is declared by the recipe and queue tools', () => {

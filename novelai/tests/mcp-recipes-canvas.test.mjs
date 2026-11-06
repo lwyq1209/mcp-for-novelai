@@ -138,6 +138,23 @@ test('t2i: the canvas becomes a new recipe with canvas lineage; only the images 
   assert.equal(h.jobs[0].args.mode, 't2i'); assert.deepEqual(h.jobs[0].args.seeds, [5, 6]);
 });
 
+test('a V5 Full canvas on Medium effort is captured as the Medium request; the readback names what Medium replaced', async t => {
+  const h = await realHost(t), call = await connect(t, h.bridge);
+  h.canvas.state = canvasState({ params: { model: 'nai-diffusion-5-full', effort: 'medium', steps: 28, sampler: 'k_dpmpp_2m', ucPreset: 2 }, charCaptions: [{ prompt: 'girl', negativePrompt: 'hat', useCoords: false, x: 0.5, y: 0.5 }] });
+  const recipe = ok(await call('prepare_recipe', { mode: 't2i', canvas: at() }));
+  assert.equal(recipe.effective.model, 'nai-diffusion-5-full-medium');
+  assert.deepEqual([recipe.effective.steps, recipe.effective.sampler, recipe.effective.ucPreset.preset, recipe.effective.effort.level], [14, 'k_euler_ancestral', 0, 'medium']);
+  assert.equal(recipe.authored.effort, 'medium');
+  assert.deepEqual(recipe.warnings.map(warning => warning.code), ['effort_medium_fixed']);
+  assert.match(recipe.warnings[0].message, /steps 28 → 14, sampler "k_dpmpp_2m" → "k_euler_ancestral", ucPreset 2 → 0, negativePrompt \(not sent\), character negativePrompt \(not sent\)/);
+  // Medium on a model without it (left from V5 Full on the canvas) runs High, and says so.
+  h.canvas.state = canvasState({ params: { effort: 'medium' } });
+  const high = ok(await call('prepare_recipe', { mode: 't2i', canvas: at(), preview: true }));
+  assert.equal(high.effective.model, 'nai-diffusion-4-5-full');
+  assert.deepEqual(high.warnings.map(warning => warning.code), ['effort_not_applied']);
+  assert.ok(high.unusedInputs.includes('params.effort'));
+});
+
 test('draftId and a detached patch are read, never adopted; their identity is checked and recorded', async t => {
   const h = await realHost(t), call = await connect(t, h.bridge);
   const drafted = ok(await call('prepare_recipe', { mode: 't2i', canvas: at(3, { draftId: 'draft-1' }) }));

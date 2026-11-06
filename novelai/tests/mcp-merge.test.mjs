@@ -168,8 +168,10 @@ test('N4 size budget: tools/list totals stay under the agreed ceilings', async t
   // prepare_recipe and the asset_library export action raise core to 40k and asset_library to 5k; without the eight
   // canvas generation tools the whole server fits in 50k. Step 3c (Recently Deleted: delete, recently-deleted, restore,
   // purge; approved for that step) raises asset_library to 5.8k inside the same core and server ceilings.
+  // V5 Full Effort (prepare_recipe effort) and Enhance Max✨ (scale "max") raise core to 41k: their rules (Medium's
+  // fixed values, Max's size and its Anlas cost on Opus) must be visible before a call (approved by the main session 2026-11-05).
   assert.ok(total <= 50_000, `whole server ${total}`);
-  assert.ok(core <= 40_000, `core layer ${core}`);
+  assert.ok(core <= 41_000, `core layer ${core}`);
   assert.ok(asset <= 5_800, `asset_library ${asset}`);
 });
 

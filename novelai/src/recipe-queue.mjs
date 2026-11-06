@@ -60,6 +60,24 @@ export const MAX_QUEUE_SEED = 2147483646; // host queue validSeed bound
 export const MAX_PIXEL_AREA = 3_145_728;
 export const MAX_DIMENSION = MAX_PIXEL_AREA / 64;
 export const MAX_TEXT = 12000;
+/**
+ * V5 Full Effort (NovelAI 2026-10-08). Mirrors client/src/nai-effort.ts, from the official web client (build
+ * b94bdee-production, read 2026-11-06): Medium runs nai-diffusion-5-full-medium (inpaint: -medium-inpainting) with
+ * 14 steps, Euler Ancestral, no CFG rescale, the Heavy UC preset (prefixed with "nsfw, " unless the prompt contains
+ * nsfw) and no negative prompt or character UC. Only V5 Full t2i, i2i and inpaint have it. A test pins parity.
+ */
+export const EFFORT_VALUES = Object.freeze(['high', 'medium']);
+export const EFFORT_MODEL = 'nai-diffusion-5-full';
+export const MEDIUM_MODELS = Object.freeze(['nai-diffusion-5-full-medium', 'nai-diffusion-5-full-medium-inpainting']);
+export const MEDIUM_FIXED = Object.freeze({ steps: 14, sampler: 'k_euler_ancestral', cfgRescale: 0, ucPreset: 0, negativePrompt: '' });
+const EFFORT_MODES = Object.freeze(['t2i', 'i2i', 'inpaint']);
+/**
+ * Enhance Max✨ (V5 Curated and Full). Mirrors client/src/nai-dimensions.ts (maxEnhanceInputSize, maxEnhanceOutputSize),
+ * from the same official build: the source goes at its own size under 0.8 × 3,145,728 pixels with upscaled_enhance, the
+ * result is about 2× of it (each side floored to 16 and doubled, fitted into 3,145,728 pixels in steps of 32), and it
+ * costs Anlas on Opus too. A test pins parity with the client.
+ */
+export const MAX_ENHANCE_INPUT_LIMIT = 0.8 * 3_145_728;
 // MAX_QUEUE_ITEMS (200, defined with the queue tools in src/queue-control.mjs): the hard bound of one enqueue.
 export { MAX_QUEUE_ITEMS };
 /**
@@ -146,13 +164,15 @@ const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif
 const GENERATION_FIELDS = ['model', 'steps', 'cfgScale', 'sampler', 'noiseSchedule', 'ucPreset', 'qualityPreset', 'stylePrompt', 'positivePrompt', 'negativePrompt', 'seed'];
 /** Per mode: required and optional prepare_recipe fields. A field of another mode is refused, never ignored. */
 export const MODE_FIELDS = Object.freeze({
-  t2i: { required: [...GENERATION_FIELDS, 'width', 'height'], optional: ['cfgRescale', 'characters', 'transparentBackground'] },
-  i2i: { required: ['source', ...GENERATION_FIELDS, 'width', 'height', 'strength'], optional: ['cfgRescale', 'characters', 'extraNoiseSeed'] },
-  enhance: { required: ['source', ...GENERATION_FIELDS, 'magnitude', 'scale'], optional: ['cfgRescale', 'characters', 'extraNoiseSeed'] },
-  inpaint: { required: ['source', 'mask', ...GENERATION_FIELDS, 'strength'], optional: ['cfgRescale'] },
-  upscale: { required: ['source', 'scale'], optional: ['acceptDownscale'] },
-  director: { required: ['source', 'tool'], optional: ['defry', 'colorizePrompt', 'emotion', 'emotionLevel', 'acceptDownscale'] },
+  t2i: { required: [...GENERATION_FIELDS, 'width', 'height'], optional: ['cfgRescale', 'characters', 'transparentBackground', 'effort'] },
+  i2i: { required: ['source', ...GENERATION_FIELDS, 'width', 'height', 'strength'], optional: ['cfgRescale', 'characters', 'extraNoiseSeed', 'effort'] },
+  enhance: { required: ['source', ...GENERATION_FIELDS, 'magnitude', 'scale'], optional: ['cfgRescale', 'characters', 'extraNoiseSeed', 'effort'] },
+  inpaint: { required: ['source', 'mask', ...GENERATION_FIELDS, 'strength'], optional: ['cfgRescale', 'effort'] },
+  upscale: { required: ['source', 'scale'], optional: ['acceptDownscale', 'effort'] },
+  director: { required: ['source', 'tool'], optional: ['defry', 'colorizePrompt', 'emotion', 'emotionLevel', 'acceptDownscale', 'effort'] },
 });
+/** What effort medium fills in: a recipe on Medium may leave these out (any given value is replaced, with a warning). */
+const MEDIUM_FILLED = Object.freeze(['steps', 'sampler', 'ucPreset', 'negativePrompt']);
 const COMMON_KEYS = ['recipeId', 'expectedRevision', 'mode', 'preview'];
 const PREPARE_KEYS = [...new Set([...COMMON_KEYS, 'canvas', ...Object.values(MODE_FIELDS).flatMap(fields => [...fields.required, ...fields.optional])])];
 /** prepare_recipe {canvas}: the only fields beside it, and its own keys. */
@@ -242,23 +262,52 @@ const requestKeyOf = value => {
 // ------------------------------------------------------------------ preparation
 const boolean = (value, label) => { if (typeof value !== 'boolean') invalid(`${label} must be true or false.`); return value; };
 
+/**
+ * The effort of a recipe: "medium" only for V5 Full t2i, i2i and inpaint (anything else that asks for Medium cannot
+ * run and is refused); "high" (or none) everywhere is the model as it always ran.
+ */
+function effortOf(args, mode) {
+  if (args.effort === undefined) return 'high';
+  if (!EFFORT_VALUES.includes(args.effort)) invalid('effort must be "high" or "medium".');
+  if (args.effort === 'high') return 'high';
+  if (!EFFORT_MODES.includes(mode)) invalid(`effort medium exists only for V5 Full txt2img, img2img and inpaint; mode ${mode} runs without it (omit effort or pass "high").`, { reason: 'effort_not_supported', mode });
+  if (args.model !== EFFORT_MODEL) invalid(`effort medium exists only for ${EFFORT_MODEL}${mode === 'inpaint' ? ' (its inpainting model)' : ''}; ${typeof args.model === 'string' ? args.model : 'this model'} has no Medium effort. Use ${EFFORT_MODEL} or omit effort.`, { reason: 'effort_not_supported', model: args.model ?? null });
+  return 'medium';
+}
+
+/** What Medium replaced, as warnings: `effort medium fixes steps to 14; your 28 was replaced.` */
+function mediumWarnings(args, characters) {
+  const warnings = [], given = args;
+  const shown = value => typeof value === 'string' ? JSON.stringify(value) : String(value);
+  for (const [field, fixed] of Object.entries(MEDIUM_FIXED)) {
+    if (given[field] === undefined || sameValue(given[field], fixed)) continue;
+    const to = field === 'ucPreset' ? '0 (Heavy)' : field === 'negativePrompt' ? 'empty (Medium sends only the Heavy UC)' : shown(fixed);
+    warnings.push({ code: 'effort_medium_fixed', field, from: given[field], to: fixed, message: `effort medium fixes ${field} to ${to}; your ${shown(given[field])} was replaced.` });
+  }
+  const dropped = (characters ?? []).map((character, index) => character.negativePrompt ? index : -1).filter(index => index >= 0);
+  if (dropped.length) warnings.push({ code: 'effort_medium_fixed', field: 'characters.negativePrompt', characters: dropped, message: `effort medium sends no character negative prompt; the negativePrompt of characters ${dropped.join(', ')} was removed (use negative emphasis such as -3::hat:: in the prompt instead).` });
+  return warnings;
+}
+
 /** Shared generation fields of t2i, i2i, enhance and inpaint (inpaint: the base model of its inpainting model). */
-function generationFields(args, mode) {
+function generationFields(args, mode, effort = 'high') {
   const model = args.model, models = mode === 'inpaint' ? INPAINT_BASE_MODELS : T2I_MODELS;
   if (!models.includes(model)) invalid(mode === 'inpaint' && T2I_MODELS.includes(model) ? `${model} has no inpainting model; inpaint takes ${models.join(', ')} (run as <model>-inpainting).` : `model must be one of ${models.join(', ')}.`);
-  integerIn(args.steps, 1, 50, 'steps');
+  const medium = effort === 'medium';
+  // Medium's fixed values are filled in and replace whatever was given (mediumWarnings reports it), so they are not checked.
+  if (!medium) integerIn(args.steps, 1, 50, 'steps');
   numberIn(args.cfgScale, 0, 10, 'cfgScale');
-  const cfgRescale = args.cfgRescale ?? 0;
+  const cfgRescale = medium ? MEDIUM_FIXED.cfgRescale : args.cfgRescale ?? 0;
   numberIn(cfgRescale, 0, 1, 'cfgRescale');
-  if (!T2I_SAMPLERS.includes(args.sampler)) invalid(`sampler must be one of ${T2I_SAMPLERS.join(', ')}.`);
+  if (!medium && !T2I_SAMPLERS.includes(args.sampler)) invalid(`sampler must be one of ${T2I_SAMPLERS.join(', ')}.`);
   if (!NOISE_SCHEDULES.includes(args.noiseSchedule)) invalid(`noiseSchedule must be one of ${NOISE_SCHEDULES.join(', ')}.`);
   if (isV5(model) && args.noiseSchedule !== 'karras') invalid('V5 models always generate with noiseSchedule karras; set karras explicitly.');
-  integerIn(args.ucPreset, 0, 3, 'ucPreset');
+  if (!medium) integerIn(args.ucPreset, 0, 3, 'ucPreset');
   if (!QUALITY_PRESETS.includes(args.qualityPreset)) invalid(`qualityPreset must be one of ${QUALITY_PRESETS.join(', ')}.`);
   if (args.qualityPreset === 'light' && !isV5(model)) invalid('qualityPreset light exists only for V5 models; the host would otherwise convert it to standard.');
   text(args.stylePrompt, 'stylePrompt');
   text(args.positivePrompt, 'positivePrompt', { required: true });
-  text(args.negativePrompt, 'negativePrompt');
+  if (!medium) text(args.negativePrompt, 'negativePrompt');
   if (args.seed !== null) integerIn(args.seed, 0, MAX_QUEUE_SEED, 'seed');
   return { model, cfgRescale };
 }
@@ -301,27 +350,33 @@ export function recipePlan(args) {
   const mode = args.mode, fields = MODE_FIELDS[mode];
   const foreign = Object.keys(args).filter(key => !COMMON_KEYS.includes(key) && !fields.required.includes(key) && !fields.optional.includes(key));
   if (foreign.length) invalid(`mode ${mode} does not accept: ${foreign.join(', ')}. Fields of other modes are refused, not ignored.`, { reason: 'field_not_in_mode', fields: foreign });
-  const missing = fields.required.filter(key => !Object.hasOwn(args, key));
+  const effort = effortOf(args, mode);
+  const missing = fields.required.filter(key => !Object.hasOwn(args, key) && !(effort === 'medium' && MEDIUM_FILLED.includes(key)));
   if (missing.length) invalid(`Missing ${missing.join(', ')}; every ${mode} field is explicit and no host default is inherited.`, { reason: 'missing_fields', fields: missing });
   if ((args.recipeId === undefined) !== (args.expectedRevision === undefined)) invalid('Revising a recipe requires both recipeId and its current expectedRevision.');
   if (args.recipeId !== undefined && (typeof args.recipeId !== 'string' || !UUID.test(args.recipeId))) invalid('recipeId must be a recipe UUID.');
   if (args.expectedRevision !== undefined) integerIn(args.expectedRevision, 1, Number.MAX_SAFE_INTEGER, 'expectedRevision');
   if (args.preview !== undefined) boolean(args.preview, 'preview');
-  const plan = { mode, updating: args.recipeId !== undefined, preview: args.preview === true, source: mode === 't2i' ? null : sourceIdentity(args.source) };
+  const plan = { mode, updating: args.recipeId !== undefined, preview: args.preview === true, source: mode === 't2i' ? null : sourceIdentity(args.source), effort, warnings: [] };
   if (seeded(mode)) {
-    const { model, cfgRescale } = generationFields(args, mode);
+    const { model, cfgRescale } = generationFields(args, mode, effort);
     plan.generation = { model, stylePrompt: args.stylePrompt, positivePrompt: args.positivePrompt, negativePrompt: args.negativePrompt, steps: args.steps, cfgScale: args.cfgScale, cfgRescale,
       sampler: args.sampler, noiseSchedule: args.noiseSchedule, seed: args.seed, ucPreset: args.ucPreset, qualityPreset: args.qualityPreset };
+    if (effort === 'medium') {
+      plan.warnings.push(...mediumWarnings(args, Array.isArray(args.characters) ? args.characters : []));
+      Object.assign(plan.generation, { steps: MEDIUM_FIXED.steps, sampler: MEDIUM_FIXED.sampler, ucPreset: MEDIUM_FIXED.ucPreset, negativePrompt: MEDIUM_FIXED.negativePrompt });
+    }
     if (mode === 't2i' || mode === 'i2i') plan.size = explicitSize(args);
     if (args.transparentBackground !== undefined) boolean(args.transparentBackground, 'transparentBackground');
     plan.transparentBackground = args.transparentBackground ?? false;
     if (plan.transparentBackground && !isV5(model)) invalid('transparentBackground exists only for V5 models; the host would otherwise turn it off silently.');
-    if (mode !== 'inpaint') plan.charCaptions = characterCaptions(args, model);
+    if (mode !== 'inpaint') plan.charCaptions = characterCaptions(args, model).map(character => effort === 'medium' ? (({ negativePrompt: _dropped, ...rest }) => rest)(character) : character);
   }
   if (mode === 'i2i') plan.i2i = { strength: numberIn(args.strength, 0, 1, 'strength'), extraNoiseSeed: extraNoiseSeedOf(args.extraNoiseSeed) };
   if (mode === 'enhance') {
     integerIn(args.magnitude, ...RECIPE_LIMITS.enhanceMagnitude, 'magnitude');
-    if (args.scale !== 1 && args.scale !== 2) invalid('enhance scale must be 1 or 2.');
+    if (args.scale !== 1 && args.scale !== 2 && args.scale !== 'max') invalid('enhance scale must be 1, 2 or "max" (Max✨, V5 models only).');
+    if (args.scale === 'max' && !isV5(args.model)) invalid(`Enhance Max✨ exists only for the V5 models (nai-diffusion-5-full, nai-diffusion-5-curated); ${args.model} has scale 1 or 2.`, { reason: 'max_enhance_not_supported', model: args.model });
     plan.enhance = { magnitude: args.magnitude, scale: args.scale, extraNoiseSeed: extraNoiseSeedOf(args.extraNoiseSeed) };
   }
   if (mode === 'inpaint') {
@@ -396,6 +451,32 @@ export function enhanceTargetSize(width, height, scale) {
   const ratio = Math.sqrt(MAX_PIXEL_AREA / (output.width * output.height));
   return { width: Math.max(64, Math.floor((output.width * ratio) / 64) * 64), height: Math.max(64, Math.floor((output.height * ratio) / 64) * 64), exceedsLimit };
 }
+/** Port of client maxEnhanceInputSize (src/nai-dimensions.ts): the 64-aligned source size under the Max input limit. */
+export function maxEnhanceInputSize(width, height) {
+  const snap = value => Math.min(MAX_DIMENSION, Math.max(64, Math.round(value / 64) * 64));
+  let size = { width: snap(width), height: snap(height) };
+  if (size.width * size.height > MAX_PIXEL_AREA) {
+    const ratio = Math.sqrt(MAX_PIXEL_AREA / (size.width * size.height));
+    size = { width: Math.max(64, Math.floor((size.width * ratio) / 64) * 64), height: Math.max(64, Math.floor((size.height * ratio) / 64) * 64) };
+  }
+  if (size.width * size.height >= MAX_ENHANCE_INPUT_LIMIT) {
+    const ratio = Math.sqrt((MAX_ENHANCE_INPUT_LIMIT - 1) / (size.width * size.height));
+    size = { width: Math.max(64, Math.floor((size.width * ratio) / 64) * 64), height: Math.max(64, Math.floor((size.height * ratio) / 64) * 64) };
+    if (size.width * size.height >= MAX_ENHANCE_INPUT_LIMIT) {
+      const long = Math.floor((MAX_ENHANCE_INPUT_LIMIT - 1) / Math.min(size.width, size.height) / 64) * 64;
+      size = size.width >= size.height ? { width: long, height: size.height } : { width: size.width, height: long };
+    }
+  }
+  return { ...size, resized: size.width !== width || size.height !== height };
+}
+/** Port of client maxEnhanceOutputSize: the size the official client expects back from a Max✨ enhance of this input. */
+export function maxEnhanceOutputSize(width, height) {
+  const doubledWidth = Math.floor(width / 16) * 16 * 2, doubledHeight = Math.floor(height / 16) * 16 * 2;
+  const scale = Math.min(1, Math.sqrt(MAX_PIXEL_AREA / (doubledWidth * doubledHeight)));
+  let outWidth = 32 * Math.round((doubledWidth * scale) / 32), outHeight = 32 * Math.round((doubledHeight * scale) / 32);
+  if (outWidth * outHeight > MAX_PIXEL_AREA) { outWidth = 32 * Math.floor((doubledWidth * scale) / 32); outHeight = 32 * Math.floor((doubledHeight * scale) / 32); }
+  return { width: Math.max(32, outWidth), height: Math.max(32, outHeight) };
+}
 /** Host downscale of an upscale/director input (generation-postprocess.ts resolvePostprocessRecipe). */
 export function postprocessInputSize(width, height) {
   const cap = RECIPE_LIMITS.postprocessInputPixels, ratio = width * height > cap ? Math.sqrt(cap / (width * height)) : 1;
@@ -419,6 +500,12 @@ export function checkRecipeSource(plan, source) {
       refuse('source_aspect_mismatch', `width×height ${plan.size.width}×${plan.size.height} differs from the source aspect (${width}×${height}) by ${(deviation * 100).toFixed(1)}%; the host would stretch it (at most ${RECIPE_LIMITS.i2iAspectTolerance * 100}% is accepted).${candidates.length ? ` Sizes keeping the aspect: ${candidates.map(item => `${item.width}×${item.height}`).join(', ')}.` : ''}`, { aspectDeviation: Math.round(deviation * 1e4) / 1e4, candidates });
     }
     return plan.size;
+  }
+  if (plan.mode === 'enhance' && plan.enhance.scale === 'max') {
+    // Max✨: the size is worked out, never refused: a source that is not 64-aligned or too large is adjusted.
+    // (The readback reports the adjusted size, the expected result and the cost: enhance_max_paid, enhance_max_source_adjusted.)
+    const input = maxEnhanceInputSize(width, height);
+    return { width: input.width, height: input.height };
   }
   if (plan.mode === 'enhance') {
     const { scale } = plan.enhance, exact = { width: width * scale, height: height * scale }, host = enhanceTargetSize(width, height, scale);
@@ -445,7 +532,9 @@ function generationParams(plan, size) {
   const g = plan.generation;
   return { promptAssemblyVersion: 1, model: g.model, stylePrompt: g.stylePrompt, positivePrompt: g.positivePrompt, negativePrompt: g.negativePrompt,
     width: size.width, height: size.height, steps: g.steps, cfgScale: g.cfgScale, cfgRescale: g.cfgRescale, sampler: g.sampler, noiseSchedule: g.noiseSchedule,
-    seed: g.seed ?? 0, seedMode: g.seed === null ? 'random' : 'fixed', ucPreset: g.ucPreset, qualityPreset: g.qualityPreset, qualityToggle: g.qualityPreset !== 'none', transparentBackground: plan.transparentBackground };
+    seed: g.seed ?? 0, seedMode: g.seed === null ? 'random' : 'fixed', ucPreset: g.ucPreset, qualityPreset: g.qualityPreset, qualityToggle: g.qualityPreset !== 'none', transparentBackground: plan.transparentBackground,
+    // Only Medium is stored: a High recipe keeps exactly the fields (and inputHash) it always had.
+    ...(plan.effort === 'medium' ? { effort: 'medium' } : {}) };
 }
 
 /** The host reference of a source identity: history {kind, id, revision, assetId}; study {kind, id, revision} (no assetId). */
@@ -649,7 +738,9 @@ function generationView(input) {
   const transparentSent = parameters.tag_hint_transparent_background === true;
   const beforeTransparent = literal && request ? (transparentSent ? withoutTrailing(request.input, TRANSPARENT_BACKGROUND_TEXT) : request.input) : null;
   const qualityText = beforeTransparent === null ? null : suffixAfter(beforeTransparent, base);
-  const ucText = literal && request ? suffixAfter(parameters.negative_prompt, source.negativePrompt ?? '') : null;
+  // Medium sends only its fixed Heavy UC (no negative prompt of the recipe), so all of it is the preset's text.
+  const medium = MEDIUM_MODELS.includes(request?.model);
+  const ucText = medium ? parameters.negative_prompt ?? null : literal && request ? suffixAfter(parameters.negative_prompt, source.negativePrompt ?? '') : null;
   const positives = parameters.v4_prompt?.caption?.char_captions ?? [], negatives = parameters.v4_negative_prompt?.caption?.char_captions ?? [];
   const authoredCharacters = Array.isArray(authored.charCaptions) ? authored.charCaptions : [];
   const asset = role => role ? input.assets.find(item => item.role === role) : undefined;
@@ -661,13 +752,18 @@ function generationView(input) {
     positivePrompt: request.input,
     automaticQuality: { preset: parameters.qualityPresetId ?? null, appendedText: qualityText, derivedFromBuilderOutput: qualityText !== null },
     negativePrompt: parameters.negative_prompt,
-    ucPreset: { preset: parameters.ucPreset ?? null, text: ucText, derivedFromBuilderOutput: ucText !== null },
+    ucPreset: { preset: parameters.ucPreset ?? null, text: ucText, derivedFromBuilderOutput: ucText !== null, ...(medium ? { fixedByEffort: true } : {}) },
+    effort: medium
+      ? { level: 'medium', requestModel: request.model, fixed: { steps: parameters.steps, sampler: parameters.sampler, cfgRescale: parameters.cfg_rescale, ucPreset: 'Heavy', undesiredContent: parameters.negative_prompt ?? null, nsfwPrefixed: typeof parameters.negative_prompt === 'string' && parameters.negative_prompt.startsWith('nsfw'), characterNegativePrompts: 'not sent', tagHintUcPreset: parameters.tag_hint_uc_preset ?? null } }
+      : { level: 'high', requestModel: request.model },
     transparentBackground: { enabled: transparentSent, straightAlpha: parameters.straight_alpha === true, appendedText: transparentSent && beforeTransparent !== null ? TRANSPARENT_BACKGROUND_TEXT : null },
     useCoords: parameters.use_coords ?? false,
     characters: positives.map((character, index) => ({ index, prompt: character.char_caption, negativePrompt: negatives[index]?.char_caption ?? '', center: character.centers?.[0] ?? null })),
     ...(authoredCharacters.length > positives.length && isV4Plus(request.model ?? '') ? { charactersNotSent: authoredCharacters.length - positives.length } : {}),
     ...(i2iLike ? { i2i: { strength: parameters.strength ?? null, noise: parameters.noise ?? null, extraNoiseSeedPolicy: effectiveInput.sampling?.extraNoiseSeedPolicy ?? null, extraNoiseSeed: parameters.extra_noise_seed ?? null } } : {}),
-    ...(mode === 'enhance' ? { enhance: { magnitude: authored.enhanceMagnitude ?? null, scale: authored.enhanceScale ?? null, derivedStrength: parameters.strength ?? null }, processing: effectiveInput.sampling?.processing ?? null } : {}),
+    ...(mode === 'enhance' ? { enhance: { magnitude: authored.enhanceMagnitude ?? null, scale: authored.enhanceScale ?? null, derivedStrength: parameters.strength ?? null,
+      ...(parameters.upscaled_enhance === true ? { max: true, upscaledEnhance: true, expectedOutput: effectiveInput.sampling?.processing ? { width: effectiveInput.sampling.processing.outputWidth, height: effectiveInput.sampling.processing.outputHeight } : null, costsAnlasOnOpus: true } : {}) },
+    processing: effectiveInput.sampling?.processing ?? null } : {}),
     ...(mode === 'inpaint' ? { inpaint: { model: request.model, strength: parameters.inpaintImg2ImgStrength ?? null, width: parameters.width, height: parameters.height } } : {}),
     ...(mode !== 't2i' && requestSource ? { requestSource: { ...sizeOf(requestSource), sha256: requestSource.sha256 }, sourceResized: sameSize(sizeOf(sourceAsset), sizeOf(requestSource)) ? null : { from: sizeOf(sourceAsset), to: sizeOf(requestSource) } } : {}),
     ...(requestMask ? { requestMask: { ...sizeOf(requestMask), sha256: requestMask.sha256 } } : {}),
@@ -681,6 +777,7 @@ function generationView(input) {
     authored: {
       model: source.model, width: source.width, height: source.height, steps: source.steps, cfgScale: source.cfgScale, cfgRescale: source.cfgRescale, sampler: source.sampler,
       noiseSchedule: source.noiseSchedule, ucPreset: source.ucPreset, qualityPreset: source.qualityPreset, transparentBackground: source.transparentBackground === true, seed: source.seedMode === 'random' ? null : source.seed ?? null,
+      effort: source.effort === 'medium' ? 'medium' : 'high',
       stylePrompt: source.stylePrompt, positivePrompt: source.positivePrompt, negativePrompt: source.negativePrompt,
       characters: authoredCharacters.map(({ prompt, negativePrompt, useCoords, x, y }) => ({ prompt, negativePrompt: negativePrompt ?? '', useCoords, x, y })),
       ...modeAuthored,
@@ -763,6 +860,20 @@ function readbackWarnings({ mode, input, view }) {
     if (uc.preset !== 3 && uc.text === '') warnings.push({ code: 'uc_preset_adds_nothing', message: `ucPreset ${uc.preset} adds no UC text on ${model}; the negative prompt is only what was written. This is the actual effect of that preset on this model.` });
     if (effective.charactersNotSent) warnings.push({ code: 'characters_not_sent', message: `${effective.charactersNotSent} stored character(s) exceed what ${model} sends; the builder drops them from the request.` });
     if (source.transparentBackground === true && !effective.transparentBackground.enabled) warnings.push({ code: 'transparent_background_not_sent', message: `The recipe asks for a transparent background, but the builder does not send it on ${model} (V5 only); the image will have a normal background.` });
+    // Medium effort (canvas captures and stored recipes): what the recipe holds but Medium does not send.
+    if (effective.effort?.level === 'medium') {
+      const authoredCharacters = Array.isArray(authored.charCaptions) ? authored.charCaptions : [];
+      const replaced = [['steps', source.steps, effective.steps], ['sampler', source.sampler, effective.sampler], ['cfgRescale', source.cfgRescale ?? 0, effective.cfgRescale], ['ucPreset', source.ucPreset, effective.ucPreset.preset]]
+        .filter(([, from, to]) => from !== undefined && from !== to).map(([field, from, to]) => `${field} ${JSON.stringify(from)} → ${JSON.stringify(to)}`);
+      if (source.negativePrompt) replaced.push('negativePrompt (not sent)');
+      if (mode !== 'inpaint' && authoredCharacters.some(character => character?.negativePrompt)) replaced.push('character negativePrompt (not sent)');
+      if (replaced.length) warnings.push({ code: 'effort_medium_fixed', message: `effort medium runs ${effective.effort.requestModel} with fixed steps 14, Euler Ancestral, no CFG rescale and the Heavy UC only; the recipe's ${replaced.join(', ')} are replaced.` });
+    } else if (source.effort === 'medium' && mode !== 'enhance') warnings.push({ code: 'effort_not_applied', message: `The recipe asks for effort medium, but ${model} has no Medium effort (only ${EFFORT_MODEL}${mode === 'inpaint' ? "'s inpainting model" : ''}); it runs on High.` });
+    if (mode === 'enhance' && effective.enhance?.max) {
+      const out = effective.enhance.expectedOutput;
+      if (effective.sourceResized) { const { from, to } = effective.sourceResized; warnings.push({ code: 'enhance_max_source_adjusted', from, to, message: `Max✨ sends the source at its own size, 64-aligned and under ${Math.floor(MAX_ENHANCE_INPUT_LIMIT)} pixels: ${from.width}×${from.height} is sent as ${to.width}×${to.height}.` }); }
+      warnings.push({ code: 'enhance_max_paid', expectedOutput: out, message: `Enhance Max✨ sends the source at ${effective.width}×${effective.height} with upscaled_enhance and returns about ${out ? `${out.width}×${out.height}` : '2×'} (at most about 3.1 MP; the saved image has the size NovelAI returns); it costs Anlas on Opus too.` });
+    }
     if (mode === 'i2i' && effective.sourceResized) {
       const { from, to } = effective.sourceResized;
       warnings.push({ code: 'source_resized_for_i2i', from, to, message: `The source ${from.width}×${from.height} is resized (stretched, not cropped) to ${to.width}×${to.height} for image-to-image; their aspect ratios differ by ${(aspectDeviation(to.width, to.height, from.width, from.height) * 100).toFixed(1)}%.` });
@@ -957,7 +1068,7 @@ export function createRecipeQueue({ bridge, now = Date.now, monotonicNow = () =>
     if (differences.length) mismatched.set(`${observed.recipeId}:${observed.recipeRevision}`, differences);
     if (differences.length) throw new BridgeError('recipe_input_mismatch', `The host stored different generation inputs than requested (${differences.join(', ')}). This revision was saved but must not be enqueued.`, { ...receipt, putOutcome: 'confirmed', observedIdentity, fields: differences });
     const readback = recipeReadback(observed, { built });
-    return { ...readback, ...(built ? { warnings: [...readback.warnings, ...built.warnings] } : {}), saved: true, generationSubmitted: false, next: nextStep(observed, mode) };
+    return { ...readback, warnings: [...readback.warnings, ...(built?.warnings ?? []), ...plan.warnings], saved: true, generationSubmitted: false, next: nextStep(observed, mode) };
   }
 
   /** Stored-input comparison of a put or preview reply: authored fields, one sample, and the mask provenance. */
@@ -986,7 +1097,7 @@ export function createRecipeQueue({ bridge, now = Date.now, monotonicNow = () =>
     if (images.length) throw new BridgeError('recipe_identity_unconfirmed', `The host previewed a different image than this server sent (${images.join(', ')}). Nothing was saved.`, { ...details, fields: images });
     const differences = storedDifferences(preparation, observed, provenance);
     if (differences.length) throw new BridgeError('recipe_input_mismatch', `The host preview used different generation inputs than requested (${differences.join(', ')}). Nothing was saved.`, { ...details, fields: differences });
-    return previewResponse(observed, built);
+    return previewResponse(observed, built, plan.warnings);
   }
 
   /** The next step after a saved recipe, by readiness and mode. A canvas recipe cannot be revised: the canvas is captured again. */
@@ -1044,8 +1155,8 @@ export function createRecipeQueue({ bridge, now = Date.now, monotonicNow = () =>
   }
 
   /** The readback of a write-free preview reply, with its optional mask overlay (`built`: the mask built here, if any). */
-  function previewResponse(observed, built) {
-    const readback = recipeReadback(observed, { built }), image = observed.previewImage ?? null, warnings = [...readback.warnings, ...(built?.warnings ?? [])];
+  function previewResponse(observed, built, planWarnings = []) {
+    const readback = recipeReadback(observed, { built }), image = observed.previewImage ?? null, warnings = [...readback.warnings, ...(built?.warnings ?? []), ...planWarnings];
     if (image && built && image.cells.selected !== built.selectedCells) warnings.push({ code: 'mask_cells_differ', message: `The host request mask selects ${image.cells.selected} cells; this server computed ${built.selectedCells}. Trust the host count and the preview image.` });
     return { ...readback, warnings, preview: true, saved: false, generationSubmitted: false,
       previewImage: image && { mimeType: image.mimeType, width: image.width, height: image.height, byteLength: image.byteLength, sha256: image.sha256, ...(record(image.basis) ? { basis: image.basis } : {}), cells: { selected: image.cells.selected, total: image.cells.total }, data: image.data },
