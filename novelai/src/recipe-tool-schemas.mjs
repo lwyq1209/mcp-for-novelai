@@ -6,17 +6,18 @@
  * field again (per mode) before any host call; the mask is validated only there,
  * so its errors carry details {reason, path}.
  */
-import { DIRECTOR_EMOTIONS, DIRECTOR_TOOLS, EFFORT_VALUES, MAX_DIMENSION, MAX_QUEUE_ITEMS, MAX_QUEUE_SEED, MAX_TEXT, NOISE_SCHEDULES, QUALITY_PRESETS, QUEUE_FILE_PREFIX_MAX, QUEUE_FILE_PREFIX_PATTERN, QUEUE_HISTORY_GROUP_MAX, RECIPE_HOST_METHODS, RECIPE_MODES, RECIPE_SOURCE_HOST_METHODS, T2I_MODELS, T2I_SAMPLERS } from './recipe-queue.mjs';
+import { DIRECTOR_EMOTIONS, DIRECTOR_TOOLS, EFFORT_VALUES, MAX_QUEUE_ITEMS, MAX_QUEUE_SEED, MAX_TEXT, NOISE_SCHEDULES, QUALITY_PRESETS, QUEUE_FILE_PREFIX_MAX, QUEUE_FILE_PREFIX_PATTERN, QUEUE_HISTORY_GROUP_MAX, RECIPE_HOST_METHODS, RECIPE_MODES, RECIPE_SOURCE_HOST_METHODS, T2I_MODELS, T2I_SAMPLERS } from './recipe-queue.mjs';
 
 const schema = (properties = {}, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
 const positive = { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER };
 const uuid = { type: 'string', pattern: '^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$' };
 const hash64 = { type: 'string', pattern: '^[a-f0-9]{64}$' };
 const promptText = { type: 'string', maxLength: MAX_TEXT };
-const side = { type: 'integer', minimum: 64, maximum: MAX_DIMENSION, multipleOf: 64 };
+// Numbers the host would clamp or snap are taken as given and corrected by the server (warnings), so the schema keeps only the type.
+const pixels = { type: 'number' };
+const whole = { type: 'integer' };
 const queueSeed = { type: 'integer', minimum: 0, maximum: MAX_QUEUE_SEED };
 const identity = { type: 'string', minLength: 1, maxLength: 512, pattern: '\\S' };
-const level = { type: 'integer', minimum: 0, maximum: 5 };
 const requestKey = { type: 'string', minLength: 1, maxLength: 120, pattern: '\\S', description: 'Your idempotency key for this enqueue intent (1–120 printable characters). The server namespaces it (mcp-…); reuse the same key for the same intent, including after a restart.' };
 const recipeRef = { recipeId: { ...uuid, description: 'Recipe ID from prepare_recipe.' }, recipeRevision: positive, inputHash: { ...hash64, description: 'Exact inputHash returned with that recipe revision.' } };
 
@@ -39,32 +40,32 @@ const PREPARE_RECIPE_SCHEMA = schema({
   mask: { type: 'object', description: 'inpaint only: {units:"fraction"|"px", layers:[1–16]} applied in order to an empty mask, first layer add. Layer {op:"add"|"subtract", shape|alpha, growPx? −256…256 (+ grow, − shrink), invert?}; per layer rasterize → grow → invert → combine. shape: {type:"rect",x,y,width,height} | {type:"ellipse",cx,cy,rx,ry} | {type:"polygon",points:[[x,y],…] 3–256, even-odd} | {type:"stroke",points 1–512,widthPx 1–512 (≥12 for thin lines)}. alpha (≤2 layers): {historyId,historyRevision,assetId,threshold? 1–255, default 128} of a PNG history original; alpha ≥ threshold selects. fraction scales x by width and y by height; px are source pixels; origin top-left. Coordinates are rounded (fraction 4 decimals, px whole pixels). The host repaints whole 8×8 latent cells; 0 selected cells is refused (mask_empty).' },
   model: { type: 'string', enum: [...T2I_MODELS] },
   effort: { type: 'string', enum: [...EFFORT_VALUES], description: 'Optional, default high; medium: see the description.' },
-  width: side, height: side,
-  steps: { type: 'integer', minimum: 1, maximum: 50 },
-  cfgScale: { type: 'number', minimum: 0, maximum: 10 },
-  cfgRescale: { type: 'number', minimum: 0, maximum: 1, description: 'Optional, default 0.' },
+  width: pixels, height: pixels,
+  steps: { type: 'number' },
+  cfgScale: { type: 'number' },
+  cfgRescale: { type: 'number', description: 'Optional, default 0.' },
   sampler: { type: 'string', enum: [...T2I_SAMPLERS] },
   noiseSchedule: { type: 'string', enum: [...NOISE_SCHEDULES], description: 'V5 models require karras.' },
-  ucPreset: { type: 'integer', minimum: 0, maximum: 3, description: 'UC preset index; its text depends on the model (commonly 0 Heavy, 1 Light, 2 Human Focus, 3 None). On some models a preset adds nothing (for example 2 on V4 Full/Curated, every preset on Furry V3); the readback shows the actual text and warns when it is empty.' },
+  ucPreset: { type: 'integer', description: 'UC preset index; its text depends on the model (commonly 0 Heavy, 1 Light, 2 Human Focus, 3 None). On some models a preset adds nothing (for example 2 on V4 Full/Curated, every preset on Furry V3); the readback shows the actual text and warns when it is empty.' },
   qualityPreset: { type: 'string', enum: [...QUALITY_PRESETS], description: 'Automatic quality tags; light is V5-only, none disables them. Some models add no quality text (Furry V3); the readback shows the actual text and warns when it is empty.' },
   stylePrompt: promptText,
   positivePrompt: { ...promptText, minLength: 1, pattern: '\\S' },
   negativePrompt: promptText,
-  seed: { type: ['integer', 'null'], minimum: 0, maximum: MAX_QUEUE_SEED, description: 'Fixed seed, or null for a random seed drawn at enqueue.' },
-  characters: { type: 'array', maxItems: 32, description: 't2i/i2i/enhance, V4+ models only: up to 6 (V4/V4.5) or 32 (V5).', items: { type: 'object', additionalProperties: false, required: ['prompt', 'useCoords'], properties: {
+  seed: { type: ['integer', 'null'], description: 'Fixed seed 0–2147483646, or null (or negative) for a random seed drawn at enqueue.' },
+  characters: { type: 'array', description: 't2i/i2i/enhance, V4+ models only: up to 6 (V4/V4.5) or 32 (V5).', items: { type: 'object', additionalProperties: false, required: ['prompt', 'useCoords'], properties: {
     prompt: { ...promptText, minLength: 1, pattern: '\\S' }, negativePrompt: promptText, useCoords: { type: 'boolean' },
-    x: { type: 'number', minimum: 0, maximum: 1, description: 'Required when useCoords is true.' }, y: { type: 'number', minimum: 0, maximum: 1, description: 'Required when useCoords is true.' } } } },
+    x: { type: 'number', description: '0–1; used when useCoords is true (default 0.5).' }, y: { type: 'number', description: '0–1; used when useCoords is true (default 0.5).' } } } },
   transparentBackground: { type: 'boolean', description: 'Optional, default false. t2i on V5 models only: requests a transparent background (the builder appends "transparent background" to the prompt and sets tag_hint_transparent_background and straight_alpha); judge the actual result from the image. Do not also write that text in the prompt. A revision rewrites every field, so pass true again to keep it. Rejected on other models, where the host would turn it off silently.' },
-  strength: { type: 'number', minimum: 0, maximum: 1, description: 'i2i: how much to change the source; inpaint: repaint strength (1 = full).' },
-  extraNoiseSeed: { type: ['integer', 'null'], minimum: 1, maximum: MAX_QUEUE_SEED, description: 'i2i/enhance, optional: fixed extra noise seed; omit or null for a random one per image.' },
-  magnitude: { type: 'integer', minimum: 1, maximum: 10, description: 'enhance: 1–10 (strength is derived from it).' },
-  scale: { enum: [1, 2, 'max'], description: 'enhance: 1, 2 or "max" (V5 only); upscale: 2.' },
+  strength: { type: 'number', description: 'i2i: how much to change the source; inpaint: repaint strength (1 = full).' },
+  extraNoiseSeed: { type: ['integer', 'null'], description: 'i2i/enhance, optional: fixed extra noise seed; omit, 0 or null for a random one per image.' },
+  magnitude: { ...whole, description: 'enhance: 1–10 (strength is derived from it).' },
+  scale: { enum: [1, 2, 'max'], description: 'enhance: 1, 2 or "max" (V5 only); upscale: 2 (optional).' },
   tool: { type: 'string', enum: [...DIRECTOR_TOOLS], description: 'director tool.' },
-  defry: { ...level, description: 'director, optional, default 0.' },
+  defry: { ...whole, description: 'director, optional, default 0.' },
   colorizePrompt: { ...promptText, description: 'director tool colorize only (may be empty).' },
   emotion: { type: 'string', enum: [...DIRECTOR_EMOTIONS], description: 'director tool emotion only.' },
-  emotionLevel: { ...level, description: 'director tool emotion only.' },
-  acceptDownscale: { type: 'boolean', description: 'upscale/director: allow the host to downscale a source over 1,048,576 px (default false: refused).' },
+  emotionLevel: { ...whole, description: 'director tool emotion only, 0–5 (default 0).' },
+  acceptDownscale: { type: 'boolean', description: 'upscale/director: a source over 1,048,576 px is downscaled by the host (default true, warning source_downscaled); false refuses it instead.' },
 }, ['mode']);
 const ENQUEUE_RECIPES_SCHEMA = schema({
   requestKey,
@@ -76,14 +77,14 @@ const ENQUEUE_RECIPES_SCHEMA = schema({
 }, ['requestKey', 'items']);
 const LOOKUP_ENQUEUE_SCHEMA = schema({ requestKey });
 
-const PREPARE_RECIPE_DESCRIPTION = 'Freeze one independent recipe revision in the shared host recipe store from inline fields (no inbox file) or from the live canvas, or dry-run it with preview:true. Six modes; a field of another mode is refused, never ignored, and nothing the host would clamp, snap, resize, convert or drop is accepted silently. '
-  + 't2i: model; width/height multiples of 64 with width×height ≤ 3,145,728; steps 1–50; cfgScale 0–10; optional cfgRescale 0–1; sampler; noiseSchedule (V5: karras); ucPreset 0–3; qualityPreset standard/light (V5 only)/none; stylePrompt; non-blank positivePrompt; negativePrompt; seed 0–2147483646 or null for random at enqueue; optional characters (V4+ only, at most 6, V5 32) and transparentBackground (V5 only). '
-  + 'effort (t2i/i2i/inpaint, default high): medium runs the distilled V5 Full Medium model (nai-diffusion-5-full only; sent as nai-diffusion-5-full-medium[-inpainting], about 42% cheaper) with fixed steps 14, k_euler_ancestral, cfgRescale 0, Heavy UC (nsfw-prefixed unless the prompt has nsfw) and no negative prompts; omit those, or given values are replaced (warning). '
+const PREPARE_RECIPE_DESCRIPTION = 'Freeze one independent recipe revision in the shared host recipe store from inline fields (no inbox file) or from the live canvas, or dry-run it with preview:true. Six modes; a field of another mode is refused, never ignored. A value the host would clamp, snap, resize, convert or drop is corrected to what runs before it is saved, and each correction is a readback warning with field, from and to; only what cannot run (a missing field, an unknown model or sampler, an unreadable source) is refused. '
+  + 't2i: model; width/height (snapped to multiples of 64 within width×height ≤ 3,145,728); steps 1–50; cfgScale 0–10; optional cfgRescale 0–1; sampler; noiseSchedule (V5 uses karras); ucPreset 0–3; qualityPreset standard/light (V5; else standard)/none; stylePrompt; non-blank positivePrompt; negativePrompt; seed 0–2147483646 or null for random at enqueue; optional characters (V4+: up to 6, V5 32; more are dropped) and transparentBackground (V5 only). '
+  + 'effort (default high): medium runs the distilled V5 Full Medium model (nai-diffusion-5-full t2i/i2i/inpaint; elsewhere High; sent as nai-diffusion-5-full-medium[-inpainting], about 42% cheaper) with fixed steps 14, k_euler_ancestral, cfgRescale 0, Heavy UC (nsfw-prefixed unless the prompt has nsfw) and no negative prompts; omit those, or given values are replaced (warning). '
   + 'Image modes take source {kind:"history", historyId, historyRevision, assetId} from asset_library (look at it first with action:image; read_queue/get_queue_result give the historyId of queue results), or {kind:"study", studyId, studyRevision} of an imported image (material_studies id/revision): a PNG/JPEG/WebP original; nothing else is a source. '
-  + 'i2i: the t2i fields without transparentBackground, plus source and strength 0–1, optional extraNoiseSeed; width/height must keep the source aspect within 3% (the host stretches). '
-  + 'enhance: the t2i fields without width/height/transparentBackground, plus source, magnitude 1–10, scale 1|2|"max", optional extraNoiseSeed; for 1|2 the size is source × scale, so the source must be 64-aligned and the result ≤ 3,145,728 px. "max" (Max✨, V5 only) sends the source at its own size (made 64-aligned, < 2,516,582 px) and returns about 2× (≤ ~3.1 MP), costs Anlas on Opus too. '
-  + 'inpaint: the generation fields without width/height/characters/transparentBackground (model: no furry-3; runs as <model>-inpainting), plus source (64-aligned, ≤ 1600 px per side), strength 0–1 and mask (shapes and alpha layers, see mask). '
-  + 'upscale: source, scale 2. director: source, tool, optional defry 0–5, colorizePrompt (colorize only), emotion + emotionLevel 0–5 (emotion only). upscale/director use no seed and refuse a source over 1,048,576 px unless acceptDownscale:true. '
+  + 'i2i: the t2i fields without transparentBackground, plus source and strength 0–1, optional extraNoiseSeed; width/height are optional: a size more than 3% off the source aspect is refitted to it at about the same area, and without one the source aspect is used at about 832×1216 (Opus free size). '
+  + 'enhance: the t2i fields without width/height/transparentBackground, plus source, magnitude 1–10, scale 1|2|"max", optional extraNoiseSeed; for 1|2 the request is source × scale in multiples of 64 within 3,145,728 px (2 becomes 1 when it does not fit). "max" (Max✨, V5 only; elsewhere the largest of 2|1 that fits) sends the source at its own size (made 64-aligned, < 2,516,582 px) and returns about 2× (≤ ~3.1 MP), costs Anlas on Opus too. '
+  + 'inpaint: the generation fields without width/height/characters/transparentBackground (model: no furry-3; runs as <model>-inpainting), plus source (aligned up to 64, then ≤ 1600 px per side), strength 0–1 and mask (shapes and alpha layers, see mask). '
+  + 'upscale: source (scale 2). director: source, tool, optional defry 0–5, colorizePrompt (colorize only), emotion + optional emotionLevel 0–5 (emotion only). upscale/director use no seed; a source over 1,048,576 px is downscaled (warning source_downscaled) unless acceptDownscale:false. '
   + 'preview:true runs the same checks and the host builder without saving anything; for inpaint it returns a WebP of the actual request source with the latent cells the mask selects tinted red, so check the mask, adjust and preview again before saving. '
   + 'To revise, pass recipeId with its current expectedRevision, the same mode and every field again (source too); the host saves a new immutable revision. '
   + 'canvas {workspaceId, expectedRevision, draftId?|patch?} with mode (and optional preview) instead captures the live canvas at exactly that revision into a new recipe: every input of that mode as the canvas holds it, its source and mask copied in. draftId reads that unapplied draft, patch a detached t2i text patch (params/charCaptions), as read_prompt_review does; nothing is adopted or changed, and a newer revision is a conflict (read the workspace again). A canvas recipe takes no other field, cannot be revised and does not inherit the canvas history group (pass historyGroup to enqueue_recipes); to show a draft on the canvas, apply_edit it. '

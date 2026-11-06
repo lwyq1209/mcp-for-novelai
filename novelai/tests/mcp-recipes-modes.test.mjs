@@ -318,6 +318,15 @@ test('P1 i2i, enhance, upscale and director: one source metadata read, one put b
       assert.deepEqual(v.effective.input, { width: 1024, height: 1024, resized: true }); assert.deepEqual(v.effective.output, { width: 2048, height: 2048 });
       assert.deepEqual(v.warnings.map(warning => warning.code), ['source_downscaled']);
     }],
+    // 0.1.4: without acceptDownscale a large source is downscaled the same way (the host's own resize), with the warning.
+    ['upscale of a large source without acceptDownscale', recipes(bigSource).upscale(), bigSource, big, v => {
+      assert.deepEqual(v.effective.input, { width: 1024, height: 1024, resized: true }); assert.deepEqual(v.effective.output, { width: 2048, height: 2048 });
+      assert.deepEqual(v.warnings.map(warning => warning.code), ['source_downscaled']); assert.match(v.warnings[0].message, /downscales the source to 1024×1024/);
+    }],
+    ['director of a large source without acceptDownscale', recipes(bigSource).director(), bigSource, big, v => {
+      assert.deepEqual(v.effective.input, { width: 1024, height: 1024, resized: true, alphaFlattened: true });
+      assert.deepEqual(v.warnings.map(warning => warning.code), ['source_downscaled']);
+    }],
     ['director bg-removal', r.director(), source, bytes, v => {
       assert.deepEqual(v.authored, { tool: 'bg-removal', defry: 0 });
       assert.deepEqual(v.effective, { tool: 'bg-removal', options: { defry: 0 }, input: { width: 832, height: 1216, resized: false, alphaFlattened: true }, output: { width: 832, height: 1216 }, seedPolicy: 'unused', sampleCount: 1 });
@@ -394,18 +403,17 @@ test('P2 every invalid image-mode argument is refused before any host call, mask
   const id = { historyId: 'h-a', historyRevision: 1, assetId: 'a-a' };
   const cases = {
     t2iWithSource: { mode: 't2i', ...GEN, width: 832, height: 1216, source }, unknownMode: { ...r.upscale(), mode: 'variation' },
-    i2iTransparent: r.i2i({ transparentBackground: true }), i2iNoSource: omit(r.i2i(), 'source'), i2iNoStrength: omit(r.i2i(), 'strength'), i2iStrength2: r.i2i({ strength: 2 }),
-    i2iExtraNoise0: r.i2i({ extraNoiseSeed: 0 }), i2iMask: r.i2i({ mask: RECT_MASK }), i2iMagnitude: r.i2i({ magnitude: 3 }), i2iWidth833: r.i2i({ width: 833 }), i2iAcceptDownscale: r.i2i({ acceptDownscale: true }),
-    i2iCharsOnV3: r.i2i({ model: 'nai-diffusion-3', noiseSchedule: 'native', characters: [{ prompt: 'a', useCoords: false }] }),
-    enhanceWidth: r.enhance({ width: 832 }), enhanceStrength: r.enhance({ strength: 0.5 }), enhanceScale3: r.enhance({ scale: 3 }), enhanceMagnitude0: r.enhance({ magnitude: 0 }), enhanceMagnitude11: r.enhance({ magnitude: 11 }),
+    i2iTransparent: r.i2i({ transparentBackground: true }), i2iNoSource: omit(r.i2i(), 'source'), i2iNoStrength: omit(r.i2i(), 'strength'), i2iStringStrength: r.i2i({ strength: '0.5' }),
+    i2iFractionalNoise: r.i2i({ extraNoiseSeed: 1.5 }), i2iMask: r.i2i({ mask: RECT_MASK }), i2iMagnitude: r.i2i({ magnitude: 3 }), i2iStringWidth: r.i2i({ width: '832' }), i2iAcceptDownscale: r.i2i({ acceptDownscale: true }),
+    enhanceWidth: r.enhance({ width: 832 }), enhanceStrength: r.enhance({ strength: 0.5 }), enhanceScale3: r.enhance({ scale: 3 }), enhanceNoScale: omit(r.enhance(), 'scale'), enhanceFractionalMagnitude: r.enhance({ magnitude: 2.5 }),
     enhanceTransparent: r.enhance({ transparentBackground: true }), enhanceNoSeed: omit(r.enhance(), 'seed'),
     inpaintWidth: r.inpaint(RECT_MASK, { width: 832 }), inpaintCharacters: r.inpaint(RECT_MASK, { characters: [{ prompt: 'a', useCoords: false }] }), inpaintFurry: r.inpaint(RECT_MASK, { model: 'nai-diffusion-furry-3', noiseSchedule: 'native' }),
     inpaintInpaintingModel: r.inpaint(RECT_MASK, { model: 'nai-diffusion-4-5-full-inpainting' }), inpaintNoMask: omit(r.inpaint(RECT_MASK), 'mask'), inpaintExtraNoise: r.inpaint(RECT_MASK, { extraNoiseSeed: 5 }),
-    inpaintTransparent: r.inpaint(RECT_MASK, { transparentBackground: true }), inpaintLightOnV45: r.inpaint(RECT_MASK, { qualityPreset: 'light' }),
-    upscaleScale4: r.upscale({ scale: 4 }), upscaleScale1: r.upscale({ scale: 1 }), upscaleSeed: r.upscale({ seed: 1 }), upscalePrompt: r.upscale({ positivePrompt: 'x' }), upscaleModel: r.upscale({ model: 'nai-diffusion-4-5-full' }), upscaleMask: r.upscale({ mask: RECT_MASK }),
-    directorUnknownTool: r.director({ tool: 'paint' }), directorColorizeNoPrompt: r.director({ tool: 'colorize' }), directorPromptOnBg: r.director({ colorizePrompt: 'x' }), directorEmotionNoLevel: r.director({ tool: 'emotion', emotion: 'happy' }),
+    inpaintTransparent: r.inpaint(RECT_MASK, { transparentBackground: true }), inpaintNoStrength: omit(r.inpaint(RECT_MASK), 'strength'),
+    upscaleScale4: r.upscale({ scale: 4 }), upscaleStringDownscale: r.upscale({ acceptDownscale: 'no' }), upscaleSeed: r.upscale({ seed: 1 }), upscalePrompt: r.upscale({ positivePrompt: 'x' }), upscaleModel: r.upscale({ model: 'nai-diffusion-4-5-full' }), upscaleMask: r.upscale({ mask: RECT_MASK }),
+    directorUnknownTool: r.director({ tool: 'paint' }), directorNoTool: omit(r.director(), 'tool'), directorPromptOnBg: r.director({ colorizePrompt: 'x' }), directorEmotionMissing: r.director({ tool: 'emotion', emotionLevel: 2 }),
     directorEmotionOnColorize: r.director({ tool: 'colorize', colorizePrompt: 'x', emotion: 'happy', emotionLevel: 1 }), directorBadEmotion: r.director({ tool: 'emotion', emotion: 'joy', emotionLevel: 1 }),
-    directorLevel6: r.director({ tool: 'emotion', emotion: 'happy', emotionLevel: 6 }), directorDefry6: r.director({ defry: 6 }), directorSeed: r.director({ seed: 1 }), directorSteps: r.director({ steps: 28 }), directorScale: r.director({ scale: 2 }),
+    directorLevelOnBg: r.director({ emotionLevel: 2 }), directorFractionalDefry: r.director({ defry: 1.5 }), directorSeed: r.director({ seed: 1 }), directorSteps: r.director({ steps: 28 }), directorScale: r.director({ scale: 2 }),
     sourceKind: r.upscale({ source: { ...source, kind: 'file' } }), sourceNoAsset: r.upscale({ source: omit(source, 'assetId') }), sourceRevision0: r.upscale({ source: { ...source, historyRevision: 0 } }),
     sourceBytes: r.upscale({ source: { ...source, data: 'iVBORw0KGgo=' } }), sourcePath: r.upscale({ source: '/Users/x/a.png' }), sourceBlankId: r.upscale({ source: { ...source, historyId: ' ' } }), previewString: r.upscale({ preview: 'yes' }),
     revisionWithoutId: r.upscale({ expectedRevision: 1 }),
@@ -434,6 +442,66 @@ test('P2 every invalid image-mode argument is refused before any host call, mask
   assert.deepEqual(h.calls, [], 'no invalid preparation reached the host');
 });
 
+test('P2b (0.1.4) image-mode values the host would clamp, snap, resize or convert are corrected with a warning each, saved as they run', async t => {
+  const h = await realHost(t);
+  const { call, readRecipe } = await connect(t, h.bridge);
+  const add = (id, width, height) => h.addHistory(id, gradient(width, height), { width, height });
+  const portrait = add('c-portrait', 832, 1216), square = add('c-square', 1024, 1024), odd = add('c-odd', 1000, 1500), unaligned = add('c-unaligned', 830, 1216);
+  const large = add('c-large', 1216, 1216), huge = add('c-huge', 2048, 2048), big = add('c-big', 1280, 1280), r = recipes(portrait);
+  const warning = (prepared, code, field) => prepared.warnings.find(item => item.code === code && (field === undefined || item.field === field));
+  const cases = [
+    ['i2i strength 2', r.i2i({ strength: 2 }), 'value_clamped', 'strength', 2, 1, v => v.effective.i2i.strength === 1],
+    ['i2i width 833', r.i2i({ width: 833 }), 'size_adjusted', 'width×height', { width: 833, height: 1216 }, { width: 832, height: 1216 }, v => v.effective.width === 832],
+    ['i2i characters on V3', r.i2i({ model: 'nai-diffusion-3', noiseSchedule: 'native', characters: [{ prompt: 'a', useCoords: false }] }), 'value_dropped', 'characters', 1, 0, v => v.authored.characters.length === 0],
+    ['i2i aspect off the source', recipes(square).i2i(), 'i2i_size_adjusted', 'width×height', { width: 832, height: 1216 }, { width: 1024, height: 1024 }, v => v.effective.width === 1024 && v.effective.height === 1024 && v.effective.sourceResized === null],
+    ['i2i without a size', omit(r.i2i(), 'width', 'height'), 'i2i_size_from_source', 'width×height', null, { width: 832, height: 1216 }, v => v.effective.width === 832 && v.effective.height === 1216],
+    ['i2i without a size, 2:3 source', omit(recipes(odd).i2i(), 'width', 'height'), 'i2i_size_from_source', 'width×height', null, { width: 832, height: 1216 }, v => v.effective.width * v.effective.height <= 1024 * 1024],
+    ['i2i without a size, square source', omit(recipes(square).i2i(), 'width', 'height'), 'i2i_size_from_source', 'width×height', null, { width: 1024, height: 1024 }, v => v.effective.sourceResized === null],
+    ['i2i with only a width', omit(r.i2i({ width: 1024 }), 'height'), 'i2i_size_from_source', 'width×height', { width: 1024 }, { width: 1024, height: 1472 }, v => v.effective.width === 1024],
+    ['enhance magnitude 0', r.enhance({ magnitude: 0 }), 'value_clamped', 'magnitude', 0, 1, v => v.effective.enhance.magnitude === 1],
+    ['enhance magnitude 11', r.enhance({ magnitude: 11 }), 'value_clamped', 'magnitude', 11, 10, v => v.effective.enhance.magnitude === 10],
+    ['enhance of an unaligned source', recipes(unaligned).enhance(), 'enhance_source_adjusted', 'source', { width: 830, height: 1216 }, { width: 832, height: 1216 }, v => v.effective.width === 832],
+    ['enhance 2× over the area', recipes(large).enhance({ scale: 2 }), 'value_replaced', 'scale', 2, 1, v => v.effective.enhance.scale === 1 && v.effective.width === 1216],
+    ['enhance 1× over the area', recipes(huge).enhance(), 'enhance_source_adjusted', 'source', { width: 2048, height: 2048 }, { width: 1728, height: 1728 }, v => v.effective.width === 1728],
+    ['inpaint light on V4.5', r.inpaint(RECT_MASK, { qualityPreset: 'light' }), 'value_replaced', 'qualityPreset', 'light', 'standard', v => v.authored.qualityPreset === 'standard'],
+    ['inpaint strength -1', r.inpaint(RECT_MASK, { strength: -1 }), 'value_clamped', 'strength', -1, 0, v => v.authored.strength === 0],
+    ['inpaint of an unaligned source', recipes(unaligned).inpaint(RECT_MASK), 'inpaint_source_adjusted', 'source', { width: 830, height: 1216 }, { width: 832, height: 1216 }, v => v.effective.inpaint.width === 832 && v.effective.requestSource.width === 832],
+    ['upscale scale 1', r.upscale({ scale: 1 }), 'value_replaced', 'scale', 1, 2, v => v.effective.scale === 2],
+    ['director emotion without a level', r.director({ tool: 'emotion', emotion: 'happy' }), 'value_defaulted', 'emotionLevel', null, 0, v => v.effective.options.emotionLevel === 0],
+    ['director emotion level 6', r.director({ tool: 'emotion', emotion: 'happy', emotionLevel: 6 }), 'value_clamped', 'emotionLevel', 6, 5, v => v.effective.options.emotionLevel === 5],
+    ['director defry 6', r.director({ defry: 6 }), 'value_clamped', 'defry', 6, 5, v => v.effective.options.defry === 5],
+  ];
+  for (const [label, args, code, field, from, to, check] of cases) {
+    const prepared = ok(await call('prepare_recipe', args));
+    const found = warning(prepared, code, field);
+    assert.ok(found, `${label}: ${JSON.stringify(prepared.warnings)}`);
+    assert.deepEqual([found.from, found.to], [from, to], label); assert.equal(typeof found.message, 'string');
+    assert.equal(prepared.ready, true, label);
+    assert.ok(check(prepared), `${label}: ${JSON.stringify({ effective: prepared.effective, authored: prepared.authored })}`);
+    assert.equal(ok(await readRecipe(ref(prepared))).inputHash, prepared.inputHash, `${label}: stored as it runs`);
+  }
+  // An i2i size within 3% of the source aspect is kept as given (the host's slight stretch is the readback's own warning).
+  const near = ok(await call('prepare_recipe', r.i2i({ width: 768, height: 1152 })));
+  assert.deepEqual([near.effective.width, near.effective.height], [768, 1152]); assert.equal(warning(near, 'i2i_size_adjusted'), undefined);
+  // Without a size the readback names it: the i2i request is exactly the chosen size.
+  const sized = ok(await call('prepare_recipe', omit(recipes(odd).i2i(), 'width', 'height')));
+  assert.deepEqual([sized.authored.width, sized.authored.height, sized.effectiveRequest.parameters.width, sized.effectiveRequest.parameters.height], [832, 1216, 832, 1216]);
+  assert.match(warning(sized, 'i2i_size_from_source').message, /keeps the source aspect \(1000×1500/);
+  // The aspect helper: closest area within the 3% stretch tolerance, never over the limit.
+  assert.deepEqual(recipeQueue.aspectSize(1024, 1024, 832 * 1216, 1024 * 1024), { width: 1024, height: 1024 });
+  assert.deepEqual(recipeQueue.aspectSize(1920, 1080, 832 * 1216, 1024 * 1024), { width: 1344, height: 768 });
+  const wide = recipeQueue.aspectSize(8000, 100, 3_145_728);
+  assert.ok(wide.width * wide.height <= 3_145_728 && Math.abs(wide.width / wide.height - 80) / 80 <= 0.03, JSON.stringify(wide));
+  const strip = recipeQueue.aspectSize(100_000, 10, 832 * 1216, 1024 * 1024);
+  assert.deepEqual(strip.height, 64, 'an aspect no size can keep: as close as any size gets'); assert.ok(strip.width * strip.height <= 1024 * 1024);
+  // A colorize without colorizePrompt runs with an empty one; Upscale needs no scale at all.
+  assert.equal(ok(await call('prepare_recipe', r.director({ tool: 'colorize' }))).effective.options.colorizePrompt, '');
+  assert.deepEqual(ok(await call('prepare_recipe', omit(r.upscale(), 'scale'))).warnings, []);
+  // A large upscale source is downscaled by default (P1), here with the module's own plan.
+  assert.equal(recipeQueue.recipePlan(recipes(big).upscale()).acceptDownscale, true);
+  assert.equal(recipeQueue.recipePlan(recipes(big).upscale({ acceptDownscale: false })).acceptDownscale, false);
+});
+
 test('P9 (W3 side) mask coordinates are rounded before rasterizing: fraction to 4 decimals, px to whole pixels; widths, grow and thresholds are kept', () => {
   const { spec } = sources.prepareMaskSpec({ units: 'fraction', layers: [{ op: 'add', shape: { type: 'rect', x: 0.123456, y: 0.1, width: 0.333333, height: 0.2 } }, { op: 'add', shape: { type: 'stroke', points: [[0.11114, 0.5], [0.6, 0.77777]], widthPx: 12.5 }, growPx: 3 }] });
   assert.deepEqual(spec.layers[0].shape, { type: 'rect', x: 0.1235, y: 0.1, width: 0.3333, height: 0.2 });
@@ -444,7 +512,7 @@ test('P9 (W3 side) mask coordinates are rounded before rasterizing: fraction to 
 });
 
 // ------------------------------------------------------------------------------------------------ P3
-test('P3 sources and alpha layers the host would stretch, snap, shrink or refuse are refused after the metadata read and before any put', async t => {
+test('P3 sources and alpha layers that cannot run (or whose downscale was declined) are refused after the metadata read and before any put', async t => {
   const h = await realHost(t);
   const { call, readRecipe } = await connect(t, h.bridge);
   const add = (id, width, height, bytes = gradient(width, height), options = {}) => h.addHistory(id, bytes, { width, height, ...options });
@@ -455,15 +523,11 @@ test('P3 sources and alpha layers the host would stretch, snap, shrink or refuse
   assert.ok(hugeAlpha.length > 12 * MiB && hugeAlpha.length < 20 * MiB, `${hugeAlpha.length}`);
   const cases = [
     ['gif source', recipes(add('gif', 1, 1, GIF, { mimeType: 'image/gif' })).upscale(), 'source_unsupported_type', 1],
-    ['i2i aspect', recipes(add('square', 1024, 1024)).i2i(), 'source_aspect_mismatch', 1],
-    ['enhance not 64-aligned', recipes(add('unaligned', 830, 1216)).enhance(), 'enhance_source_not_aligned', 1],
-    ['enhance 2× over the area', recipes(add('large', 1216, 1216)).enhance({ scale: 2 }), 'enhance_size_too_large', 1],
-    ['enhance 1× over the area', recipes(add('huge', 2048, 2048)).enhance(), 'enhance_size_too_large', 1],
-    ['inpaint not 64-aligned', recipes(add('unaligned-inpaint', 830, 1216)).inpaint(RECT_MASK), 'inpaint_source_not_aligned', 1],
     ['inpaint over 1600', recipes(add('wide', 1664, 1024)).inpaint(RECT_MASK), 'inpaint_source_too_large', 1],
-    ['upscale over 1 MP', recipes(add('big-up', 1280, 1280)).upscale(), 'source_needs_downscale', 1],
-    ['upscale output over 4096', recipes(add('strip', 4096, 128)).upscale({ acceptDownscale: true }), 'upscale_output_too_large', 1],
-    ['director over 1 MP', recipes(add('big-director', 1280, 1280)).director(), 'source_needs_downscale', 1],
+    ['inpaint over 1600 once aligned up', recipes(add('wide-odd', 1610, 1024)).inpaint(RECT_MASK), 'inpaint_source_too_large', 1],
+    ['upscale over 1 MP, downscale declined', recipes(add('big-up', 1280, 1280)).upscale({ acceptDownscale: false }), 'source_needs_downscale', 1],
+    ['upscale output over 4096', recipes(add('strip', 4096, 128)).upscale(), 'upscale_output_too_large', 1],
+    ['director over 1 MP, downscale declined', recipes(add('big-director', 1280, 1280)).director({ acceptDownscale: false }), 'source_needs_downscale', 1],
     ['alpha is a JPEG', r.inpaint(alphaMask(add('alpha-jpeg', 832, 1216, await toJpeg(subject(832, 1216)), { mimeType: 'image/jpeg' }))), 'alpha_not_png', 2],
     ['alpha is 16-bit', r.inpaint(alphaMask(add('alpha-16', 832, 1216, PNG.sync.write(PNG.sync.read(subject(832, 1216)), { bitDepth: 16 })))), 'alpha_png_unsupported', 2],
     ['alpha is interlaced', r.inpaint(alphaMask(add('alpha-adam7', 832, 1216, await sharp(subject(832, 1216)).png({ progressive: true }).toBuffer()))), 'alpha_png_unsupported', 2],
@@ -476,10 +540,8 @@ test('P3 sources and alpha layers the host would stretch, snap, shrink or refuse
     assert.equal(error.code, 'invalid_arguments', `${label}: ${error.message}`); assert.equal(error.details?.reason, reason, `${label}: ${error.message}`);
     assert.deepEqual(h.methods().slice(before), Array(reads).fill('asset_library'), `${label}: nothing saved`);
   }
-  const aspect = errorOf(await call('prepare_recipe', recipes(add('square-2', 1024, 1024)).i2i()));
-  assert.match(aspect.message, /Sizes keeping the aspect: /); assert.ok(aspect.details.candidates.length >= 1);
-  for (const candidate of aspect.details.candidates) assert.ok(candidate.width === candidate.height && candidate.width % 64 === 0, JSON.stringify(candidate));
-  assert.match(errorOf(await call('prepare_recipe', recipes(add('big-up-2', 1280, 1280)).upscale())).message, /acceptDownscale:true/);
+  const declined = errorOf(await call('prepare_recipe', recipes(add('big-up-2', 1280, 1280)).upscale({ acceptDownscale: false })));
+  assert.match(declined.message, /acceptDownscale is false; the host would downscale it to 1024×1024/); assert.deepEqual(declined.details.downscaledTo, { width: 1024, height: 1024 });
   // A mask that selects no latent cell after the host's 8×8 sampling.
   const empty = errorOf(await call('prepare_recipe', r.inpaint({ units: 'fraction', layers: [{ op: 'add', shape: { type: 'rect', x: 0.5, y: 0.5, width: 0.002, height: 0.002 } }] })));
   assert.equal(empty.code, 'mask_empty'); assert.equal(empty.details.reason, 'mask_empty'); assert.equal(empty.details.selectedCells, 0);
@@ -1274,11 +1336,8 @@ test('P13 study sources: the size rules and the EXIF orientation check run after
   const { call, readRecipe } = await connect(t, h.bridge);
   const add = (width, height, options = {}) => h.addStudy(options.bytes ?? gradient(width, height), { width, height, ...options });
   const cases = [
-    ['inpaint not 64-aligned', recipes(add(830, 1216)).inpaint(RECT_MASK), 'inpaint_source_not_aligned'],
     ['inpaint over 1600', recipes(add(1664, 1024)).inpaint(RECT_MASK), 'inpaint_source_too_large'],
-    ['i2i aspect', recipes(add(1024, 1024)).i2i(), 'source_aspect_mismatch'],
-    ['enhance not 64-aligned', recipes(add(830, 1216)).enhance(), 'enhance_source_not_aligned'],
-    ['upscale over 1 MP', recipes(add(1280, 1280)).upscale(), 'source_needs_downscale'],
+    ['upscale over 1 MP, downscale declined', recipes(add(1280, 1280)).upscale({ acceptDownscale: false }), 'source_needs_downscale'],
     ['gif', recipes(add(1, 1, { bytes: GIF, mimeType: 'image/gif' })).upscale(), 'source_unsupported_type'],
     ['EXIF orientation 6', recipes(add(832, 1216, { bytes: await toJpeg(gradient(832, 1216)), mimeType: 'image/jpeg', orientation: 6 })).i2i(), 'source_orientation_unsupported'],
     ['EXIF orientation 8 (inpaint preview)', recipes(add(768, 1216, { orientation: 8 })).inpaint(RECT_MASK, { preview: true }), 'source_orientation_unsupported'],
@@ -1446,22 +1505,24 @@ test('effort medium: t2i, i2i and inpaint replace the fixed fields (with a warni
   assert.deepEqual(inpaint.warnings.filter(warning => warning.code === 'effort_medium_fixed').map(warning => warning.field), ['steps', 'negativePrompt']);
 });
 
-test('effort medium is refused only where it cannot run: another model, enhance, upscale, director; high is accepted everywhere', async t => {
+test('effort medium runs on High where it does not exist (another model, enhance, upscale, director), with effort_not_applied; an unknown effort is refused', async t => {
   const h = await realHost(t);
   const { call } = await connect(t, h.bridge);
   const source = h.addHistory('history-effort', gradient(832, 1216), { width: 832, height: 1216 }), r = recipes(source);
-  const before = h.calls.length;
-  for (const [args, pattern] of [
-    [{ mode: 't2i', ...GEN, width: 832, height: 1216, effort: 'medium' }, /effort medium exists only for nai-diffusion-5-full; nai-diffusion-4-5-full has no Medium effort/],
-    [{ mode: 't2i', ...V5_GEN, model: 'nai-diffusion-5-curated', width: 832, height: 1216, effort: 'medium' }, /nai-diffusion-5-curated has no Medium effort/],
-    [r.enhance({ ...V5_GEN, effort: 'medium' }), /mode enhance runs without it/],
-    [r.upscale({ effort: 'medium' }), /mode upscale runs without it/],
-    [r.director({ effort: 'medium' }), /mode director runs without it/],
-    [{ mode: 't2i', ...V5_GEN, width: 832, height: 1216, effort: 'low' }, /effort/],
+  for (const [args, pattern, check] of [
+    [{ mode: 't2i', ...GEN, width: 832, height: 1216, effort: 'medium' }, /effort medium exists only for nai-diffusion-5-full; nai-diffusion-4-5-full has no Medium effort, so it runs on High/, v => v.effective.steps === 28 && v.effective.effort.level === 'high'],
+    [{ mode: 't2i', ...V5_GEN, model: 'nai-diffusion-5-curated', width: 832, height: 1216, effort: 'medium' }, /nai-diffusion-5-curated has no Medium effort/, v => v.effective.model === 'nai-diffusion-5-curated'],
+    [r.enhance({ ...V5_GEN, effort: 'medium' }), /mode enhance runs on High/, v => v.effective.effort.level === 'high'],
+    [r.upscale({ effort: 'medium' }), /mode upscale runs on High/, v => v.effective.scale === 2],
+    [r.director({ effort: 'medium' }), /mode director runs on High/, v => v.effective.tool === 'bg-removal'],
   ]) {
-    const error = errorOf(await call('prepare_recipe', args));
-    assert.equal(error.code, 'invalid_arguments'); assert.match(error.message, pattern);
+    const prepared = ok(await call('prepare_recipe', args));
+    const warning = prepared.warnings.find(item => item.code === 'effort_not_applied');
+    assert.ok(warning, JSON.stringify(prepared.warnings)); assert.deepEqual([warning.field, warning.from, warning.to], ['effort', 'medium', 'high']); assert.match(warning.message, pattern);
+    assert.ok(check(prepared), args.mode); assert.equal(prepared.authored.effort ?? 'high', 'high');
   }
+  const before = h.calls.length;
+  assert.equal(errorOf(await call('prepare_recipe', { mode: 't2i', ...V5_GEN, width: 832, height: 1216, effort: 'low' })).code, 'invalid_arguments');
   assert.equal(h.calls.length, before, 'refused before any host call');
   ok(await call('prepare_recipe', r.upscale({ effort: 'high' })));
   ok(await call('prepare_recipe', r.enhance({ ...V5_GEN, effort: 'high' })));
@@ -1482,12 +1543,17 @@ test('Enhance Max✨: V5 only; the size is worked out (never refused), and the r
   const adjusted = ok(await call('prepare_recipe', recipes(odd).enhance({ ...V5_GEN, scale: 'max' })));
   assert.deepEqual([adjusted.effective.width, adjusted.effective.height], [832, 1216]);
   assert.deepEqual(adjusted.warnings.map(warning => warning.code), ['enhance_max_source_adjusted', 'enhance_max_paid']);
-  const before = h.calls.length;
-  const refused = errorOf(await call('prepare_recipe', recipes(source).enhance({ scale: 'max' })));
-  assert.equal(refused.code, 'invalid_arguments'); assert.match(refused.message, /Max✨ exists only for the V5 models/);
-  assert.equal(h.calls.length, before);
-  // 1× and 2× are unchanged: a 1× enhance of an unaligned source is still refused, as before.
-  assert.equal(errorOf(await call('prepare_recipe', recipes(odd).enhance({ ...V5_GEN, scale: 1 }))).details.reason, 'enhance_source_not_aligned');
+  // 0.1.4: Max✨ on another model runs the largest scale that fits (here 1: 2× of 832×1216 is over the pixel limit).
+  const elsewhere = ok(await call('prepare_recipe', recipes(source).enhance({ scale: 'max' })));
+  const replaced = elsewhere.warnings.find(warning => warning.code === 'value_replaced');
+  assert.deepEqual([replaced.field, replaced.from, replaced.to], ['scale', 'max', 1]); assert.match(replaced.message, /Max✨ exists only for the V5 models/);
+  assert.equal(elsewhere.effective.enhance.scale, 1); assert.equal(elsewhere.effective.enhance.max, undefined); assert.deepEqual([elsewhere.effective.width, elsewhere.effective.height], [832, 1216]);
+  const small = h.addHistory('history-max-small', gradient(512, 768), { width: 512, height: 768 });
+  const two = ok(await call('prepare_recipe', recipes(small).enhance({ scale: 'max' })));
+  assert.equal(two.effective.enhance.scale, 2); assert.deepEqual([two.effective.width, two.effective.height], [1024, 1536]);
+  // 1× of an unaligned source: the host's own resize to 64 multiples, reported.
+  const oddOne = ok(await call('prepare_recipe', recipes(odd).enhance({ ...V5_GEN, scale: 1 })));
+  assert.deepEqual(oddOne.warnings.find(warning => warning.code === 'enhance_source_adjusted').to, { width: 832, height: 1216 });
 });
 
 test('parity: the Medium constants and the Max✨ size ports mirror the client', () => {

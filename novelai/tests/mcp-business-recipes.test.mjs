@@ -263,13 +263,16 @@ test('transparentBackground: V5 recipes send the real builder flags and read bac
   assert.deepEqual(doubled.effective.automaticQuality, { preset: 'standard', appendedText: 'very aesthetic, masterpiece, no text', derivedFromBuilderOutput: true });
   assert.deepEqual(doubled.warnings, []);
 
-  // Non-V5 models: refused before the host, which would otherwise turn it off silently (client/src/types.ts).
-  const before = h.calls.length;
+  // Non-V5 models (0.1.4): the option is dropped, as the host would turn it off (client/src/types.ts), and said so.
   for (const model of ['nai-diffusion-4-5-full', 'nai-diffusion-4-5-curated', 'nai-diffusion-4-full', 'nai-diffusion-3']) {
-    const error = errorOf(await call('prepare_recipe', t2i({ model, noiseSchedule: 'native', characters: [], transparentBackground: true })));
-    assert.equal(error.code, 'invalid_arguments', model); assert.match(error.message, /V5/, model);
-    assert.throws(() => recipeQueue.t2iPreparation(t2i({ model, noiseSchedule: 'native', characters: [], transparentBackground: true })), error => error instanceof BridgeError && error.code === 'invalid_arguments', model);
+    const dropped = ok(await call('prepare_recipe', t2i({ model, noiseSchedule: 'native', characters: [], transparentBackground: true })));
+    const warning = dropped.warnings.find(item => item.code === 'value_dropped');
+    assert.deepEqual([warning.field, warning.from, warning.to], ['transparentBackground', true, false], model);
+    assert.match(warning.message, /V5/, model);
+    assert.equal(dropped.authored.transparentBackground, false, model); assert.equal(dropped.effective.transparentBackground.enabled, false, model);
+    assert.equal(recipeQueue.t2iPreparation(t2i({ model, noiseSchedule: 'native', characters: [], transparentBackground: true })).authored.params.transparentBackground, false, model);
   }
+  const before = h.calls.length;
   for (const value of ['true', 1, null]) {
     assert.equal(errorOf(await call('prepare_recipe', t2i({ transparentBackground: value }))).code, 'invalid_arguments', String(value));
     assert.throws(() => recipeQueue.t2iPreparation(t2i({ transparentBackground: value })), error => error instanceof BridgeError && error.code === 'invalid_arguments', `module ${String(value)}`);
@@ -285,10 +288,9 @@ test('transparentBackground: V5 recipes send the real builder flags and read bac
   const dropped = ok(await call('prepare_recipe', t2i({ recipeId: omitted.recipeId, expectedRevision: 2 })));
   assert.equal(dropped.recipeRevision, 3); assert.equal(dropped.authored.transparentBackground, false); assert.equal(dropped.effective.transparentBackground.enabled, false);
   assert.equal(dropped.inputHash, omitted.inputHash, 'revision 3 has the same input as revision 1');
-  // A non-V5 revision asking for it is refused before the revision read.
-  const beforeRevision = h.calls.length;
-  assert.equal(errorOf(await call('prepare_recipe', t2i({ recipeId: omitted.recipeId, expectedRevision: 3, model: 'nai-diffusion-4-5-full', noiseSchedule: 'native', characters: [], transparentBackground: true }))).code, 'invalid_arguments');
-  assert.equal(h.calls.length, beforeRevision, 'no host call for a refused revision');
+  // A non-V5 revision asking for it is saved without it.
+  const nonV5 = ok(await call('prepare_recipe', t2i({ recipeId: omitted.recipeId, expectedRevision: 3, model: 'nai-diffusion-4-5-full', noiseSchedule: 'native', characters: [], transparentBackground: true })));
+  assert.equal(nonV5.recipeRevision, 4); assert.equal(nonV5.authored.transparentBackground, false); assert.ok(nonV5.warnings.some(warning => warning.code === 'value_dropped'));
 
   // Mixed enqueue: one transparent and one normal recipe; no unexposed-input warning for the option.
   const receipt = ok(await call('enqueue_recipes', { requestKey: 'transparent-1', items: [{ ...ref(prepared), seeds: [11] }, { ...ref(dropped), seeds: [12] }] }));
@@ -330,34 +332,72 @@ test('transparentBackground: a stored transparent recipe that the builder does n
   assert.equal(flagged.authored.transparentBackground, true); assert.equal(flagged.effective.transparentBackground.enabled, false);
 });
 
-test('prepare_recipe rejects every value the host would otherwise normalize silently, before any host call', async t => {
+test('prepare_recipe corrects every value the host would otherwise normalize silently, with a warning each; only what cannot run is refused before any host call', async t => {
   const h = await realHost(t);
-  // Evidence of the gap: the real host put accepts steps 99 and stores 50, snaps 833 and converts V4.5 "light".
+  // Evidence of the gap: the real host put accepts steps 99 and stores 50, snaps 833 and converts V4.5 "light", silently.
   const direct = await h.service.put_queue_recipe({ preparation: { mode: 't2i', authored: { params: { promptAssemblyVersion: 1, model: 'nai-diffusion-4-5-full', positivePrompt: 'x', steps: 99, width: 833, height: 1216, qualityPreset: 'light' } }, assets: [] } });
   assert.deepEqual([direct.snapshot.reviewInput.authored.params.steps, direct.snapshot.reviewInput.authored.params.width, direct.snapshot.reviewInput.authored.params.qualityPreset], [50, 832, 'standard']);
   h.calls.length = 0;
   const { call, readRecipe } = await connect(t, h.bridge);
   const seven = Array.from({ length: 7 }, (_, index) => ({ prompt: `c${index}`, useCoords: false }));
+  // 0.1.4: each of these is corrected to what runs, saved with that value, and reported (code, field, from, to).
+  const corrections = [
+    ['steps99', t2i({ steps: 99 }), 'value_clamped', 'steps', 99, 50, v => v.effective.steps === 50],
+    ['steps0', t2i({ steps: 0 }), 'value_clamped', 'steps', 0, 1, v => v.effective.steps === 1],
+    ['steps 27.6', t2i({ steps: 27.6 }), 'value_clamped', 'steps', 27.6, 28, v => v.effective.steps === 28],
+    ['1000×1500', t2i({ width: 1000, height: 1500 }), 'size_adjusted', 'width×height', { width: 1000, height: 1500 }, { width: 1024, height: 1472 }, v => v.effective.width === 1024 && v.effective.height === 1472],
+    ['width833', t2i({ width: 833 }), 'size_adjusted', 'width×height', { width: 833, height: 1216 }, { width: 832, height: 1216 }, v => v.effective.width === 832],
+    ['area', t2i({ width: 2048, height: 2048 }), 'size_adjusted', 'width×height', { width: 2048, height: 2048 }, { width: 1728, height: 1728 }, v => v.effective.width * v.effective.height <= 3_145_728],
+    ['cfg11', t2i({ cfgScale: 11 }), 'value_clamped', 'cfgScale', 11, 10, v => v.effective.cfgScale === 10],
+    ['rescale2', t2i({ cfgRescale: 2 }), 'value_clamped', 'cfgRescale', 2, 1, v => v.effective.cfgRescale === 1],
+    ['ucPreset4', t2i({ ucPreset: 4 }), 'value_clamped', 'ucPreset', 4, 3, v => v.effective.ucPreset.preset === 3],
+    ['lightOnV45', t2i({ model: 'nai-diffusion-4-5-full', noiseSchedule: 'native', qualityPreset: 'light' }), 'value_replaced', 'qualityPreset', 'light', 'standard', v => v.authored.qualityPreset === 'standard'],
+    ['nativeOnV5', t2i({ noiseSchedule: 'native' }), 'value_replaced', 'noiseSchedule', 'native', 'karras', v => v.effective.noiseSchedule === 'karras'],
+    ['charsOnV3', t2i({ model: 'nai-diffusion-3', noiseSchedule: 'native' }), 'value_dropped', 'characters', 1, 0, v => v.authored.characters.length === 0],
+    ['sevenOnV45', t2i({ model: 'nai-diffusion-4-5-full', noiseSchedule: 'native', characters: seven }), 'value_dropped', 'characters', 7, 6, v => v.effective.characters.length === 6 && v.authored.characters.at(-1).prompt === 'c5'],
+    ['coordsWithoutX', t2i({ characters: [{ prompt: 'a', useCoords: true, y: 0.2 }] }), 'value_defaulted', 'characters[0].x', null, 0.5, v => v.authored.characters[0].x === 0.5 && v.authored.characters[0].y === 0.2],
+    ['x2', t2i({ characters: [{ prompt: 'a', useCoords: true, x: 2, y: 0.5 }] }), 'value_clamped', 'characters[0].x', 2, 1, v => v.effective.characters[0].center.x === 1],
+    ['seedTooBig', t2i({ seed: 2147483647 }), 'seed_wrapped', 'seed', 2147483647, 0, v => v.effective.seed === 0 && v.effective.seedPolicy === 'fixed'],
+    ['seedNegative', t2i({ seed: -1 }), 'seed_random', 'seed', -1, null, v => v.effective.seedPolicy === 'random_on_submit' && v.authored.seed === null],
+  ];
+  for (const [name, args, code, field, from, to, check] of corrections) {
+    const prepared = ok(await call('prepare_recipe', args));
+    const warning = prepared.warnings.find(item => item.code === code && item.field === field);
+    assert.ok(warning, `${name}: ${JSON.stringify(prepared.warnings)}`);
+    assert.deepEqual([warning.from, warning.to], [from, to], name); assert.equal(typeof warning.message, 'string', name);
+    assert.ok(check(prepared), `${name}: ${JSON.stringify({ effective: prepared.effective, authored: prepared.authored })}`);
+    assert.equal(prepared.ready, true, name);
+    // The stored recipe holds the corrected value: its stored readback is the same (only the prepare-time warnings differ).
+    const read = ok(await readRecipe(ref(prepared)));
+    assert.deepEqual(read.authored, prepared.authored, name); assert.equal(read.inputHash, prepared.inputHash, name);
+  }
+  // The same correction from the module, without the MCP schema in front of it.
+  assert.equal(recipeQueue.t2iPreparation(t2i({ steps: 99 })).authored.params.steps, 50);
+  assert.deepEqual(recipeQueue.recipePlan(t2i({ width: 1000, height: 1500 })).size, { width: 1024, height: 1472 });
+  // Several corrections at once: one warning each, in field order.
+  const many = ok(await call('prepare_recipe', t2i({ steps: 80, cfgScale: -1, noiseSchedule: 'exponential' })));
+  assert.deepEqual(many.warnings.map(item => `${item.code}:${item.field}`), ['value_clamped:steps', 'value_clamped:cfgScale', 'value_replaced:noiseSchedule']);
+  // An exact recipe carries no correction warning.
+  assert.deepEqual(ok(await call('prepare_recipe', t2i())).warnings, []);
+  // Still refused: what cannot run or means nothing (missing fields, unknown names, wrong types, fields of no mode).
+  const before = h.calls.length;
   const cases = {
-    steps99: t2i({ steps: 99 }), steps0: t2i({ steps: 0 }), width833: t2i({ width: 833 }), area: t2i({ width: 2048, height: 2048 }), cfg11: t2i({ cfgScale: 11 }), rescale2: t2i({ cfgRescale: 2 }),
-    lightOnV45: t2i({ model: 'nai-diffusion-4-5-full', qualityPreset: 'light' }), nativeOnV5: t2i({ noiseSchedule: 'native' }), charsOnV3: t2i({ model: 'nai-diffusion-3', noiseSchedule: 'native' }),
-    sevenOnV45: t2i({ model: 'nai-diffusion-4-5-full', characters: seven }), blankPositive: t2i({ positivePrompt: '   ' }), blankCharacter: t2i({ characters: [{ prompt: ' ', useCoords: false }] }),
-    coordsWithoutX: t2i({ characters: [{ prompt: 'a', useCoords: true, y: 0.5 }] }), x2: t2i({ characters: [{ prompt: 'a', useCoords: true, x: 2, y: 0.5 }] }), charExtra: t2i({ characters: [{ prompt: 'a', useCoords: false, id: 'x' }] }),
-    seedTooBig: t2i({ seed: 2147483647 }), seedNegative: t2i({ seed: -1 }), seedMissing: (({ seed: _s, ...rest }) => rest)(t2i()), modelMissing: (({ model: _m, ...rest }) => rest)(t2i()),
-    unknownModel: t2i({ model: 'nai-diffusion-9' }), unknownSampler: t2i({ sampler: 'k_lms' }), ucPreset4: t2i({ ucPreset: 4 }), i2i: t2i({ mode: 'i2i' }),
+    blankPositive: t2i({ positivePrompt: '   ' }), blankCharacter: t2i({ characters: [{ prompt: ' ', useCoords: false }] }), charExtra: t2i({ characters: [{ prompt: 'a', useCoords: false, id: 'x' }] }),
+    seedMissing: (({ seed: _s, ...rest }) => rest)(t2i()), modelMissing: (({ model: _m, ...rest }) => rest)(t2i()), widthMissing: (({ width: _w, ...rest }) => rest)(t2i()),
+    unknownModel: t2i({ model: 'nai-diffusion-9' }), unknownSampler: t2i({ sampler: 'k_lms' }), unknownSchedule: t2i({ noiseSchedule: 'linear' }), unknownQuality: t2i({ qualityPreset: 'max' }), i2i: t2i({ mode: 'i2i' }),
     samples: t2i({ n_samples: 2 }), count: t2i({ count: 2 }), workspace: t2i({ workspaceId: 'w' }), idWithoutRevision: t2i({ recipeId: randomUUID() }), revisionWithoutId: t2i({ expectedRevision: 1 }),
-    longPrompt: t2i({ positivePrompt: 'x'.repeat(12001) }), stringSteps: t2i({ steps: '28' }),
+    longPrompt: t2i({ positivePrompt: 'x'.repeat(12001) }), stringSteps: t2i({ steps: '28' }), fractionalSeed: t2i({ seed: 1.5 }), unknownEffort: t2i({ effort: 'low' }),
   };
   for (const [name, args] of Object.entries(cases)) assert.equal(errorOf(await call('prepare_recipe', args)).code, 'invalid_arguments', name);
-  assert.deepEqual(h.calls, [], 'no invalid preparation reached the host');
-  // The module enforces the same rules without the MCP schema in front of it.
-  for (const name of ['steps99', 'width833', 'area', 'lightOnV45', 'nativeOnV5', 'charsOnV3', 'sevenOnV45', 'blankPositive', 'coordsWithoutX', 'seedTooBig', 'samples', 'i2i'])
+  assert.equal(h.calls.length, before, 'no refused preparation reached the host');
+  for (const name of ['blankPositive', 'coordsWithoutX', 'samples', 'i2i', 'unknownSampler', 'fractionalSeed'].filter(name => cases[name]))
     assert.throws(() => recipeQueue.t2iPreparation(cases[name]), error => error instanceof BridgeError && error.code === 'invalid_arguments', name);
   // A revision of a non-plain or non-t2i recipe is refused after its read, before any put.
   const blocked = await h.service.put_queue_recipe({ preparation: { mode: 'enhance', authored: { params: { promptAssemblyVersion: 1, positivePrompt: 'x' } }, assets: [] } });
+  const callsBefore = h.calls.length;
   const error = errorOf(await call('prepare_recipe', t2i({ recipeId: blocked.recipeId, expectedRevision: 1 })));
   assert.equal(error.code, 'invalid_arguments');
-  assert.deepEqual(h.methods(), ['read_queue_recipe']);
+  assert.deepEqual(h.methods().slice(callsBefore), ['read_queue_recipe']);
 });
 
 test('prepare_recipe reply checks: unknown save outcome, unexpected identity and a stored-input mismatch are never adopted', async t => {
