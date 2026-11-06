@@ -1275,9 +1275,10 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
       }
       if (saved.status === 'accepted') fail('queue_storage_failed', 'An accepted queue receipt has no matching durable batch.');
       // preparing or unknown without a batch. Before 0.1.4 a lookup turned a preparing receipt into unknown, which made
-      // an enqueue still running abandon its dispatch; now the receipt is left alone.
+      // an enqueue still running abandon its dispatch; now the receipt is left alone. Not running: the same plan under the
+      // same key restarts it (enqueueRecipes; with a frozen queue that failed, once it works again).
       const running = inFlight();
-      return { batch: null, status: 'unknown', inFlight: running, ...(running ? {} : { restartable: !frozenError }) };
+      return { batch: null, status: 'unknown', inFlight: running, ...(running ? {} : { restartable: true }) };
     },
     async list_queue(raw: unknown) {
       keys(raw, []); await init(); await options.batch.ready;

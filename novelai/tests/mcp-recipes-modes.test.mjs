@@ -1137,6 +1137,9 @@ test('queue_storage_error: a failed frozen-queue store refuses before the receip
   const afterReceipt = errorOf(await call('enqueue_recipes', { requestKey: 'after-receipt', items: [{ ...ref(i2i), seeds: [1] }] }));
   assert.equal(afterReceipt.code, 'queue_acceptance_unknown'); assert.equal(afterReceipt.details.hostCode, 'queue_acceptance_unknown');
   assert.equal(afterReceipt.details.status, 'unknown'); assert.equal(afterReceipt.details.enqueueSent, true);
+  // The settle stops at its first lookup: the host cannot read its frozen queue, so waiting would change nothing.
+  assert.ok(afterReceipt.message.startsWith(recipeQueue.FROZEN_UNREADABLE_MESSAGE), afterReceipt.message);
+  assert.deepEqual([afterReceipt.details.settled.lookups, afterReceipt.details.settled.resends, afterReceipt.details.newKeyAdvised], [1, 0, false]);
   assert.equal(await exists(receiptFile(h, 'after-receipt')), true, 'the receipt exists');
   assert.equal(JSON.parse(await readFile(receiptFile(h, 'after-receipt'), 'utf8')).status, 'unknown', 'the host keeps the key as unknown');
   // Repeating it sends nothing: the host's lookup of a key with a receipt answers queue_acceptance_unknown while the

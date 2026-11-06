@@ -1494,7 +1494,12 @@ export function createRecipeQueue({ bridge, monotonicNow = () => performance.now
       if (signal?.aborted || deadline - monotonicNow() <= 0) break;
       let found;
       try { progress.lookups++; found = (await withQueueCheck(await lookupHost(hostKey, boundedSignal(signal, deadline - monotonicNow())), hostKey, boundedSignal(signal, deadline - monotonicNow()), { tolerant: true })).found; }
-      catch (error) { last = { status: 'lookup_failed', code: error instanceof BridgeError ? error.code : null }; continue; }
+      catch (error) {
+        // The host cannot read its frozen queue: whether the batch exists stays unknown until the client is fixed, so
+        // waiting longer changes nothing.
+        if (error instanceof BridgeError && error.code === 'queue_acceptance_unknown') throw new BridgeError(error.code, `${FROZEN_UNREADABLE_MESSAGE} (${error.message})`, { ...base, status: 'unknown', enqueueSent: true, keyStatus: 'lookup_failed', newKeyAdvised: false, hostCode: cause instanceof BridgeError ? cause.code : null, ...hostDetailsOf(cause), settled: facts(), ...withWarnings });
+        last = { status: 'lookup_failed', code: error instanceof BridgeError ? error.code : null }; continue;
+      }
       last = found;
       if (found.status === 'enqueued') {
         if (acceptanceMatches(found.batch, hostArgs)) return enqueuedReceipt({ base, hostArgs, withWarnings }, found.batch, `The first answer was lost, but this call confirmed this exact plan under this requestKey (${progress.lookups} lookup(s), ${progress.resends} resend(s) of the same plan); there is one batch. Track it with read_queue; do not enqueue this intent again.`, { reconciled: true, settled: facts() });
