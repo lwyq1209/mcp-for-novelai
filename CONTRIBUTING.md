@@ -37,7 +37,9 @@ npm --prefix novelai/client run notices:check
   (network; the second needs `cargo`); review what they write.
 - Changes to MCP tools: tool descriptions and errors are read by agents, so keep them exact and in English, and update
   [docs/mcp-tools.md](docs/mcp-tools.md) when behaviour changes. Anything that can spend the user's balance must stay
-  explicit, idempotent under its request key and never retry on its own.
+  explicit and idempotent under its request key, and must never send a second paid request on its own: the only
+  repeat allowed is the same plan under the same key, which the app answers from that key's receipt (how
+  `enqueue_recipes` settles a lost answer).
 - Interface text lives in `novelai/client/src/ui/*.strings.ts` with a Chinese and an English text for every key.
 
 Code, comments, commit messages and documentation are in English (the READMEs have a Chinese version too). Keep

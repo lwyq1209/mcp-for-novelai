@@ -7,6 +7,7 @@ what to do next. This page explains the codes and situations people ask about mo
 - [`host_outdated`](#host_outdated)
 - [Settings › MCP access shows a warning](#settings--mcp-access-shows-a-warning)
 - [Timeouts and unknown outcomes](#timeouts-and-unknown-outcomes)
+- [Corrected values in a recipe](#corrected-values-in-a-recipe)
 - [Refused enqueues](#refused-enqueues)
 - [Failed, unknown and partial batches](#failed-unknown-and-partial-batches)
 - [Cleaned batch records damaged or missing](#cleaned-batch-records-damaged-or-missing)
@@ -53,7 +54,9 @@ Also:
   running: it names the app's data folder as `NOVELAI_DATA_DIR`. A server started for another data folder (another
   install, a test folder, a build from source with `--data-dir`) looks for (and starts) a different app.
 - After `unavailable` in the middle of a write (an enqueue, a save), read the current state before doing anything
-  again: the write may or may not have happened. For enqueues, use `lookup_enqueue` with the same request key.
+  again: the write may or may not have happened. An enqueue is the exception that needs no care: `enqueue_recipes`
+  with the same request key and plan is always safe (the app answers a repeat from the key's receipt), and
+  `lookup_enqueue` says what the key holds.
 - `invalid_connection` means `bridge.json` exists but is not a valid local connection file. Restart the app; it writes a
   new one.
 - The app started by an agent keeps its window out of the way: on macOS only its Dock icon appears (click it to show
@@ -86,9 +89,26 @@ One `enqueue_recipes` call can take minutes. Allow about 26 minutes (1560 second
 
 - `timeout` from the server: the call to the app took longer than 65 seconds or was interrupted. Its outcome is
   unknown. Do not repeat a write automatically; read the current state first.
-- When the agent's own client times out, the server may still have finished the enqueue. Look at the queue page, or
-  call `lookup_enqueue` with the same request key. Never resend under a new key while an outcome is still settling
+- An enqueue whose answer is lost is settled by `enqueue_recipes` itself, in the same call: it looks the request key
+  up, waits while the app is still handling it and sends the same plan under the same key again when the app holds
+  nothing (never a second batch), for up to about 150 seconds, then answers `enqueued` (`reconciled: true`) or the
+  refusal. Only if the app stays silent is the answer still `queue_acceptance_unknown` — call `enqueue_recipes` again
+  with the same key and plan once the app answers, or `lookup_enqueue`; never switch keys while it says `settling`
   (see [Request keys](mcp-tools.md#request-keys-and-paid-requests)).
+- When the agent's own client times out, the server may still have finished the enqueue. Look at the queue page, or
+  call `enqueue_recipes` again with the same request key and plan (it answers `already_enqueued` if it was), or
+  `lookup_enqueue`.
+
+## Corrected values in a recipe
+
+`prepare_recipe` no longer refuses values the app would adjust anyway: a size that is not a multiple of 64, `steps`
+above 50, a noise schedule V5 does not use, `light` quality off V5, too many characters, an i2i size off the source's
+aspect ratio, a large upscale source and so on are corrected to what will run, saved that way, and listed as warnings
+in the readback (`value_clamped`, `size_adjusted`, `value_replaced`, `value_dropped`, `i2i_size_adjusted`, …, each
+with `field`, `from` and `to`). Check the readback's `effective` values and warnings; the full list is in
+[MCP tools](mcp-tools.md#corrections-prepare_recipe). `enqueue_recipes` likewise gives a fixed-seed recipe used for
+several images the seeds seed, seed + 1, … (`fixed_seed_incremented`) and sends an upscale or Director recipe once
+(`postprocess_single_image`).
 
 ## Refused enqueues
 

@@ -26,6 +26,9 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
 - **Enhance Max✨** (V5 models): the image is sent at its own size and comes back about twice as large (at most about
   3.1 MP) through NovelAI's new upscaler. Canvas Enhance offers it beside 1× and 2×; `prepare_recipe` takes
   `scale: "max"` and `draft_edit` `enhanceScale: "max"`. Max costs Anlas on Opus too.
+- `lookup_enqueue` reports `inFlight`: whether the app has received an enqueue under the key and is still handling it.
+- `prepare_recipe` i2i may leave out `width`/`height`: the source's aspect ratio is used at about 832×1216 pixels,
+  within the Opus free size (warning `i2i_size_from_source`).
 
 ### Changed
 
@@ -48,6 +51,26 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
   failure, `recovered_paused`) continue.
 - Unchanged: a frozen-queue storage failure still stops every agent batch; request keys, the per-enqueue and total
   limits, pause, resume, cancel and the hold before an update work as before.
+- **`prepare_recipe` corrects instead of refusing** what the app would clamp, snap, resize, convert or drop anyway
+  (`steps` 99, a 1000×1500 size, a V5 noise schedule other than karras, `light` quality or `transparentBackground` off
+  V5, too many characters, `effort: "medium"` where it does not exist, an unaligned enhance or inpaint source, Max✨ off
+  V5…): the corrected value is saved and each correction is a readback warning with `field`, `from` and `to`. An i2i
+  size more than 3 % off the source's aspect ratio is refitted to it (`i2i_size_adjusted`) instead of refused. The input
+  schema no longer limits these values, so clients do not refuse them before the call. Still refused: missing fields,
+  unknown names, wrong types, fields of another mode, unreadable sources, and sizes NovelAI cannot make.
+- Upscale and Director downscale a source over 1,048,576 pixels by default (warning `source_downscaled`);
+  `acceptDownscale: false` keeps the old refusal.
+- `enqueue_recipes`: a fixed-seed recipe used for several images without `seeds` gives them seed, seed + 1, … (listed
+  in the receipt, warning `fixed_seed_incremented`) instead of a refusal, and an upscale or Director recipe listed with
+  seeds, a count or twice is sent once (`postprocess_single_image`).
+- **`enqueue_recipes` settles a lost answer itself**: after a timeout, a dropped connection or a reply that does not
+  confirm the plan, it looks the request key up and sends the same plan under the same key again while the app holds
+  nothing it is working on (the app deduplicates the key; never a second batch), for up to about 150 seconds, and
+  answers `enqueued` (`reconciled: true`) or the definite refusal. The 130-second settle window, the per-process hold
+  and the two-lookups-before-a-new-key rule are gone; `lookup_enqueue` answers at once and advises a new key only when
+  the app finished with the key without a batch and cannot start it again. The app no longer lets a lookup turn a
+  running enqueue's receipt unknown (which made that enqueue give up), and it starts a receipt whose enqueue ended
+  without a batch again when the same plan comes under the same key.
 
 ## 0.1.3 - 2026-11-06
 

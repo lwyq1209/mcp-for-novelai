@@ -43,8 +43,9 @@ The server starts the app itself, so an agent never has to ask the user to open 
 1. A call fails before it reached any app: there is no `bridge.json`, or the address it names refuses the connection
    (the app that wrote it is gone). These are the only two failures that start anything. A call that may have
    reached the app — the connection dropped after the request was sent, the reply was garbled, the call timed out —
-   is reported as it is and **never sent again**; the rules of [Request keys and paid
-   requests](#request-keys-and-paid-requests) stay exactly as they are.
+   is reported as it is and **never sent again** by the automatic start; the rules of [Request keys and paid
+   requests](#request-keys-and-paid-requests) stay exactly as they are (`enqueue_recipes` settles a lost enqueue
+   answer itself, under the same key).
 2. If the app is already starting for this data folder (its single-instance lock names the live process that made
    it, or another live server is starting it right now), the server only waits for it. Otherwise it starts the app it
    belongs to: the installed app whose executable runs the server, or — from source — the built client whose
@@ -194,14 +195,38 @@ the UC preset text, characters, sampling, mode parameters, the source image (ide
 warnings. Check the readback before enqueueing.
 
 - Six modes: `t2i`, `i2i`, `enhance`, `inpaint`, `upscale`, `director`. A field that does not belong to the mode is
-  refused rather than ignored, and nothing the app would silently clamp, resize or drop is accepted.
-- t2i: model, `width`/`height` in multiples of 64 with at most 3,145,728 pixels, `steps` 1–50, `cfgScale` 0–10,
-  optional `cfgRescale`, sampler, noise schedule (`karras` on V5), `ucPreset` 0–3, `qualityPreset`
-  (`standard`, `light` on V5 only, `none`), style, positive and negative prompts, `seed` (or `null` for a random seed
-  drawn at enqueue), optional characters (V4 and later: up to 6, V5 up to 32) and `transparentBackground` (V5 only).
-- `effort` (t2i, i2i, inpaint; optional, default `high`): V5 Full's Effort toggle. `medium` runs NovelAI's distilled
-  Medium model and exists only for `nai-diffusion-5-full` (see [V5 Full Effort](#v5-full-effort-medium)).
-- enhance: `scale` 1, 2 or `"max"` (Max✨, V5 models only; see [Enhance Max✨](#enhance-max)).
+  refused rather than ignored.
+- **Corrections instead of refusals** (0.1.4): a value the app would clamp, snap, resize, convert or drop is corrected
+  to what will run *before* the recipe is saved (so the stored recipe holds exactly that value), and each correction is
+  a readback warning `{code, field, from, to, message}` — see [Corrections](#corrections-prepare_recipe). Only what
+  cannot run is refused: a missing field, an unknown model, sampler, noise schedule or preset name, a value of the
+  wrong type, a field of another mode (or of another Director tool), an unreadable source, an inpaint source over
+  1600 px per side and an upscale result over 4096 px per side.
+- t2i: model, `width`/`height` (snapped to multiples of 64 and fitted into 3,145,728 pixels), `steps` 1–50,
+  `cfgScale` 0–10, optional `cfgRescale` 0–1, sampler, noise schedule (V5 always uses `karras`), `ucPreset` 0–3,
+  `qualityPreset` (`standard`, `light` on V5 only — elsewhere `standard` —, `none`), style, positive and negative
+  prompts, `seed` 0–2147483646 (or `null`, or a negative number, for a random seed drawn at enqueue), optional
+  characters (V4 and later: up to 6, V5 up to 32; more are dropped) and `transparentBackground` (V5 only; dropped
+  elsewhere).
+- `effort` (optional, default `high`): V5 Full's Effort toggle. `medium` runs NovelAI's distilled Medium model and
+  exists only for `nai-diffusion-5-full` txt2img, img2img and inpaint; anywhere else the recipe runs on High (warning
+  `effort_not_applied`). See [V5 Full Effort](#v5-full-effort-medium).
+- i2i: the t2i fields without `transparentBackground`, plus `source`, `strength` 0–1 and an optional `extraNoiseSeed`
+  (0 or `null`: random per image). `width`/`height` are optional: a size more than 3 % off the source's aspect ratio
+  is refitted to it at about the same area (`i2i_size_adjusted`; within 3 % the app stretches the source slightly and
+  the readback says `source_resized_for_i2i`), and without a size the source's aspect is used at about 832×1216 pixels,
+  within the Opus free size of 1024×1024 pixels (`i2i_size_from_source`). The readback gives the size used.
+- enhance: `magnitude` 1–10, `scale` 1, 2 or `"max"` (Max✨, V5 models only; see [Enhance Max✨](#enhance-max)). For 1
+  and 2 the request is the source × scale in multiples of 64 within 3,145,728 pixels; a source that is not aligned (or,
+  at 1, too large) is resized by the app (`enhance_source_adjusted`), and a 2 that would not fit becomes 1.
+- inpaint: the generation fields without size, characters or `transparentBackground` (no Furry V3), plus `source`,
+  `strength` 0–1 and `mask`. A source that is not a multiple of 64 is resized up to the next multiple by the app
+  (`inpaint_source_adjusted`); after that it may be at most 1600 px per side.
+- upscale (`scale` 2, may be left out) and director (`tool`, optional `defry` 0–5, `colorizePrompt` for colorize — it
+  may be empty or left out —, `emotion` and optional `emotionLevel` 0–5 for emotion) use no seed. A source over
+  1,048,576 pixels is downscaled by the app before the request (readback warning `source_downscaled`);
+  `acceptDownscale: false` refuses such a source instead (`source_needs_downscale`). `acceptDownscale: true` is the
+  default and stays accepted.
 - Image modes take a `source`: a history image `{kind: "history", historyId, historyRevision, assetId}` from
   `asset_library`, or an imported image `{kind: "study", studyId, studyRevision}`. `inpaint` also takes a `mask`
   built from shapes (rectangles, ellipses, polygons, strokes) and alpha layers; `preview: true` returns the source
@@ -210,6 +235,29 @@ warnings. Check the readback before enqueueing.
 - `canvas: {workspaceId, expectedRevision, draftId?}` freezes the live canvas (or a staged draft) at exactly that
   revision instead of inline fields.
 - To revise, pass `recipeId` with its current `expectedRevision` and every field again; a new revision is saved.
+
+### Corrections (`prepare_recipe`)
+
+Each correction is one warning in the readback (and in the preview), with the field, the value given (`from`) and the
+value used (`to`):
+
+| Warning | When | What is used |
+| --- | --- | --- |
+| `value_clamped` | A number outside its range: `steps` 1–50, `cfgScale` 0–10, `cfgRescale` 0–1, `ucPreset` 0–3, `strength` 0–1, `magnitude` 1–10, `defry` and `emotionLevel` 0–5, character `x`/`y` 0–1; `enqueue_recipes` `intervalSeconds` 0–60 | The nearest bound (whole-number fields also rounded) |
+| `size_adjusted` | t2i/i2i `width`/`height` not multiples of 64, or more than 3,145,728 pixels | Each side snapped to 64, then shrunk into the limit keeping the ratio, as the app's own size rule does (1000×1500 → 1024×1472) |
+| `i2i_size_adjusted` | An i2i size more than 3 % off the source's aspect | The 64-aligned size within 3 % of the source's aspect closest to the requested area |
+| `i2i_size_from_source` | i2i without `width`/`height` (or with only one) | The source's aspect at about 832×1216 pixels, at most 1024×1024 pixels (or at the area the one side implies) |
+| `value_replaced` | A value that does not exist on that model or mode: V5 with a noise schedule other than `karras`, `qualityPreset: "light"` off V5, upscale `scale` other than 2, enhance 2× that does not fit, Max✨ off V5 | `karras`; `standard`; 2; 1; the largest of 2 and 1 that fits |
+| `value_dropped` | `transparentBackground` off V5; more characters than the model takes (V3: none) | Off; the first 6 (V4/V4.5) or 32 (V5) |
+| `value_defaulted` | A character with `useCoords: true` but no `x`/`y`; emotion without `emotionLevel` | 0.5; 0 |
+| `seed_random`, `seed_wrapped` | A negative `seed`/`extraNoiseSeed`; one above 2147483646 | Random at enqueue; the value wrapped into 0–2147483646 |
+| `effort_not_applied` | `effort: "medium"` where Medium does not exist | High |
+| `enhance_source_adjusted` | An enhance 1×/2× source that is not 64-aligned (or too large at 1×) | The size the app resizes it to |
+| `inpaint_source_adjusted` | An inpaint source that is not 64-aligned | The next multiples of 64 (the result has that size) |
+| `source_downscaled` | An upscale/director source over 1,048,576 pixels | The app's downscale into that limit |
+
+An exact recipe has none of these warnings. The warnings exist at prepare (and preview) time; the stored recipe holds
+the corrected values.
 
 ### V5 Full Effort (Medium)
 
@@ -229,8 +277,9 @@ Medium request sends was read from NovelAI's own web client (build of 2026-11-06
   `cfgRescale` and character `negativePrompt`s). A value you give is replaced, never refused, and each replacement is a
   warning `effort_medium_fixed`, for example `effort medium fixes steps to 14; your 28 was replaced.` The stored recipe
   holds the values that run.
-- Refused (`invalid_arguments`, `details.reason: "effort_not_supported"`): Medium on any other model (V5 Curated has no
-  Medium) and in enhance, upscale or director. `effort: "high"` is accepted everywhere and changes nothing.
+- Medium on any other model (V5 Curated has no Medium) or in enhance, upscale or director runs on High, with the
+  warning `effort_not_applied` (before 0.1.4 this was refused). `effort: "high"` is accepted everywhere and changes
+  nothing.
 - The readback shows the model id sent (`effective.model`), `effective.effort` (`level`, and for Medium the fixed values
   with the full UC text) and `authored.effort`.
 - On the canvas the effort is the parameter `params.effort` (`"medium"`, or absent for High; also
@@ -252,9 +301,8 @@ client, build of 2026-11-06):
   expects (`effective.enhance.expectedOutput`: each side floored to 16 and doubled, fitted into 3,145,728 pixels in
   steps of 32; for 832×1216 that is 1440×2144); the saved image keeps the size NovelAI actually returns.
 - **Max✨ costs Anlas on Opus too** (warning `enhance_max_paid`): its result is always larger than 1024×1024.
-- `magnitude` sets the strength as for 1× and 2×. On another model `scale: "max"` is refused
-  (`details.reason: "max_enhance_not_supported"`). 1× and 2× are unchanged. NovelAI's own client also offers 1.5×; this
-  app does not.
+- `magnitude` sets the strength as for 1× and 2×. On another model `scale: "max"` uses the largest of 2× and 1× that
+  fits the source (warning `value_replaced`). NovelAI's own client also offers 1.5×; this app does not.
 
 ### `enqueue_recipes`
 
@@ -262,20 +310,25 @@ Puts frozen recipes into the shared queue. **The app then generates these images
 spend Anlas, with no further confirmation.**
 
 - `requestKey` (required) identifies this intent; see [Request keys](#request-keys-and-paid-requests).
-- `items`: `[{recipeId, recipeRevision, inputHash, count?, seeds?}]`. One mode per enqueue. A fixed-seed recipe used
-  for more than one image needs explicit `seeds` (one per image). `upscale` and `director` recipes take no seed and
-  are listed once each.
+- `items`: `[{recipeId, recipeRevision, inputHash, count?, seeds?}]`. One mode per enqueue. `seeds` give one seed per
+  image. Without them a random-seed recipe draws one per image, and a fixed-seed recipe used for several images gives
+  them its seed, seed + 1, seed + 2 … (after 2147483646 back to 0) so they differ; the receipt lists the seeds in
+  `items` and a warning `fixed_seed_incremented`. Repeat a seed in `seeds` for identical images. `upscale` and
+  `director` recipes take no seed: each is sent once per enqueue (a `count`, `seeds` or a second entry are dropped,
+  warning `postprocess_single_image`), because every image of it would be the same paid request.
 - Optional `intervalSeconds` (0–60) between images, and `historyGroup` / `fileNamePrefix` for your project (see
   [Several projects](#several-projects-on-one-queue)).
 - A wrong revision or `inputHash`, mixed modes, a blocked recipe or a source that is gone are refused before anything is
   sent; the key stays unused.
 - The receipt lists warnings, for example characters that a model does not take or a preset that adds no text.
+- **A lost answer is settled in the same call** (0.1.4): see [Request keys](#request-keys-and-paid-requests). The
+  receipt then says `reconciled: true` and `settled: {lookups, resends, seconds}`.
 
 ### `lookup_enqueue`
 
 Looks up the receipt of one of your request keys: `enqueued` (with the batch), `rejected`, `unknown` or `not_found`,
-plus a **settlement** that says what you may do next. It never enqueues or resends anything. See
-[Request keys](#request-keys-and-paid-requests).
+plus `inFlight` (the app has received an enqueue under this key and is still handling it) and a **settlement** that
+says what you may do next. It never enqueues or resends anything. See [Request keys](#request-keys-and-paid-requests).
 
 ### `list_queue`, `read_queue`, `get_queue_result`
 
@@ -366,15 +419,27 @@ The canvas is the app's manual workbench. The canvas tools read it and stage vis
   receipt is never queued again: a repeated call answers `already_enqueued` with the existing batch. A new key is a
   new paid request.
 - If the same key is used with a different plan, the call is refused with `request_conflict` and nothing is sent.
-- **When an outcome is unknown** (a timeout, a dropped connection, `unknown`): do not resend and do not switch keys.
-  Call `lookup_enqueue` with the same key and follow its settlement:
-  - `settling` — look up the same key again after `retryAfterSeconds`;
-  - `stale` with `newKeyAdvised: true` — only after two unknown lookups at least the settle window (about 130 s)
-    apart with no batch in the queue: the same plan may be enqueued under a new key (a late acceptance of the old key
-    could still duplicate it);
-  - `not_found` — no receipt yet; resending the same plan with the same key is safe. For a key this server process
-    never sent (after a restart, or sent by another process) the first `not_found` is also `settling`; once the
-    window has passed it is `clear`.
+- **When the answer to an enqueue is lost** (a timeout, a dropped connection, a reply that does not confirm the plan),
+  `enqueue_recipes` settles it itself, in the same call: it looks the key up — the app says whether an enqueue under
+  it is still being handled (`inFlight`) — and waits while it is; when the app holds nothing it is working on (no
+  receipt: the request never arrived; or a receipt whose enqueue ended without a batch), it sends **the same plan under
+  the same key** again, at most three times, for up to about 150 seconds. That never pays twice: the app handles one
+  enqueue at a time and answers a repeat of a plan from its key's receipt, and its batch store also answers a key it
+  already holds with that batch. The answer is `enqueued` (with `reconciled: true`) or the definite refusal. The call
+  never switches keys.
+- Only when the app stays silent for that long is the answer still `queue_acceptance_unknown`. Then calling
+  `enqueue_recipes` again with the same key and plan, or `lookup_enqueue` with the same key, is safe. `lookup_enqueue`
+  answers at once:
+  - `settling` with `inFlight: true` — the app is still handling it: look again after `retryAfterSeconds` (2), or call
+    `enqueue_recipes` again with the same key and plan, which waits for it;
+  - `clear` — nothing is recorded and nothing is in flight: nothing was queued, enqueue with this key as you like; with
+    `resend: "same_plan_same_key"`, the app holds the key without a batch and the same plan under the same key starts
+    it again (a different plan needs a new key);
+  - `stale` with `newKeyAdvised: true` — only when the app finished with the key without a batch, cannot start it
+    again and has no batch under it: the same plan may be enqueued under a new key (check `list_queue` afterwards).
+  An app older than this server does not report `inFlight`; its unknown receipts are always `settling`, never advised
+  a new key. Before 0.1.4 the agent had to look the key up twice, about 130 seconds apart, before a new key could be
+  advised; that window is gone.
 - An image with an unknown outcome may have been generated and charged. It is never resent automatically;
   `read_queue` tells you to check the library (`asset_library` with `queueBatchId`) before making it again under a
   new key.
@@ -504,8 +569,9 @@ are relative to the project root (`pathBase: "project-root"`, with the root name
 
 ## Timeouts
 
-One tool call can take long: `enqueue_recipes` makes up to 23 calls to the app in a row, each bounded at 65 seconds.
-Allow about **26 minutes (1560 seconds)** per tool call. The configurations in Settings › MCP access already set this
+One tool call can take long: `enqueue_recipes` makes up to 23 calls to the app in a row, each bounded at 65 seconds,
+and settles a lost answer for up to about 150 seconds more; it ends within 24 minutes in all. Allow about
+**26 minutes (1560 seconds)** per tool call. The configurations in Settings › MCP access already set this
 for Codex (`tool_timeout_sec`, plus `startup_timeout_sec = 30`), Pi (`timeout`) and DeepSeek Harness
 (`toolCallTimeoutMs: 1560000`; its default is 60 seconds). Claude Code's defaults are long enough. A call that starts
 the app takes up to 30 seconds longer. Cursor has no setting for it: if Cursor reports a timeout, check the queue page before letting the agent

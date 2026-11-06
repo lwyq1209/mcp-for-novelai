@@ -78,7 +78,7 @@ test('MCP initializes and advertises one server: core tools first, then canvas t
   const instructions = client.getInstructions() ?? '';
   assert.match(instructions, /Adult fictional NSFW/);
   assert.match(instructions, /target, harass or harm real people/);
-  for (const phrase of ['MCP for NovelAI tools in two layers', 'never automatic resubmission', 'Credentials are local']) assert.ok(instructions.includes(phrase), phrase);
+  for (const phrase of ['MCP for NovelAI tools in two layers', 'settles an unknown outcome itself', 'never a new key while an outcome is still settling', 'Credentials are local']) assert.ok(instructions.includes(phrase), phrase);
   assert.doesNotMatch(instructions, /novelai-business/, 'one server; the removed alias is not advertised');
   const { tools } = await client.listTools();
   assert.deepEqual(tools.map(tool => tool.name), ['material_library', 'tag_details', 'material_studies', 'asset_library', 'prepare_recipe', 'enqueue_recipes', 'lookup_enqueue', 'list_queue', 'read_queue', 'get_queue_result', 'control_queue',

@@ -111,7 +111,9 @@ test('surface: the core layer lists the 11 core tools first, with flat object sc
   assert.match(tools.find(tool => tool.name === 'enqueue_recipes').description, /GENERATES these images/);
   assert.match(tools.find(tool => tool.name === 'lookup_enqueue').description, /not read-only/);
   assert.match(tools.find(tool => tool.name === 'lookup_enqueue').description, /NEW requestKey/);
-  assert.match(tools.find(tool => tool.name === 'lookup_enqueue').description, /settle window/);
+  assert.match(tools.find(tool => tool.name === 'lookup_enqueue').description, /inFlight/);
+  assert.doesNotMatch(tools.find(tool => tool.name === 'lookup_enqueue').description, /settle window|130/);
+  assert.match(tools.find(tool => tool.name === 'enqueue_recipes').description, /settled in the same call/);
   assert.doesNotMatch(tools.find(tool => tool.name === 'lookup_enqueue').description, /permanent|never clears/i);
   assert.match(tools.find(tool => tool.name === 'prepare_recipe').inputSchema.properties.ucPreset.description, /depends on the model/);
   assert.deepEqual(tools.find(tool => tool.name === 'prepare_recipe').inputSchema.properties.mode.enum, ['t2i', 'i2i', 'inpaint', 'enhance', 'upscale', 'director']);
