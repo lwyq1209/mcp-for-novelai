@@ -108,7 +108,7 @@ describe('canvas recipe reclamation', () => {
     expect(h.state.submitted).toBe(3);
     // A new request for a reclaimed recipe is refused before it has a receipt.
     await expect(h.service.enqueue_queue_recipes({ requestKey: 'mcp-third', items: [item(recipe, 9)] })).rejects.toMatchObject({ code: 'recipe_not_found' });
-    expect(await h.service.lookup_queue_request({ requestKey: 'mcp-third' })).toEqual({ batch: null });
+    expect(await h.service.lookup_queue_request({ requestKey: 'mcp-third' })).toEqual({ batch: null, inFlight: false });
   });
 
   it('keeps a capture whose enqueue is preparing or unknown, and one rejected less than the grace period ago', async () => {

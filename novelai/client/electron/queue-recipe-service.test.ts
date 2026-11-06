@@ -29,7 +29,9 @@ async function copiedRuntime(runtimeDir: string) {
 async function setup() {
   const runtimeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'nai-queue-recipe-')); cleanups.push(runtimeDir);
   const jobs = new Map<string, any>();
+  // Like the real batch service, a requestKey it already holds is answered with that batch (batch-service enqueue → lookup).
   const batch = { ready: Promise.resolve(), enqueue: vi.fn(async (args: any) => {
+    if (jobs.has(args.requestKey)) return jobs.get(args.requestKey);
     const job = { ...args, batchId: randomUUID(), originWorkspaceId: args.workspaceId, submittedRevision: 0, status: 'queued', recipePlanHash: undefined, items: args.seeds.map((plannedSeed: number, index: number) => ({ index, plannedSeed, status: 'pending', jobId: null, results: [] })) };
     delete job.snapshots; jobs.set(args.requestKey, job); return job;
   }), lookup: vi.fn((args: any) => jobs.get(args.requestKey) ?? null), list: vi.fn(() => ({ batches: [...jobs.values()] })),
@@ -85,7 +87,7 @@ describe('independent recipe service', () => {
     await expect(service.enqueue_queue_recipes({ requestKey: 'other-shape', items: [item({ recipeId: otherId, recipeRevision: 1, inputHash: record.inputHash }, 5)] })).rejects.toMatchObject({ code: 'queue_storage_failed' });
     await expect(service.put_queue_recipe({ recipeId: otherId, expectedRevision: 1, preparation: prep() })).rejects.toMatchObject({ code: 'queue_storage_failed' });
     expect(batch.enqueue).not.toHaveBeenCalled();
-    expect(await service.lookup_queue_request({ requestKey: 'other-shape' })).toEqual({ batch: null });
+    expect(await service.lookup_queue_request({ requestKey: 'other-shape' })).toEqual({ batch: null, inFlight: false });
   });
 
   it('isolates multiple recipes; concurrent same-version writers have a single winner and retain history', async () => {
@@ -174,13 +176,40 @@ describe('independent recipe service', () => {
     await expect(linkedService.put_queue_recipe({ preparation: prep() })).rejects.toMatchObject({ code: 'queue_storage_failed' });
     expect(await fs.readdir(target)).toEqual(before);
   });
-  it('unknown receipt after an unconfirmed exception is not automatically resubmitted', async () => {
-    const { service, batch, runtimeDir } = await setup(); const a = await service.put_queue_recipe({ preparation: prep() }); const args = { requestKey: 'unknown', items: [item(a)] }; 
+  it('an unknown receipt (the batch service failed, its queue readable and without the batch) is never resent by the host, and the same plan under the same key restarts it once', async () => {
+    const { service, batch, jobs, runtimeDir } = await setup(); const a = await service.put_queue_recipe({ preparation: prep() }); const args = { requestKey: 'unknown', items: [item(a)] };
     batch.enqueue.mockRejectedValueOnce(new Error('connection dropped before acknowledgement'));
     await expect(service.enqueue_queue_recipes(args)).rejects.toMatchObject({ code: 'queue_acceptance_unknown' });
-    await expect(service.enqueue_queue_recipes(args)).rejects.toMatchObject({ code: 'queue_acceptance_unknown' });
-    expect(await service.lookup_queue_request({ requestKey: 'unknown' })).toEqual({ batch: null, status: 'unknown' }); expect(batch.enqueue).toHaveBeenCalledTimes(1);
-    const restored=createQueueRecipeService({runtimeDir:await copiedRuntime(runtimeDir),batch});expect(await restored.lookup_queue_request({requestKey:args.requestKey})).toEqual({batch:null,status:'unknown'});expect(batch.enqueue).toHaveBeenCalledTimes(1);
+    // Lookups only report it (also after a restart): nothing runs again by itself.
+    expect(await service.lookup_queue_request({ requestKey: 'unknown' })).toEqual({ batch: null, status: 'unknown', inFlight: false, restartable: true }); expect(batch.enqueue).toHaveBeenCalledTimes(1);
+    const restored=createQueueRecipeService({runtimeDir:await copiedRuntime(runtimeDir),batch});expect(await restored.lookup_queue_request({requestKey:args.requestKey})).toEqual({batch:null,status:'unknown',inFlight:false,restartable:true});expect(batch.enqueue).toHaveBeenCalledTimes(1);
+    // Another plan under the key stays a conflict.
+    await expect(service.enqueue_queue_recipes({ ...args, intervalSeconds: 3 })).rejects.toMatchObject({ code: 'request_conflict' });
+    // The same plan starts over under the same receipt: one batch; a repeat answers it without another enqueue.
+    const accepted = await service.enqueue_queue_recipes(args);
+    expect(await service.enqueue_queue_recipes(args)).toMatchObject({ batchId: accepted.batchId });
+    expect(batch.enqueue).toHaveBeenCalledTimes(2); expect(jobs.size).toBe(1);
+    expect(await service.lookup_queue_request({ requestKey: 'unknown' })).toMatchObject({ status: 'accepted', batch: { batchId: accepted.batchId }, inFlight: false });
+  });
+  it('lookups report an enqueue that has arrived and is not answered yet as inFlight and leave its receipt alone; afterwards they report its outcome', async () => {
+    const { service, batch, jobs } = await setup(); const a = await service.put_queue_recipe({ preparation: prep() }); const args = { requestKey: 'in-flight', items: [item(a, 5)] };
+    const original = batch.enqueue.getMockImplementation()!;
+    let release!: () => void, entered!: () => void; const gate = new Promise<void>(resolve => { release = resolve; }), inside = new Promise<void>(resolve => { entered = resolve; });
+    batch.enqueue.mockImplementationOnce(async (submit: any) => { entered(); await gate; return original(submit); });
+    // Received (here behind a put that holds the store's sequence): inFlight, whether or not its receipt is written yet.
+    const put = service.put_queue_recipe({ preparation: prep('another recipe') });
+    const pending = service.enqueue_queue_recipes(args);
+    expect(await service.lookup_queue_request({ requestKey: 'in-flight' })).toMatchObject({ batch: null, inFlight: true });
+    await put;
+    // The receipt is written and the batch service runs: still in flight, receipt untouched by the lookup.
+    await inside;
+    expect(await service.lookup_queue_request({ requestKey: 'in-flight' })).toEqual({ batch: null, status: 'unknown', inFlight: true });
+    release();
+    const accepted = await pending;
+    expect(await service.lookup_queue_request({ requestKey: 'in-flight' })).toMatchObject({ status: 'accepted', batch: { batchId: accepted.batchId }, inFlight: false });
+    expect(jobs.size).toBe(1); expect(batch.enqueue).toHaveBeenCalledTimes(1);
+    // A key nothing arrived for is not in flight.
+    expect(await service.lookup_queue_request({ requestKey: 'never-sent' })).toEqual({ batch: null, inFlight: false });
   });
   it('keeps queue_storage_error unknown when durable create may have completed, then reconciles after restart without replay', async () => {
     const { service, batch, runtimeDir } = await setup(); const a = await service.put_queue_recipe({ preparation: prep() }); const args = { requestKey: 'storage-create-uncertain', items: [item(a, 71)] };
@@ -189,11 +218,14 @@ describe('independent recipe service', () => {
       durable = { ...submit, batchId: randomUUID(), originWorkspaceId: submit.workspaceId, submittedRevision: 0, status: 'queued',
         items: submit.seeds.map((plannedSeed: number, index: number) => ({ index, plannedSeed, status: 'pending', jobId: null, results: [] })) };
       delete durable.snapshots;
+      // As the real batch service does (storageFailed): from now on its frozen queue cannot be read.
+      batch.lookup.mockImplementation(() => { throw Object.assign(new Error('The frozen queue cannot be read or written safely.'), { code: 'queue_storage_error' }); });
       throw Object.assign(new Error('state was published but final storage sync failed'), { code: 'queue_storage_error' });
     });
     await expect(service.enqueue_queue_recipes(args)).rejects.toMatchObject({ code: 'queue_acceptance_unknown' });
+    // The same plan is not restarted while the frozen queue cannot say whether its batch exists.
     await expect(service.enqueue_queue_recipes(args)).rejects.toMatchObject({ code: 'queue_acceptance_unknown' });
-    expect(await service.lookup_queue_request({ requestKey: args.requestKey })).toEqual({ batch: null, status: 'unknown' });
+    await expect(service.lookup_queue_request({ requestKey: args.requestKey })).rejects.toMatchObject({ code: 'queue_acceptance_unknown' });
     const recoveredBatch = { ...batch, enqueue: vi.fn(), lookup: vi.fn((lookup: any) => lookup.requestKey === args.requestKey ? durable : null) };
     const restarted = createQueueRecipeService({ runtimeDir, batch: recoveredBatch });
     expect((await restarted.enqueue_queue_recipes(args)).batchId).toBe(durable.batchId);
@@ -243,7 +275,7 @@ describe('independent recipe service', () => {
     batch.enqueue.mockRejectedValueOnce(Object.assign(new Error(`explicit ${code}`), { code }));
     await expect(service.enqueue_queue_recipes(args)).rejects.toMatchObject({ code, message: `explicit ${code}` });
     await expect(service.enqueue_queue_recipes(args)).rejects.toMatchObject({ code, message: `explicit ${code}` });
-    expect(await service.lookup_queue_request({ requestKey: args.requestKey })).toEqual({ batch: null, status: 'rejected', error: { code, message: `explicit ${code}` } });
+    expect(await service.lookup_queue_request({ requestKey: args.requestKey })).toEqual({ batch: null, status: 'rejected', inFlight: false, error: { code, message: `explicit ${code}` } });
     await expect(service.enqueue_queue_recipes({ ...args, items: [{ ...item(a), seed: 99 }] })).rejects.toMatchObject({ code: 'request_conflict' });
     expect(batch.enqueue).toHaveBeenCalledTimes(1);const restored=createQueueRecipeService({runtimeDir:await copiedRuntime(runtimeDir),batch});expect((await restored.lookup_queue_request({requestKey:args.requestKey})).status).toBe('rejected');expect(batch.enqueue).toHaveBeenCalledTimes(1);
   });
@@ -341,7 +373,7 @@ describe('independent recipe service', () => {
     await expect(service.enqueue_queue_recipes({ requestKey: 'upscale-seeded', items: [item(a, 5)] })).rejects.toMatchObject({ code: 'invalid_argument', message: 'Upscale and Director recipes do not use a seed; omit seed for these items.' });
     await expect(service.enqueue_queue_recipes({ requestKey: 'upscale-repeated', items: [item(a), item(b), item(a)] })).rejects.toMatchObject({ code: 'invalid_argument', message: 'An upscale or Director recipe may appear only once in one queue submission.' });
     // Both are refused before a receipt exists (W2d): the keys stay unused and can carry a corrected plan.
-    for (const requestKey of ['upscale-seeded', 'upscale-repeated']) expect(await service.lookup_queue_request({ requestKey })).toEqual({ batch: null });
+    for (const requestKey of ['upscale-seeded', 'upscale-repeated']) expect(await service.lookup_queue_request({ requestKey })).toEqual({ batch: null, inFlight: false });
     expect(await fs.readdir(path.join(runtimeDir, 'queue-recipes'))).not.toContain(`request-${recipeHash('upscale-repeated')}.json`);
     expect(batch.enqueue).not.toHaveBeenCalled();
     const job = await service.enqueue_queue_recipes({ requestKey: 'upscale-repeated', items: [item(a), item(b)] });

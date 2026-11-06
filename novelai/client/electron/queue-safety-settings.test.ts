@@ -93,7 +93,7 @@ describe('single enqueue at most (enqueue_limit_exceeded)', () => {
     expect(refused.message).toMatch(/at most 3 per enqueue/);
     expect(h.batch.enqueue).not.toHaveBeenCalled();
     await expect(fs.stat(h.receipt('four'))).rejects.toMatchObject({ code: 'ENOENT' });
-    expect(await h.service.lookup_queue_request({ requestKey: 'four' })).toEqual({ batch: null });
+    expect(await h.service.lookup_queue_request({ requestKey: 'four' })).toEqual({ batch: null, inFlight: false });
     // The same key is free: after the user raises the limit the same plan is accepted.
     limit = 4;
     const accepted = await h.service.enqueue_queue_recipes({ requestKey: 'four', items: items(h.recipe, 4) });

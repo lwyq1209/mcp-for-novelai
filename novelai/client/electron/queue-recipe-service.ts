@@ -322,6 +322,19 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
   /** The record or byte limit of the store is reached: the only queue_storage_failed that means "full". */
   const storeFull = (message: string): never => { throw withReason(new WorkspaceError('queue_storage_failed', message, { reason: 'store_full' }), 'recipe.store_full'); };
   const exclusive = <T>(run: () => Promise<T>): Promise<T> => { const next = sequence.then(run); sequence = next.catch(() => undefined); return next; };
+  /**
+   * Request keys of the enqueues this process has received and not yet answered (0.1.4), counted from the moment the
+   * bridge hands one over (before it waits for the store's sequence) until its answer. lookup_queue_request reports it
+   * (inFlight), so a caller whose answer was lost can tell "still being handled" from "nothing arrived" at once,
+   * without the 130-second settle window the MCP server used to wait; and a lookup never rewrites the receipt of an
+   * enqueue that is still running.
+   */
+  const received = new Map<string, number>();
+  const receiving = (raw: unknown) => {
+    const key = raw && typeof raw === 'object' && typeof (raw as Record<string, unknown>).requestKey === 'string' ? (raw as Record<string, string>).requestKey : null;
+    if (key !== null) received.set(key, (received.get(key) ?? 0) + 1);
+    return () => { if (key === null) return; const left = (received.get(key) ?? 1) - 1; if (left > 0) received.set(key, left); else received.delete(key); };
+  };
   const init = async () => {
     const runtimePath = path.resolve(options.runtimeDir), runtimeInfo = await fs.lstat(runtimePath);
     if (!runtimeInfo.isDirectory() || runtimeInfo.isSymbolicLink()) fail('queue_storage_failed', 'Recipe runtime root is not an owned directory.');
@@ -600,7 +613,8 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
   const replaceReceipt = async (prior: Receipt, next: Receipt) => withQuota(async nonce => {
     const file = receiptPath(prior.requestKey), current = await receipt(prior.requestKey);
     if (!current || current.revision !== prior.revision || current.recordHash !== prior.recordHash) fail('queue_storage_failed', 'Queue receipt changed during its state transition.');
-    const transitions = new Set(['preparing:preparing', 'preparing:accepted', 'preparing:rejected', 'preparing:unknown', 'unknown:accepted']);
+    // unknown:preparing is the restart of a receipt whose enqueue ended without a batch (enqueueRecipes, 0.1.4).
+    const transitions = new Set(['preparing:preparing', 'preparing:accepted', 'preparing:rejected', 'preparing:unknown', 'unknown:accepted', 'unknown:preparing']);
     if (!transitions.has(`${prior.status}:${next.status}`) || next.revision !== prior.revision + 1 || next.previousRecordHash !== prior.recordHash || next.requestHash !== prior.requestHash || next.recipePlanHash !== prior.recipePlanHash) fail('queue_storage_failed', 'Invalid queue receipt transition.');
     const currentInfo = await fs.lstat(file);
     if (!currentInfo.isFile() || currentInfo.isSymbolicLink()) fail('queue_storage_failed', 'Queue receipt is not an owned file.');
@@ -1012,12 +1026,13 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
       const requestHash = recipeHash({ requestKey: key, items, intervalSeconds, ...(output ? { output } : {}) }), recipePlanHash = recipeHash(items);
       // An existing receipt answers first and reads no recipe, so a repeat of an accepted request still works after
       // its canvas recipes were reclaimed.
-      let saved = await receipt(key);
+      let saved = await receipt(key), restart: Receipt | null = null;
       if (saved) {
         if (saved.requestHash !== requestHash) fail('request_conflict', 'This key already identifies a different queue plan.');
         if (saved.status === 'rejected') fail(saved.error!.code, saved.error!.message);
-        if (!saved.args) fail('queue_acceptance_unknown', 'Queue preparation was interrupted before acceptance could be determined; do not resend automatically.');
-        const job = lookupSaved(saved, frozenError);
+        // A receipt without its plan (args) never reached the batch service. With a plan, an unreadable frozen queue
+        // makes the outcome unknown (lookupSaved throws queue_acceptance_unknown).
+        const job = saved.args ? lookupSaved(saved, frozenError) : null;
         if (job) {
           if (saved.status !== 'accepted') {
             try { saved = await moveReceipt(saved, 'accepted', { batchId: job.batchId, result: { batchId: job.batchId }, error: null }); }
@@ -1032,11 +1047,16 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
           if (cleaned && cleaned.batchId === saved.batchId) return cleanedBatch(cleaned, key);
           fail('queue_storage_failed', 'An accepted queue receipt has no matching durable batch.');
         }
-        if (saved.status === 'preparing') await moveReceipt(saved, 'unknown', { error: { code: 'queue_acceptance_unknown', message: 'Queue acceptance could not be confirmed; do not resend automatically.' } });
-        fail('queue_acceptance_unknown', 'This request has a saved receipt but no confirmed batch. Inspect it; do not resend automatically.');
+        // preparing or unknown, and no batch under this key: the enqueue that wrote it has ended (enqueues run one at a
+        // time, in this sequence) without one, because it stopped before the batch service or the batch service failed
+        // it with its queue still readable. The same plan under the same key starts over under this receipt (0.1.4,
+        // instead of staying unknown for good). That never makes a second batch: the batch service answers a
+        // requestKey it already holds with that batch (batch-service enqueue → lookup), and an unreadable frozen queue
+        // never gets here.
+        restart = saved;
       }
       // No receipt: a key whose batch ended and was cleaned answers from its record and is never queued again.
-      const cleaned = await cleanedByKey(key);
+      const cleaned = restart ? null : await cleanedByKey(key);
       if (cleaned) {
         // A key rebuilt from the library has no plan to compare: it is answered as accepted, whatever the plan (never sent again).
         if (cleaned.kind === 'batch' && cleaned.requestHash !== requestHash) fail('request_conflict', `This requestKey was used for ${cleaned.requestHash ? 'a different queue plan' : 'a queue plan'}; its batch ended (${cleaned.status}) and was cleaned on ${cleaned.cleanedAt}. Nothing was queued; a different plan needs a new requestKey.`);
@@ -1086,10 +1106,13 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
         if (!group || typeof group.id !== 'string' || !group.id || typeof group.name !== 'string') fail('history_group_unavailable', 'The history group could not be created or read. Nothing was queued and this requestKey was not used.');
         output = { ...output, historyGroupId: group.id, historyGroupName: group.name };
       }
-      const initial: Receipt = { schemaVersion: 2, requestKey: key, requestHash, recipePlanHash, items, args: null, status: 'preparing', revision: 1, batchId: null, result: null, error: null,
-        previousRecordHash: null, updatedAt: new Date().toISOString(), ...(output ? { output } : {}) };
-      await writeData(receiptPath(key), fixedReceipt(initial, receiptSlotBytes(items.length)));
-      saved = await receipt(key);
+      if (restart) saved = await moveReceipt(restart, 'preparing', { args: null, batchId: null, result: null, error: null, ...(output ? { output } : {}) });
+      else {
+        const initial: Receipt = { schemaVersion: 2, requestKey: key, requestHash, recipePlanHash, items, args: null, status: 'preparing', revision: 1, batchId: null, result: null, error: null,
+          previousRecordHash: null, updatedAt: new Date().toISOString(), ...(output ? { output } : {}) };
+        await writeData(receiptPath(key), fixedReceipt(initial, receiptSlotBytes(items.length)));
+        saved = await receipt(key);
+      }
       if (!saved) fail('queue_storage_failed', 'Queue receipt could not be committed.');
       // Other input problems are found while freezing, after the receipt, and keep their recorded rejection.
       const rejectBeforeDispatch = async (error: any): Promise<never> => {
@@ -1213,36 +1236,48 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
     /** The dry run of put_canvas_recipe (same assembly rule); host-internal like it, so only the canvas capture uses it. */
     preview_canvas_recipe(raw: unknown) { return previewRecipe(raw, true); },
     read_queue_recipe: readRecipe,
-    enqueue_queue_recipes(raw: unknown, context?: { source?: BatchSource }) { return enqueueRecipes(raw, context); },
+    /** Registered as received (lookup inFlight) the moment it is called, before it waits for the store's sequence. */
+    enqueue_queue_recipes(raw: unknown, context?: { source?: BatchSource }) { const done = receiving(raw); return enqueueRecipes(raw, context).finally(done); },
+    /**
+     * What a requestKey holds, with inFlight (0.1.4): true while an enqueue of this key has been received and not yet
+     * answered. The receipt of such an enqueue is never rewritten here (it records its own outcome); only a receipt that
+     * nobody works on any more is reconciled with a batch found under it. unknown without a batch and not in flight
+     * says restartable: the same plan under the same key starts over (enqueueRecipes).
+     */
     async lookup_queue_request(raw: unknown) {
       preflight(raw); const args = record(raw, 'request lookup'); keys(args, ['requestKey']); const key = requestKey(args.requestKey);
+      const inFlight = () => received.has(key);
       await init(); const frozenError = await options.batch.ready.then(() => null, (error: unknown) => error);
       let saved = await receipt(key);
       if (!saved) {
         // A cleaned batch keeps answering "accepted" (with its end and counts), never "no receipt".
         const cleaned = await cleanedByKey(key);
-        return cleaned ? { batch: cleanedBatch(cleaned, key), status: 'accepted' } : { batch: null }; // receipts precede batches: no receipt, no batch for this key
+        // receipts precede batches: no receipt, no batch for this key (inFlight: it has arrived and waits or runs).
+        return cleaned ? { batch: cleanedBatch(cleaned, key), status: 'accepted', inFlight: inFlight() } : { batch: null, inFlight: inFlight() };
       }
-      if (saved.status === 'rejected') return { batch: null, status: 'rejected', error: saved.error };
+      if (saved.status === 'rejected') return { batch: null, status: 'rejected', error: saved.error, inFlight: inFlight() };
       let job: BatchJob | null = null;
       if (saved.args) job = lookupSaved(saved, frozenError);
       if (!job && saved.status === 'accepted') {
         // Its batch was cleaned while this receipt was being read.
         const cleaned = await cleanedByKey(key);
-        if (cleaned && cleaned.batchId === saved.batchId) return { batch: cleanedBatch(cleaned, key), status: 'accepted' };
+        if (cleaned && cleaned.batchId === saved.batchId) return { batch: cleanedBatch(cleaned, key), status: 'accepted', inFlight: inFlight() };
       }
       if (job) {
         let persisted = saved.status === 'accepted';
-        if (saved.status !== 'accepted') {
+        // A running enqueue records its own acceptance (rewriting its receipt here would make its own transition fail).
+        if (!persisted && !inFlight()) {
           try { saved = await moveReceipt(saved, 'accepted', { batchId: job.batchId, result: { batchId: job.batchId }, error: null }); persisted = true; }
           catch { persisted = false; }
         }
         if (saved.batchId && saved.batchId !== job.batchId) fail('queue_storage_failed', 'Queue receipt points to a different accepted batch.');
-        return { batch: await decorate(job), status: persisted ? 'accepted' : 'unknown' };
+        return { batch: await decorate(job), status: persisted ? 'accepted' : 'unknown', inFlight: inFlight() };
       }
       if (saved.status === 'accepted') fail('queue_storage_failed', 'An accepted queue receipt has no matching durable batch.');
-      if (saved.status === 'preparing') saved = await moveReceipt(saved, 'unknown', { error: { code: 'queue_acceptance_unknown', message: 'Queue acceptance could not be confirmed; do not resend automatically.' } });
-      return { batch: null, status: 'unknown' };
+      // preparing or unknown without a batch. Before 0.1.4 a lookup turned a preparing receipt into unknown, which made
+      // an enqueue still running abandon its dispatch; now the receipt is left alone.
+      const running = inFlight();
+      return { batch: null, status: 'unknown', inFlight: running, ...(running ? {} : { restartable: !frozenError }) };
     },
     async list_queue(raw: unknown) {
       keys(raw, []); await init(); await options.batch.ready;

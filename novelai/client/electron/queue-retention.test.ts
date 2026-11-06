@@ -83,7 +83,7 @@ describe('queue retention: cleaning ended agent batches', () => {
     expect(JSON.stringify(lines)).not.toContain('mcp-old');
     // The old key: accepted, ended, cleaned.
     const cleaned = { batchId: batch.batchId, requestKey: 'mcp-old', execution: 'queued', status: 'succeeded', cleaned: true, count: 2, recipePlanHash: batch.recipePlanHash, intervalSeconds: 0, itemCounts: { succeeded: 2, failed: 0, unknown: 0, cancelled: 0, skipped: 0 }, items: [] };
-    expect(await h.service.lookup_queue_request({ requestKey: 'mcp-old' })).toEqual({ status: 'accepted', batch: expect.objectContaining(cleaned) });
+    expect(await h.service.lookup_queue_request({ requestKey: 'mcp-old' })).toEqual({ status: 'accepted', batch: expect.objectContaining(cleaned), inFlight: false });
     // The same plan again: the cleaned batch, nothing sent; another plan under the key: a conflict, nothing sent.
     await expect(h.enqueue('mcp-old', [item(recipe, 10), item(recipe, 11)])).resolves.toMatchObject(cleaned);
     await expect(h.enqueue('mcp-old', [item(recipe, 12)])).rejects.toMatchObject({ code: 'request_conflict' });
@@ -101,7 +101,7 @@ describe('queue retention: cleaning ended agent batches', () => {
     await expect(h.service.read_queue_recipe({ recipeId: recipe.recipeId, recipeRevision: 1 })).rejects.toMatchObject({ code: 'recipe_not_found', message: expect.stringContaining('reclaimed under the queue retention rule') });
     await expect(h.enqueue('mcp-new', [item(recipe, 1)])).rejects.toMatchObject({ code: 'recipe_not_found', message: expect.stringContaining('same inputHash') });
     expect(await h.exists(h.receiptFile('mcp-new'))).toBe(false);
-    expect(await h.service.lookup_queue_request({ requestKey: 'mcp-new' })).toEqual({ batch: null });
+    expect(await h.service.lookup_queue_request({ requestKey: 'mcp-new' })).toEqual({ batch: null, inFlight: false });
     expect(h.state.submitted).toBe(2);
     // Prepared again with the same fields: same inputHash, a new recipeId, and it queues normally.
     const again = await h.put('recipe of mcp-old');
@@ -298,7 +298,7 @@ describe('queue retention: interruptions, restarts and concurrent calls', () => 
 
   it('records survive a restart and are re-read when another process appended them', async () => {
     const h = await host(), other = createQueueRecipeService({ runtimeDir: h.runtimeDir, batch: h.batch, recipeReclaim: { auto: false, log: () => {} } });
-    expect(await other.lookup_queue_request({ requestKey: 'mcp-unseen' })).toEqual({ batch: null });
+    expect(await other.lookup_queue_request({ requestKey: 'mcp-unseen' })).toEqual({ batch: null, inFlight: false });
     const { batch, finishedAt } = await endedBatch(h, 'mcp-shared');
     h.state.clock = finishedAt + 31 * DAY;
     await h.service.runRetention();
@@ -361,7 +361,7 @@ describe('queue retention: interruptions, restarts and concurrent calls', () => 
     await expect(service.enqueue_queue_recipes({ requestKey: 'mcp-b', items: [item(b.recipe, 77)] })).resolves.toMatchObject({ cleaned: true, recovered: true });
     expect(await service.lookup_queue_request({ requestKey: 'mcp-c' })).toMatchObject({ batch: { batchId: c.batch.batchId, cleaned: true, status: 'succeeded' } });
     // The key whose batch made no image stays lost: a repair cannot know it.
-    expect(await service.lookup_queue_request({ requestKey: 'mcp-a' })).toEqual({ batch: null });
+    expect(await service.lookup_queue_request({ requestKey: 'mcp-a' })).toEqual({ batch: null, inFlight: false });
     expect(restarted.state.submitted + h.state.submitted).toBe(6);
     expect((await fs.readFile(file, 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line).kind)).toEqual(['batch', 'recipe', 'recipe', 'recipe', 'recovered', 'recovered', 'repair']);
   });
@@ -422,7 +422,7 @@ describe('recovery from the library (review rework 2): records rolled back or re
       expect(await r.service.lookup_queue_request({ requestKey: key })).toMatchObject({ status: 'accepted', batch: { batchId: value.batch.batchId, cleaned: true, recovered: true } });
       await expect(r.service.enqueue_queue_recipes({ requestKey: key, items: [item(value.recipe, 99)] })).resolves.toMatchObject({ cleaned: true, recovered: true });
     }
-    expect(await r.service.lookup_queue_request({ requestKey: 'mcp-z' })).toEqual({ batch: null });
+    expect(await r.service.lookup_queue_request({ requestKey: 'mcp-z' })).toEqual({ batch: null, inFlight: false });
     expect(r.state.submitted).toBe(0); expect(h.state.submitted).toBe(submitted);
     expect(r.service.retentionStatus()).toMatchObject({ records: { state: 'ok', readable: 3 }, recoveredFromLibrary: 3 });
   });
@@ -430,7 +430,7 @@ describe('recovery from the library (review rework 2): records rolled back or re
   it('after a library restore and before every cleaning, keys the library newly names are recorded; a key with a receipt, record or batch never is', async () => {
     const h = await host(), live = await endedBatch(h, 'mcp-live'), origins: any[] = [], logs: string[] = [];
     const service = createQueueRecipeService({ runtimeDir: h.runtimeDir, batch: h.batch, recipeReclaim: { auto: false, log: () => {} }, retention: { auto: false, days: () => 30, now: () => h.state.clock, log: () => {} }, log: message => logs.push(message), libraryQueueOrigins: () => origins });
-    expect(await service.lookup_queue_request({ requestKey: 'mcp-nothing' })).toEqual({ batch: null }); // the start check is done
+    expect(await service.lookup_queue_request({ requestKey: 'mcp-nothing' })).toEqual({ batch: null, inFlight: false }); // the start check is done
     // Images restored from a backup of another data root: their key has nothing here.
     const other = randomUUID();
     origins.push({ requestKey: 'mcp-other-root', batchId: other, images: 1 }, { requestKey: 'mcp-live', batchId: live.batch.batchId, images: 2 });

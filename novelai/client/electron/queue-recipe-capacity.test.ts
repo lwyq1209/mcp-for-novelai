@@ -60,7 +60,7 @@ describe('receipt slots (H7)', () => {
     expect(rejected.message.startsWith('full é"\né"\n')).toBe(true);
     // The thrown, stored and replayed error are the same bounded text.
     await expect(service.enqueue_queue_recipes({ requestKey: 'slot-rejected', items: [item(recipe, 2)] })).rejects.toMatchObject({ code: 'queue_full', message: rejected.message });
-    expect(await service.lookup_queue_request({ requestKey: 'slot-rejected' })).toEqual({ batch: null, status: 'rejected', error: { code: 'queue_full', message: rejected.message } });
+    expect(await service.lookup_queue_request({ requestKey: 'slot-rejected' })).toEqual({ batch: null, status: 'rejected', inFlight: false, error: { code: 'queue_full', message: rejected.message } });
   });
 
 });
@@ -75,7 +75,7 @@ describe('frozen-queue capacity precheck before the receipt (H4, recipe side)', 
     expect(failure).toMatchObject({ code: 'queue_full', details: { frozenQueue: { bytes: state.capacity.bytes }, estimatedBytes: expect.any(Number) } });
     expect(failure.message).toMatch(/requestKey was not used/);
     expect(batch.reclaim).toHaveBeenCalledExactlyOnceWith(8);
-    expect(await h.service.lookup_queue_request({ requestKey: args.requestKey })).toEqual({ batch: null });
+    expect(await h.service.lookup_queue_request({ requestKey: args.requestKey })).toEqual({ batch: null, inFlight: false });
     expect(await fs.readdir(h.store)).not.toContain(path.basename(h.receiptFile(args.requestKey)));
     expect(batch.enqueue).not.toHaveBeenCalled();
     // Reclaim frees space: the same key is accepted.
@@ -104,7 +104,7 @@ describe('frozen-queue capacity precheck before the receipt (H4, recipe side)', 
     const refused: any = await h.service.enqueue_queue_recipes({ requestKey: 'mcp-too-big', items: big.map(value => item(value, 2)) }).catch(error => error);
     expect(refused.code).toBe('queue_full');
     expect(refused.details.estimatedBytes).toBeGreaterThanOrEqual(used.bytes - before.bytes);
-    expect(await h.service.lookup_queue_request({ requestKey: 'mcp-too-big' })).toEqual({ batch: null });
+    expect(await h.service.lookup_queue_request({ requestKey: 'mcp-too-big' })).toEqual({ batch: null, inFlight: false });
     expect(batch.capacity()).toEqual(used); // nothing reached frozen storage
     const small = await h.service.put_queue_recipe({ preparation: prep() });
     expect((await h.service.enqueue_queue_recipes({ requestKey: 'mcp-small', items: [item(small, 4)] })).status).toBe('queued');
@@ -147,7 +147,7 @@ describe('recipe store limits and list_queue storage', () => {
     expect((await fs.readdir(store)).length).toBe(limit);
     await expect(service.put_queue_recipe({ preparation: prep('one too many') })).rejects.toMatchObject({ code: 'queue_storage_failed', message: new RegExp(`${limit} records`) });
     await expect(service.enqueue_queue_recipes({ requestKey: 'mcp-store-full', items: [item(recipe, 1)] })).rejects.toMatchObject({ code: 'queue_storage_failed' });
-    expect(await service.lookup_queue_request({ requestKey: 'mcp-store-full' })).toEqual({ batch: null });
+    expect(await service.lookup_queue_request({ requestKey: 'mcp-store-full' })).toEqual({ batch: null, inFlight: false });
     expect(fake.batch.enqueue).not.toHaveBeenCalled();
     expect((await service.list_queue({})).storage.recipeStore).toEqual({ records: limit, recordLimit: limit, bytes: expect.any(Number), byteLimit: 512 * 1024 * 1024 });
     expect((await createQueueRecipeService({ runtimeDir, batch: fake.batch }).list_queue({})).storage.recipeStore).toMatchObject({ records: limit, recordLimit: 16_384 });
@@ -206,7 +206,7 @@ describe('review rework P3-1: admission before the receipt', () => {
     tight.hook.beforeCreate = tight.pauseResume; // the in-flight batch saves progress four times inside the window
     const refused: any = await tight.h.service.enqueue_queue_recipes(plan).catch(error => error);
     expect(refused.code).toBe('queue_full');
-    expect(await tight.h.service.lookup_queue_request({ requestKey: plan.requestKey })).toEqual({ batch: null });
+    expect(await tight.h.service.lookup_queue_request({ requestKey: plan.requestKey })).toEqual({ batch: null, inFlight: false });
     expect(tight.hook.calls).toBe(0); // refused before any receipt or frozen create
     const roomy = await rig(FROZEN_PRECHECK_SAVE_MARGIN + 64 * 1024), roomyPlan = { requestKey: roomy.key, items: [item(roomy.recipe, 1)] };
     roomy.hook.beforeCreate = roomy.pauseResume;
@@ -221,7 +221,7 @@ describe('review rework P3-1: admission before the receipt', () => {
     const refused: any = await h.service.enqueue_queue_recipes({ requestKey: 'mcp-one-more', items: [item(recipe, 999)] }).catch(error => error);
     expect(refused).toMatchObject({ code: 'queue_full' });
     expect(refused.message).toMatch(/200/);
-    expect(await h.service.lookup_queue_request({ requestKey: 'mcp-one-more' })).toEqual({ batch: null });
+    expect(await h.service.lookup_queue_request({ requestKey: 'mcp-one-more' })).toEqual({ batch: null, inFlight: false });
     expect(await fs.readdir(h.store)).not.toContain(path.basename(h.receiptFile('mcp-one-more')));
   });
 
@@ -234,7 +234,7 @@ describe('review rework P3-1: admission before the receipt', () => {
     await expect(h.service.enqueue_queue_recipes({ requestKey: 'mcp-first', items: [item(recipe, 1)] })).rejects.toMatchObject({ code: 'queue_acceptance_unknown' });
     const second: any = await h.service.enqueue_queue_recipes({ requestKey: 'mcp-second', items: [item(recipe, 2)] }).catch(error => error);
     expect(second.code).toBe('queue_storage_error');
-    expect(await h.service.lookup_queue_request({ requestKey: 'mcp-second' })).toEqual({ batch: null });
+    expect(await h.service.lookup_queue_request({ requestKey: 'mcp-second' })).toEqual({ batch: null, inFlight: false });
   });
 });
 
@@ -243,7 +243,7 @@ describe('review round 3: P3-d', () => {
     const h = await setup(), recipe = await h.service.put_queue_recipe({ preparation: prep() });
     const plan = { requestKey: 'mcp-stale-hash', items: [{ ...item(recipe, 1), inputHash: '0'.repeat(64) }] };
     await expect(h.service.enqueue_queue_recipes(plan)).rejects.toMatchObject({ code: 'recipe_changed', message: /requestKey was not used/ });
-    expect(await h.service.lookup_queue_request({ requestKey: plan.requestKey })).toEqual({ batch: null });
+    expect(await h.service.lookup_queue_request({ requestKey: plan.requestKey })).toEqual({ batch: null, inFlight: false });
     expect((await h.service.enqueue_queue_recipes({ requestKey: plan.requestKey, items: [item(recipe, 1)] })).requestKey).toBe(plan.requestKey); // the key is still free
     expect(h.batch.enqueue).toHaveBeenCalledTimes(1);
   });
@@ -267,7 +267,7 @@ describe('review round 4 P3-2: after a receipt exists, an unreadable frozen queu
     expect(retry.message).toMatch(/do not resend/i);
     // A request without a receipt is still refused up front with queue_storage_error (nothing written).
     await expect(h.service.enqueue_queue_recipes({ requestKey: 'mcp-new-after-failure', items: [item(recipe, 2)] })).rejects.toMatchObject({ code: 'queue_storage_error' });
-    expect(await h.service.lookup_queue_request({ requestKey: 'mcp-new-after-failure' })).toEqual({ batch: null });
+    expect(await h.service.lookup_queue_request({ requestKey: 'mcp-new-after-failure' })).toEqual({ batch: null, inFlight: false });
     await batch.dispose();
     const restarted = service(root, createBatchStorage(root)); await restarted.ready;
     const again = createQueueRecipeService({ runtimeDir: root, batch: restarted });
@@ -284,7 +284,7 @@ describe('review round 4 P3-2: after a receipt exists, an unreadable frozen queu
     const retry: any = await queue.enqueue_queue_recipes(plan).catch(error => error), lookup: any = await queue.lookup_queue_request({ requestKey: plan.requestKey }).catch(error => error);
     expect([retry.code, lookup.code]).toEqual(['queue_acceptance_unknown', 'queue_acceptance_unknown']);
     await expect(queue.enqueue_queue_recipes({ requestKey: 'mcp-no-receipt', items: [item(recipe, 2)] })).rejects.toMatchObject({ code: 'queue_storage_error' });
-    expect(await queue.lookup_queue_request({ requestKey: 'mcp-no-receipt' })).toEqual({ batch: null });
+    expect(await queue.lookup_queue_request({ requestKey: 'mcp-no-receipt' })).toEqual({ batch: null, inFlight: false });
   });
 });
 

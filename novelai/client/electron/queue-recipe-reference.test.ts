@@ -133,7 +133,7 @@ describe('recipe sources stored by history reference (H8)', () => {
       const before = await files();
       await expect(service.enqueue_queue_recipes({ requestKey: `source-${name}`, items: [item(recipe, 3)] })).rejects.toMatchObject({ code });
       expect(await files()).toEqual(before);
-      expect(await service.lookup_queue_request({ requestKey: `source-${name}` })).toEqual({ batch: null });
+      expect(await service.lookup_queue_request({ requestKey: `source-${name}` })).toEqual({ batch: null, inFlight: false });
       await expect(service.put_queue_recipe({ preparation: i2iPreparation(referenceTo(name === 'unbound' ? unbound : name === 'replaced' ? replaced : name === 'missing' ? missing : deleted, bytes)) })).rejects.toMatchObject({ code });
       expect(await files()).toEqual(before);
     }
@@ -257,7 +257,7 @@ describe('recipe sources stored by study reference (issue #2)', () => {
     const failure: any = await service.enqueue_queue_recipes({ requestKey: 'study-busy', items: [item(recipe, 1)] }).catch(error => error);
     expect(failure).toMatchObject({ code: 'recipe_source_busy', details: { readerCode: 'image_busy', ref: { kind: 'study', id: kept.id, revision: 1 } } });
     expect(failure.message).toMatch(/busy in the study reader.*retry the same call later/);
-    expect(await files()).toEqual(before); expect(await service.lookup_queue_request({ requestKey: 'study-busy' })).toEqual({ batch: null });
+    expect(await files()).toEqual(before); expect(await service.lookup_queue_request({ requestKey: 'study-busy' })).toEqual({ batch: null, inFlight: false });
     busy = false;
     expect((await service.enqueue_queue_recipes({ requestKey: 'study-busy', items: [item(recipe, 1)] })).batchId).toEqual(expect.any(String));
   });

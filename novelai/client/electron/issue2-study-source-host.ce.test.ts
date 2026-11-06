@@ -106,7 +106,7 @@ it('CE-I2-2 put/read/enqueue 都按 study 引用重读并核对原图：原图�
   const enqueueFailure: any = await h.service.enqueue_queue_recipes({ requestKey: 'study-source-replaced', items: [item(saved, 1)] }).catch(error => error);
   expect(enqueueFailure).toMatchObject({ code: 'recipe_source_changed', details: { recipeId: saved.recipeId, recipeRevision: 1, ref: { kind: 'study', id: study.id, revision: study.revision } } });
   expect(h.batch.enqueue).not.toHaveBeenCalled();
-  expect(await h.service.lookup_queue_request({ requestKey: 'study-source-replaced' })).toEqual({ batch: null });
+  expect(await h.service.lookup_queue_request({ requestKey: 'study-source-replaced' })).toEqual({ batch: null, inFlight: false });
   const readFailure: any = await h.service.read_queue_recipe({ recipeId: saved.recipeId, recipeRevision: 1 }).catch(error => error);
   expect(readFailure).toMatchObject({ code: 'recipe_source_changed', details: { recipeId: saved.recipeId, recipeRevision: 1, ref: { kind: 'study', id: study.id, revision: study.revision } } });
   await expect(h.service.put_queue_recipe({ preparation: i2iPreparation(reference) })).rejects.toMatchObject({ code: 'recipe_source_changed' });

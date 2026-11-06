@@ -202,7 +202,7 @@ describe('enqueue output at the host boundary (issue #1)', () => {
     for (const output of [{ fileNamePrefix: 'a/b' }, { historyGroup: ' padded' }, {}, { historyGroup: 'p', extra: 1 }, 'p']) {
       await expect(host.queue.enqueue_queue_recipes({ ...args, output })).rejects.toMatchObject({ code: 'invalid_argument' });
     }
-    expect(await host.queue.lookup_queue_request({ requestKey: 'host-key-1' })).toEqual({ batch: null });
+    expect(await host.queue.lookup_queue_request({ requestKey: 'host-key-1' })).toEqual({ batch: null, inFlight: false });
     expect(host.resolver).not.toHaveBeenCalled();
     expect(fixture.post).not.toHaveBeenCalled();
   });
