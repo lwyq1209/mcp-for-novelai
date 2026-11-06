@@ -48,16 +48,18 @@ export function NumberField({ value, onCommit, normalize = next => next, min, ma
 }
 
 /** A range slider whose value is shown on the right of its label (and can be typed into the small field). */
-export function SliderField({ label, value, min, max, step, onChange, format, testId, normalize }: {
+export function SliderField({ label, value, min, max, step, onChange, format, testId, normalize, disabled, title }: {
   label: string; value: number; min: number; max: number; step: number; onChange(next: number): void; format?: (value: number) => string; testId?: string; normalize?: (next: number) => number;
+  /** Shown but fixed (for example by Medium effort); title says why. */
+  disabled?: boolean; title?: string;
 }) {
   const percent = max > min ? Math.min(100, Math.max(0, ((value - min) / (max - min)) * 100)) : 0;
   const clamp = normalize ?? ((next: number) => Math.min(max, Math.max(min, next)));
-  return <div className="cv-pf cv-slider-field" data-testid={testId}>
+  return <div className="cv-pf cv-slider-field" data-testid={testId} title={title} data-disabled={disabled ? 'true' : undefined}>
     <div className="cv-pf-l"><span>{label}</span>
-      <NumberField className="cv-slider-num" label={label} value={value} min={min} max={max} step={step} normalize={clamp} onCommit={onChange} />
+      <NumberField className="cv-slider-num" label={label} value={value} min={min} max={max} step={step} normalize={clamp} onCommit={onChange} disabled={disabled} />
     </div>
-    <input className="cv-range" type="range" aria-label={label} aria-valuetext={format ? format(value) : undefined} min={min} max={max} step={step} value={value}
+    <input className="cv-range" type="range" aria-label={label} aria-valuetext={format ? format(value) : undefined} min={min} max={max} step={step} value={value} disabled={disabled}
       style={{ ['--cv-fill' as string]: `${percent}%` }} onChange={event => onChange(Number(event.target.value))} />
   </div>;
 }

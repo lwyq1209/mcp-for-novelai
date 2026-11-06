@@ -40,6 +40,7 @@ import { imagesAhead, newManualRequestKey, type ManualEnqueueReply, type ManualG
 import { windowQueueMonitor } from "./workspace/queue-monitor";
 import { hostErrorText } from "./host-errors";
 import { adaptiveNAIImageSize } from "./nai-dimensions";
+import { supportsNAIEffort } from "./nai-effort";
 import { normalizeInpaintBrushSize } from "./inpaint-brush";
 import { compactRemoteErrorText } from "./error-message";
 import { restorableActiveTab, type ActiveTab } from "./app/navigation";
@@ -368,7 +369,8 @@ interface AppState {
   generateMode: "t2i" | "i2i" | "enhance";
   postprocessMode: "upscale" | "director";
   enhanceMagnitude: number;
-  enhanceScale: 1 | 2;
+  /** "max": Enhance Max✨ (V5 only), about 2× from the source at its own size (src/nai-dimensions.ts). */
+  enhanceScale: 1 | 2 | "max";
   i2iParams: I2IParams;
   i2iSizeMode: ImageToImageSizeMode;
   inpaintModel: NAIInpaintModel;
@@ -516,7 +518,8 @@ interface AppState {
   clearImageComparison: () => void;
   // Core actions
   generate: () => Promise<void>;
-  generateI2I: () => Promise<void>;
+  /** enhance: the canvas Enhance click (runs High; max = Enhance Max✨ with upscaled_enhance). */
+  generateI2I: (options?: { enhance?: { max: boolean } }) => Promise<void>;
   inpaint: () => Promise<void>;
   upscaleCurrentImage: () => Promise<void>;
   runDirectorTool: () => Promise<void>;
@@ -1501,6 +1504,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         next.qualityToggle = next.qualityPreset !== "none";
         next.transparentBackground = false;
       }
+      // V5 Full Effort: only Medium is stored; another model starts on High again (as the official model switch).
+      if ((key === "effort" && value !== "medium") || (key === "model" && !supportsNAIEffort(String(value)))) delete next.effort;
       return { params: next };
     });
     persistGenerationState(get);
@@ -1894,7 +1899,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({
       inpaintModel: model,
       inpaintRecipe: state.inpaintRecipe
-        ? normalizeGenerateParams({ ...state.inpaintRecipe, model: baseModel })
+        ? normalizeGenerateParams({ ...state.inpaintRecipe, model: baseModel, ...(supportsNAIEffort(model) ? {} : { effort: undefined }) })
         : null,
     }));
     persistGenerationState(get);
@@ -2115,7 +2120,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
 
-  async generateI2I() {
+  async generateI2I(options) {
     const state = get();
     if (!requireToken(set, state.account.hasToken, state.settings)) return;
     if (!state.workbenchImage) {
@@ -2132,11 +2137,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       ? state.i2iOriginalImage ?? state.workbenchImage
       : state.workbenchImage;
     const extras = buildExtras(state);
-    const i2i = { ...state.i2iParams };
+    const i2i = { ...state.i2iParams, ...(options?.enhance?.max ? { upscaledEnhance: true } : {}) };
     const outputSize = state.i2iSizeMode === "adaptive"
       ? adaptiveNAIImageSize(sourceImage.width, sourceImage.height, state.params)
       : { width: state.params.width, height: state.params.height };
     const params: GenerateParams = { ...state.params, ...outputSize };
+    // Enhance runs on High (the V5 Full Effort toggle is a txt2img, img2img and inpaint setting).
+    if (options?.enhance) delete params.effort;
     workbenchLoadRevision += 1;
     // Every image of this click starts from the image of the click (its source is frozen with it).
     await queueManualClick(set, get, {

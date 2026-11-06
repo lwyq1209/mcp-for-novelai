@@ -8,6 +8,7 @@ import { localizedTagLabel } from '../../prompt-data';
 import { splitPromptTags, parseWeightedTag, formatMultiplier, setTagLevelInPrompt } from '../../prompt-weight';
 import { normalizePrompt, DEFAULT_NORMALIZE_OPTIONS, NORMALIZE_LABELS, type NormalizeOptions } from '../../prompt-normalize';
 import { DEFAULT_MODEL_FOR_MODE, NAI_MODELS, supportsNAIModelMode, type GenerateParams, type ModelMode, type PromptTemplate } from '../../types';
+import { naiEffortOf, supportsNAIEffort, type NAIEffort } from '../../nai-effort';
 import { PromptTextarea } from '../PromptTextarea';
 import { HeadAction, Section, Select, optionLabel } from '../controls';
 import { StylePresetPicker } from './style-presets';
@@ -44,7 +45,26 @@ export function ModelSection() {
     { value: 'anime', label: t('cv.family.anime') }, { value: 'furry', label: t('cv.family.furry') },
   ]} />}>
     <Select<GenerateParams['model']> label={t('cv.model')} value={model} options={options} onChange={value => setParam('model', value)} testId="cv-model-select" />
+    <EffortToggle executionModel={model} />
   </Section>;
+}
+
+/**
+ * V5 Full's Effort toggle (official 2026-10-08, src/nai-effort.ts): High is the full model, Medium the distilled one
+ * with fixed steps, sampler and UC. Shown only for an execution model that has it (V5 Full, V5 Full inpainting);
+ * scope picks the recipe it sets (the separate inpaint recipe, or the shared base parameters).
+ */
+export function EffortToggle({ executionModel, scope = 'base' }: { executionModel: string; scope?: RecipeScope }) {
+  const { t } = useUiText();
+  const { params, setParam } = useRecipe(scope);
+  if (!supportsNAIEffort(executionModel)) return null;
+  const effort = naiEffortOf(params, executionModel);
+  return <div className="cv-switch-row" data-testid="cv-effort" title={t('cv.effort.tip')}>
+    <div className="cv-grow"><b>{t('cv.effort')}</b><small className="ui-faint">{t(effort === 'medium' ? 'cv.effort.fixed' : 'cv.effort.tip')}</small></div>
+    <Seg<NAIEffort> size="sm" label={t('cv.effort')} value={effort} onChange={value => setParam('effort', value === 'medium' ? 'medium' : 'high')} options={[
+      { value: 'high', label: t('cv.effort.high') }, { value: 'medium', label: t('cv.effort.medium') },
+    ]} />
+  </div>;
 }
 
 /** The lock of the Style or the negative prompt (the old toggleLock): saving the text keeps it over resets and templates. */
@@ -76,7 +96,7 @@ export function fieldReader(scope: RecipeScope, field: 'positive' | 'negative', 
  * scope picks the recipe (the separate inpaint recipe has no locks); positive overrides the positive prompt (legacy
  * inpaint's own prompt beside the shared base fields), as the old PromptAndParams promptOverride did.
  */
-export function PromptSection({ scope = 'base', positive: override, draftGroup = 'prompt' }: { scope?: RecipeScope; positive?: PositiveOverride; draftGroup?: DraftGroup | DraftGroup[] } = {}) {
+export function PromptSection({ scope = 'base', positive: override, draftGroup = 'prompt', effortModel }: { scope?: RecipeScope; positive?: PositiveOverride; draftGroup?: DraftGroup | DraftGroup[]; effortModel?: string } = {}) {
   const { t, language } = useUiText();
   const tab = useAppStore(state => state.promptTab);
   const setTab = useAppStore(state => state.setPromptTab);
@@ -84,6 +104,8 @@ export function PromptSection({ scope = 'base', positive: override, draftGroup =
   const positive = override ? override.value : params.positivePrompt;
   const negative = params.negativePrompt;
   const model = params.model;
+  // Medium effort sends no negative prompt; the field stays editable for High (src/nai-effort.ts).
+  const medium = naiEffortOf(params, effortModel ?? model) === 'medium';
   const drafted = useDraftGroups();
   const marked = (Array.isArray(draftGroup) ? draftGroup : [draftGroup]).some(group => drafted.has(group));
   const autoComplete = useAppStore(state => state.settings?.autoComplete ?? true);
@@ -149,6 +171,7 @@ export function PromptSection({ scope = 'base', positive: override, draftGroup =
         <span className="cv-count ui-faint" title={t('cv.wildcard')}>{t('cv.counts', { n: tagCount, c: charCount })}</span>
       </div>
     </div>
+    {medium && !isPositive && <p className="cv-note cv-note--warn" data-testid="cv-effort-neg">{t('cv.effort.negIgnored')}</p>}
     {weightsOpen && weightTags.length > 0 && <div className="cv-weights" data-testid="cv-weights">
       {weightTags.map((tag, index) => <div key={`${tag.core}-${index}`} className={clsx('cv-weight', tag.level > 0 && 'is-up', tag.level < 0 && 'is-down')}>
         <button type="button" aria-label={t('cv.weightDown', { tag: tag.core })} onClick={() => setValue(setTagLevelInPrompt(value, index, tag.level - 1))}><Icon name="minus" size={12} /></button>

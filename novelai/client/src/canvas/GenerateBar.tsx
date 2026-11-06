@@ -7,7 +7,7 @@ import { useQueueView } from '../workspace/queue-monitor';
 import { imagesAhead } from '../workspace/manual-batches';
 import { navigate } from '../shell/route';
 import type { AnlasQuoteFeature, AnlasQuoteResult } from '../types';
-import { useAnlasQuote } from './anlas-quote';
+import { useAnlasQuote, type QuoteOverride } from './anlas-quote';
 import { NumberField } from './controls';
 
 const MAX_COUNT = 999;
@@ -38,8 +38,10 @@ export function costText(t: UiText, quote: AnlasQuoteResult | null, loading: boo
  * nothing). When images are ahead in the shared queue the button reads 加入队列 and says how many run first; this
  * canvas's running batch can be paused or stopped here.
  */
-export function GenerateBar({ feature, label, onRun, disabled = false, disabledReason = '', showCount = true }: {
+export function GenerateBar({ feature, label, onRun, disabled = false, disabledReason = '', showCount = true, quoteOverride }: {
   feature: AnlasQuoteFeature; label?: string; onRun(): void; disabled?: boolean; disabledReason?: string; showCount?: boolean;
+  /** Enhance Max✨: the size and strength its click sends (quoted at the about-2× result, paid on Opus too). */
+  quoteOverride?: QuoteOverride;
 }) {
   const { t } = useUiText();
   const account = useAppStore(state => state.account);
@@ -54,7 +56,7 @@ export function GenerateBar({ feature, label, onRun, disabled = false, disabledR
   const cancel = useAppStore(state => state.cancel);
   const view = useQueueView();
   const ahead = imagesAhead(view.batches);
-  const { quote, loading } = useAnlasQuote(feature);
+  const { quote, loading } = useAnlasQuote(feature, quoteOverride);
   const lastClick = useRef(0);
   const [resting, setResting] = useState(false);
   // A click the rest swallows is acknowledged on the button (已收到) until the rest ends: it was seen, not lost.

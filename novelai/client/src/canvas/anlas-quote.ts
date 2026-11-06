@@ -8,7 +8,10 @@ import type { AnlasQuoteFeature, AnlasQuoteResult } from '../types';
  * which now uses it as well): the same quote request for the same canvas state, re-read 250 ms after any input of the
  * quote changes. Only shows a number; the Generate click quotes again (store ensureAnlasBeforeRun) before it queues.
  */
-export function useAnlasQuote(feature: AnlasQuoteFeature): { quote: AnlasQuoteResult | null; loading: boolean } {
+/** Enhance Max✨: the request size and strength of its click (the quote is read for the about-2× result). */
+export interface QuoteOverride { width: number; height: number; strength: number; upscaledEnhance: true }
+
+export function useAnlasQuote(feature: AnlasQuoteFeature, override?: QuoteOverride): { quote: AnlasQuoteResult | null; loading: boolean } {
   const account = useAppStore((state) => state.account);
   const params = useAppStore((state) => feature === "inpaint" && state.inpaintRecipe ? state.inpaintRecipe : state.params);
   const batchCount = useAppStore((state) => state.batchCount);
@@ -28,6 +31,8 @@ export function useAnlasQuote(feature: AnlasQuoteFeature): { quote: AnlasQuoteRe
   const quoteKey = JSON.stringify({
     feature,
     model: params.model,
+    effort: params.effort ?? "high",
+    override: override ?? null,
     width: params.width,
     height: params.height,
     steps: params.steps,
@@ -61,7 +66,7 @@ export function useAnlasQuote(feature: AnlasQuoteFeature): { quote: AnlasQuoteRe
     }
     setLoading(true);
     const timer = window.setTimeout(() => {
-      const quoteSize = feature === "inpaint" && workbenchImage
+      const quoteSize = override ? { width: override.width, height: override.height } : feature === "inpaint" && workbenchImage
         ? { width: workbenchImage.width, height: workbenchImage.height }
         : feature === "i2i" && i2iSizeMode === "adaptive" && workbenchImage
           ? adaptiveNAIImageSize(workbenchImage.width, workbenchImage.height, params)
@@ -89,7 +94,7 @@ export function useAnlasQuote(feature: AnlasQuoteFeature): { quote: AnlasQuoteRe
           params: quoteParams,
           extras,
           batchCount,
-          i2iParams: { ...i2iParams, noise: 0 },
+          i2iParams: override ? { ...i2iParams, strength: override.strength, noise: 0, upscaledEnhance: true } : { ...i2iParams, noise: 0 },
           inpaintStrength,
           inpaintNoise: 0,
           inpaintModel,

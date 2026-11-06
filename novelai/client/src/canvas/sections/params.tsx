@@ -8,6 +8,7 @@ import {
   type GenerateParams, type QualityPreset,
 } from '../../types';
 import { adaptiveNAIImageSize, maxNAIDimensionFor, NAI_DIMENSION_STEP, NAI_MIN_DIMENSION, snapNAIDimensionWithinArea } from '../../nai-dimensions';
+import { NAI_MEDIUM_FIXED, naiEffortOf } from '../../nai-effort';
 import { Labeled, NumberField, Section, Select, SliderField, optionLabel } from '../controls';
 import { useRecipe, type RecipeScope } from '../scope';
 import { useDraftGroups, useDraftValue } from '../draft-model';
@@ -24,9 +25,15 @@ const MORE_SIZES: Array<[number, number]> = [[1024, 1536], [1536, 1024], [1472, 
  * advanced dialog is folded in under 高级). Every control writes the same store fields with the same limits as the old
  * panel and dialog; imageToImage adds the old output-size mode of Img2Img.
  */
-export function ParamsSection({ imageToImage = false, scope = 'base', lockSizeToSource = false }: { imageToImage?: boolean; scope?: RecipeScope; lockSizeToSource?: boolean }) {
+export function ParamsSection({ imageToImage = false, scope = 'base', lockSizeToSource = false, effortModel }: { imageToImage?: boolean; scope?: RecipeScope; lockSizeToSource?: boolean; effortModel?: string }) {
   const { t, language } = useUiText();
   const { params, setParam } = useRecipe(scope);
+  // V5 Full Medium effort fixes steps, sampler, UC preset and CFG rescale: shown at their fixed values, not editable
+  // (the stored values stay and come back on High). effortModel: the execution model (inpaint: the inpainting model).
+  const medium = naiEffortOf(params, effortModel ?? params.model) === 'medium';
+  const fixedTip = medium ? t('cv.effort.fixed') : undefined;
+  const shown = medium ? { steps: NAI_MEDIUM_FIXED.steps, sampler: NAI_MEDIUM_FIXED.sampler as GenerateParams['sampler'], ucPreset: NAI_MEDIUM_FIXED.ucPreset as GenerateParams['ucPreset'], cfgRescale: NAI_MEDIUM_FIXED.cfgRescale }
+    : { steps: params.steps, sampler: params.sampler, ucPreset: params.ucPreset, cfgRescale: params.cfgRescale };
   const groups = useDraftGroups();
   const inpaintRecipe = scope === 'inpaint';
   const marked = inpaintRecipe ? groups.has('inpaintParams') : groups.has('size') || groups.has('seed') || groups.has('params');
@@ -92,11 +99,12 @@ export function ParamsSection({ imageToImage = false, scope = 'base', lockSizeTo
     </div>
     </>}
     <div className="cv-pgrid">
-      <SliderField label={t('cv.steps')} value={params.steps} min={1} max={50} step={1} normalize={value => Math.min(50, Math.max(1, Math.round(value)))} onChange={value => setParam('steps', value)} testId="cv-steps" />
+      <SliderField label={t('cv.steps')} value={shown.steps} min={1} max={50} step={1} normalize={value => Math.min(50, Math.max(1, Math.round(value)))} onChange={value => setParam('steps', value)} testId="cv-steps" disabled={medium} title={fixedTip} />
       <SliderField label={t('cv.cfg')} value={params.cfgScale} min={1} max={10} step={0.1} normalize={value => Math.min(10, Math.max(1, value))} onChange={value => setParam('cfgScale', Math.min(10, Math.max(1, value)))} format={value => value.toFixed(1)} testId="cv-cfg" />
-      <Labeled label={t('cv.sampler')}><Select<GenerateParams['sampler']> label={t('cv.sampler')} value={params.sampler} options={samplerOptions} onChange={value => setParam('sampler', value)} /></Labeled>
-      <Labeled label={t('cv.uc')}><Select<GenerateParams['ucPreset']> label={t('cv.uc')} value={params.ucPreset} options={ucOptions} onChange={value => setParam('ucPreset', value)} placement="bottom-end" /></Labeled>
+      <Labeled label={t('cv.sampler')}><Select<GenerateParams['sampler']> label={t('cv.sampler')} value={shown.sampler} options={samplerOptions} onChange={value => setParam('sampler', value)} disabled={medium} testId="cv-sampler" /></Labeled>
+      <Labeled label={t('cv.uc')}><Select<GenerateParams['ucPreset']> label={t('cv.uc')} value={shown.ucPreset} options={ucOptions} onChange={value => setParam('ucPreset', value)} placement="bottom-end" disabled={medium} testId="cv-uc-preset" /></Labeled>
     </div>
+    {medium && <p className="cv-note" data-testid="cv-effort-fixed">{t('cv.effort.fixed')}</p>}
     <div className={clsx('cv-seed', seedMarked && 'is-marked')} data-testid="cv-seed">
       <div className="cv-pf-l"><span>{t('cv.seed')}{seedMarked ? <em className="cv-draft-line"> {t('cv.draft.badge')} → {(draftSeedMode ?? params.seedMode) === 'random' ? t('cv.seed.random') : String(draftSeed ?? params.seed)}</em> : null}</span>
         <Seg<'random' | 'fixed'> size="sm" label={t('cv.seed.mode')} value={params.seedMode} onChange={value => setParam('seedMode', value)} options={[{ value: 'random', label: t('cv.seed.random') }, { value: 'fixed', label: t('cv.seed.fixed') }]} />
@@ -116,7 +124,7 @@ export function ParamsSection({ imageToImage = false, scope = 'base', lockSizeTo
     </div>
     <Disclosure summary={t('cv.adv')} className="cv-adv">
       <div className="cv-pgrid">
-        <Labeled label={t('cv.cfgRescale')}><NumberField label={t('cv.cfgRescale')} value={params.cfgRescale} min={0} max={1} step={0.01} normalize={value => Math.min(1, Math.max(0, value))} onCommit={value => setParam('cfgRescale', value)} /></Labeled>
+        <Labeled label={t('cv.cfgRescale')}><NumberField label={t('cv.cfgRescale')} value={shown.cfgRescale} min={0} max={1} step={0.01} normalize={value => Math.min(1, Math.max(0, value))} onCommit={value => setParam('cfgRescale', value)} disabled={medium} /></Labeled>
         {supportsNAINoiseScheduleControl(params.model) && <Labeled label={t('cv.noise')}><Select<string> label={t('cv.noise')} value={params.noiseSchedule} options={noiseOptions} onChange={value => setParam('noiseSchedule', value)} placement="bottom-end" /></Labeled>}
       </div>
       {supportsNAIVariety(params.model) && <label className="cv-inline-toggle cv-inline-toggle--row"><span>{t('cv.variety')}</span><Toggle checked={params.variety} label={t('cv.variety')} onChange={value => setParam('variety', value)} /></label>}

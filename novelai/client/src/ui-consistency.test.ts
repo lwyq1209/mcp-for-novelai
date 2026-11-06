@@ -374,10 +374,12 @@ describe("desktop UI consistency guards", () => {
   it("blocks oversized Enhance 2x targets before any generation request", () => {
     const source = fs.readFileSync(path.join(projectRoot, "src", "canvas", "sections", "post.tsx"), "utf8");
     const panel = source.slice(source.indexOf("export async function runEnhance"), source.indexOf("export function useEnhanceTarget"));
-    const guard = panel.indexOf("if (enhanceScale > 1 && requestedTarget.exceedsLimit) return;");
-    const request = panel.indexOf("await state.generateI2I()");
+    // The click sends only a size enhanceRequestSize accepted: 2× over the pixel limit is refused (null).
+    const guard = panel.indexOf("if (!target) return;");
+    const request = panel.indexOf("await state.generateI2I(");
     expect(guard).toBeGreaterThan(-1);
     expect(request).toBeGreaterThan(guard);
+    expect(panel).toContain("if (scale > 1 && requested.exceedsLimit) return null;");
     const page = fs.readFileSync(path.join(projectRoot, "src", "canvas", "CanvasPage.tsx"), "utf8");
     expect(page).toContain("disabled={enhance.tooLarge || !hasSource} disabledReason={enhance.reason || noSource}");
   });

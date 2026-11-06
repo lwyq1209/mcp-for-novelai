@@ -3,8 +3,8 @@ import { Icon, Seg, TextInput } from '../../ui';
 import { useUiText } from '../../ui/i18n';
 import { useAppStore } from '../../store';
 import { selectCreativeMode } from '../../app/workbench-navigation';
-import { DIRECTOR_TOOLS, EMOTION_OPTIONS, MAX_NAI_DIRECTOR_INPUT_PIXELS, MAX_NAI_UPSCALE_INPUT_PIXELS, MAX_NAI_UPSCALE_OUTPUT_DIMENSION, type DirectorTool, type EmotionValue, type UpscaleScale } from '../../types';
-import { adaptiveNAIImageSize, NAI_MAX_PIXEL_AREA, resolveNAIEnhanceOutputSize } from '../../nai-dimensions';
+import { DIRECTOR_TOOLS, EMOTION_OPTIONS, MAX_NAI_DIRECTOR_INPUT_PIXELS, MAX_NAI_UPSCALE_INPUT_PIXELS, MAX_NAI_UPSCALE_OUTPUT_DIMENSION, supportsNAIMaxEnhance, type DirectorTool, type EmotionValue, type GenerateParams, type UpscaleScale } from '../../types';
+import { adaptiveNAIImageSize, maxEnhanceInputSize, maxEnhanceOutputSize, NAI_MAX_PIXEL_AREA, resolveNAIEnhanceOutputSize } from '../../nai-dimensions';
 import { Labeled, Section, Select, SliderField } from '../controls';
 import { useDraftGroups } from '../draft-model';
 import { DraftBadge } from '../DraftBadge';
@@ -27,17 +27,16 @@ export async function runEnhance() {
   const state = useAppStore.getState();
   const { workbenchImage, params, i2iParams, i2iSizeMode, enhanceMagnitude: magnitude, enhanceScale } = state;
   if (!workbenchImage) return;
-  const requestedTarget = resolveNAIEnhanceOutputSize(workbenchImage.width, workbenchImage.height, enhanceScale, params);
-  if (enhanceScale > 1 && requestedTarget.exceedsLimit) return;
+  const target = enhanceRequestSize(workbenchImage, enhanceScale, params);
+  if (!target) return;
   const previous = { width: params.width, height: params.height, strength: i2iParams.strength, noise: i2iParams.noise, sizeMode: i2iSizeMode };
-  const target = adaptiveNAIImageSize(workbenchImage.width * enhanceScale, workbenchImage.height * enhanceScale, params);
   state.setI2ISizeMode('custom');
   state.applyParams({ width: target.width, height: target.height });
   // Official Enhance is prompt-aware, but conservative defaults must keep the source pose/composition.
   state.setI2IParam('strength', Math.min(0.48, 0.10 + magnitude * 0.034));
   state.setI2IParam('noise', Math.min(0.22, 0.018 + magnitude * 0.014));
   try {
-    await state.generateI2I();
+    await state.generateI2I({ enhance: { max: enhanceScale === 'max' } });
   } finally {
     const after = useAppStore.getState();
     after.applyParams({ width: previous.width, height: previous.height });
@@ -47,17 +46,34 @@ export async function runEnhance() {
   }
 }
 
-/** The enhance output size and its limit (the old panel's computation). */
+/**
+ * The size an enhance click sends (null: refused). 1×/2×: the output size (2× over the pixel limit is refused, as
+ * before); Max✨: the source at its own size, 64-aligned and under the Max input limit (generation-postprocess.ts).
+ */
+export function enhanceRequestSize(source: { width: number; height: number }, scale: 1 | 2 | 'max', params: GenerateParams) {
+  if (scale === 'max') return supportsNAIMaxEnhance(params.model) ? maxEnhanceInputSize(source.width, source.height) : null;
+  const requested = resolveNAIEnhanceOutputSize(source.width, source.height, scale, params);
+  if (scale > 1 && requested.exceedsLimit) return null;
+  return adaptiveNAIImageSize(source.width * scale, source.height * scale, params);
+}
+
+/** The enhance output size and its limit (the old panel's computation; Max✨: about 2× of its input). */
 export function useEnhanceTarget() {
   const { t } = useUiText();
   const source = useAppStore(state => state.workbenchImage);
   const params = useAppStore(state => state.params);
   const scale = useAppStore(state => state.enhanceScale);
+  if (scale === 'max') {
+    const available = supportsNAIMaxEnhance(params.model);
+    const input = source && available ? maxEnhanceInputSize(source.width, source.height) : null;
+    const target = input ? maxEnhanceOutputSize(input.width, input.height) : null;
+    return { source, target, input, max: true, tooLarge: !available, reason: available ? '' : t('cv.pp.maxV5') };
+  }
   const requested = source ? resolveNAIEnhanceOutputSize(source.width, source.height, scale, params) : null;
   const tooLarge = Boolean(scale > 1 && requested?.exceedsLimit);
   const target = source && requested ? tooLarge ? requested : adaptiveNAIImageSize(source.width * scale, source.height * scale, params) : null;
   const reason = tooLarge && target ? t('cv.pp.enhanceLimit', { size: `${target.width}×${target.height}`, pixels: (target.width * target.height).toLocaleString(), limit: NAI_MAX_PIXEL_AREA.toLocaleString() }) : '';
-  return { source, target, tooLarge, reason };
+  return { source, target, input: null, max: false, tooLarge, reason };
 }
 
 export function EnhanceSettings() {
@@ -65,7 +81,8 @@ export function EnhanceSettings() {
   const magnitude = useAppStore(state => state.enhanceMagnitude);
   const scale = useAppStore(state => state.enhanceScale);
   const prompt = useAppStore(state => state.params.positivePrompt);
-  const { source, target, reason } = useEnhanceTarget();
+  const v5 = useAppStore(state => supportsNAIMaxEnhance(state.params.model));
+  const { source, target, input, max, reason } = useEnhanceTarget();
   const marked = useDraftGroups().has('enhance');
   return <>
     <Section testId="cv-pp-source" title={t('cv.src')}><SourceCard mode="enhance" /></Section>
@@ -73,9 +90,17 @@ export function EnhanceSettings() {
       <SliderField label={t('cv.pp.magnitude')} value={magnitude} min={1} max={10} step={1} normalize={value => Math.min(10, Math.max(1, Math.round(value)))} onChange={value => useAppStore.setState({ enhanceMagnitude: value })} testId="cv-pp-magnitude" />
       <small className="cv-hint ui-faint">{t('cv.pp.magnitudeTip')}</small>
       <Labeled label={t('cv.pp.scale')}>
-        <Seg<'1' | '2'> full size="sm" label={t('cv.pp.scale')} value={String(scale) as '1' | '2'} onChange={value => useAppStore.setState({ enhanceScale: Number(value) as 1 | 2 })} options={[{ value: '1', label: t('cv.pp.keep') }, { value: '2', label: t('cv.pp.double') }]} />
+        <Seg<'1' | '2' | 'max'> full size="sm" label={t('cv.pp.scale')} value={String(scale) as '1' | '2' | 'max'} onChange={value => useAppStore.setState({ enhanceScale: value === 'max' ? 'max' : Number(value) as 1 | 2 })} options={[
+          { value: '1', label: t('cv.pp.keep') }, { value: '2', label: t('cv.pp.double') },
+          { value: 'max', label: t('cv.pp.max'), disabled: !v5 && scale !== 'max', title: v5 ? t('cv.pp.maxNote') : t('cv.pp.maxV5') },
+        ]} />
       </Labeled>
-      {source && target && <p className={clsx('cv-note', reason && 'cv-note--warn')} data-testid="cv-pp-size">{reason || t('cv.pp.out', { from: `${source.width}×${source.height}`, to: `${target.width}×${target.height}` })}</p>}
+      {reason && (!source || !target) && <p className="cv-note cv-note--warn" data-testid="cv-pp-size">{reason}</p>}
+      {source && target && <p className={clsx('cv-note', reason && 'cv-note--warn')} data-testid="cv-pp-size">{reason || (max
+        ? input?.resized ? t('cv.pp.outMaxResized', { from: `${source.width}×${source.height}`, mid: `${input.width}×${input.height}`, to: `${target.width}×${target.height}` })
+          : t('cv.pp.outMax', { from: `${source.width}×${source.height}`, to: `${target.width}×${target.height}` })
+        : t('cv.pp.out', { from: `${source.width}×${source.height}`, to: `${target.width}×${target.height}` }))}</p>}
+      {max && !reason && <small className="cv-hint cv-hint--warn" data-testid="cv-pp-max-note">{t('cv.pp.maxNote')}</small>}
     </Section>
     <Section testId="cv-pp-prompt" title={t('cv.prompt')}>
       <small className="ui-faint">{t('cv.pp.usesPrompt')}</small>

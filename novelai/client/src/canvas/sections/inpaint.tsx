@@ -6,7 +6,7 @@ import { baseModelForInpaint, NAI_INPAINT_MODELS, type NAIInpaintModel } from '.
 import { HeadAction, Labeled, Section, Select, SliderField, optionLabel } from '../controls';
 import { useDraftGroups } from '../draft-model';
 import { DraftBadge } from '../DraftBadge';
-import { PromptSection, StyleSection } from './prompt';
+import { EffortToggle, PromptSection, StyleSection } from './prompt';
 import { ParamsSection } from './params';
 import { SourceCard } from './source';
 
@@ -72,6 +72,7 @@ export function InpaintSettings() {
     </Section>
     <Section testId="cv-ip-model" title={t('cv.ip.model')} changed={settingsMarked} badge={settingsMarked ? <DraftBadge /> : undefined} actions={<HeadAction icon="restore" title={t('cv.ip.defaultsTip')} onClick={restoreDefaults}>{t('cv.ip.defaults')}</HeadAction>}>
       <Select<NAIInpaintModel> label={t('cv.ip.model')} value={model} options={options} onChange={setModel} testId="cv-ip-model-select" />
+      <EffortToggle executionModel={model} scope={scope} />
       <SliderField label={t('cv.ip.strength')} value={strength} min={0.1} max={1} step={0.01} normalize={value => Math.min(1, Math.max(0.1, value))} onChange={setStrength} testId="cv-ip-strength" />
       <small className={strength < 0.6 ? 'cv-hint cv-hint--warn' : 'cv-hint ui-faint'}>{t(hint)}</small>
     </Section>
@@ -82,9 +83,9 @@ export function InpaintSettings() {
       </div>
       {block === t('cv.ip.noRefs') && <p className="cv-note cv-note--warn">{block}</p>}
     </Section>
-    <PromptSection key={scope} scope={scope} positive={recipe ? undefined : { value: positive, onChange: setPositive }} draftGroup={recipe ? 'inpaintPrompt' : ['inpaintPrompt', 'prompt']} />
+    <PromptSection key={scope} scope={scope} positive={recipe ? undefined : { value: positive, onChange: setPositive }} draftGroup={recipe ? 'inpaintPrompt' : ['inpaintPrompt', 'prompt']} effortModel={model} />
     <StyleSection key={`style-${scope}`} scope={scope} />
-    <ParamsSection key={`params-${scope}`} scope={scope} lockSizeToSource />
+    <ParamsSection key={`params-${scope}`} scope={scope} lockSizeToSource effortModel={model} />
     <ConfirmDialog open={dropOpen} title={t('cv.ip.separateDrop')} description={t('cv.ip.separateDropBody')} confirmLabel={t('cv.ip.separateDropOk')} cancelLabel={t('c.cancel')}
       onConfirm={() => { setRecipe(null); setDropOpen(false); }} onCancel={() => setDropOpen(false)} />
   </>;
