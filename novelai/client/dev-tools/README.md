@@ -147,7 +147,8 @@ node dev-tools/fake-novelai.mjs stop --dir ../../.tmp/fake1        # serve = the
 ```
 
 Routes (as `electron/ipc/nai.ts` calls them): `GET /user/data` (Opus account, balance), `POST /ai/generate-image`
-(t2i / img2img / infill / enhance; JSON or multipart; ZIP of `n_samples` PNGs at the requested size),
+(t2i / img2img / infill / enhance; JSON or multipart; ZIP of `n_samples` PNGs at the requested size, an Enhance Max✨
+request with `upscaled_enhance` at about 2× of it as NovelAI's client expects),
 `POST /ai/generate-image-stream` (framed MessagePack like the official service, `--stream-format sse` for SSE;
 intermediate previews then the final image), `POST /ai/generate-image/request-price`, `POST /ai/upscale` (2× the
 source), `POST /ai/augment-image` (Director, the given size), `POST /ai/encode-vibe`, `GET /ai/generate-image/suggest-tags`.

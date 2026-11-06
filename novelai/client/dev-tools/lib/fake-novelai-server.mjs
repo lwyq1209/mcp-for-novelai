@@ -179,7 +179,18 @@ function readBody(request, limit = 256 * 1024 * 1024) {
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const clampInt = (value, min, max, fallback) => { const number = Math.round(Number(value)); return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback; };
 
-/** The size of the image a request asks for (generate: width×height; upscale: 2× the source; Director: the source). */
+/**
+ * The size an Enhance Max✨ request (upscaled_enhance) comes back with, as the official web client expects it (src/nai-dimensions.ts
+ * maxEnhanceOutputSize): each side floored to 16 and doubled, fitted into 3,145,728 pixels in steps of 32.
+ */
+function maxEnhanceSize(width, height) {
+  const w = Math.floor(width / 16) * 32, h = Math.floor(height / 16) * 32, scale = Math.min(1, Math.sqrt(3_145_728 / (w * h)));
+  let outW = 32 * Math.round((w * scale) / 32), outH = 32 * Math.round((h * scale) / 32);
+  if (outW * outH > 3_145_728) { outW = 32 * Math.floor((w * scale) / 32); outH = 32 * Math.floor((h * scale) / 32); }
+  return { width: Math.max(32, outW), height: Math.max(32, outH) };
+}
+
+/** The size of the image a request asks for (generate: width×height, Enhance Max✨ about 2× of it; upscale: 2× the source; Director: the source). */
 function outputSize(endpoint, payload) {
   if (endpoint === 'upscale') {
     const source = typeof payload?.image === 'string' ? imageSize(Buffer.from(payload.image, 'base64')) : null;
@@ -187,7 +198,8 @@ function outputSize(endpoint, payload) {
   }
   if (endpoint === 'augment-image') return { width: clampInt(payload?.width, 1, 8192, 512), height: clampInt(payload?.height, 1, 8192, 512) };
   const parameters = payload?.parameters ?? {};
-  return { width: clampInt(parameters.width, 1, 8192, 832), height: clampInt(parameters.height, 1, 8192, 1216) };
+  const size = { width: clampInt(parameters.width, 1, 8192, 832), height: clampInt(parameters.height, 1, 8192, 1216) };
+  return parameters.upscaled_enhance === true ? maxEnhanceSize(size.width, size.height) : size;
 }
 
 function placeholderFor(endpoint, payload, sample, size) {

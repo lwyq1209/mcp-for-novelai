@@ -101,6 +101,13 @@ for (const format of ['msgpack', 'sse']) {
   });
 }
 
+test('an Enhance Max✨ img2img (upscaled_enhance) comes back at the size NovelAI\'s client expects, about 2× of the request', async t => {
+  const service = await withService(t);
+  const request = generate(832, 1216);
+  const max = await post(service, '/ai/generate-image', { ...request, action: 'img2img', parameters: { ...request.parameters, image: placeholderPng(832, 1216).toString('base64'), strength: 0.2, upscaled_enhance: true } });
+  assert.deepEqual((await clientImages(Buffer.from(await max.arrayBuffer()))).map(image => [image.width, image.height]), [[1440, 2144]]);
+});
+
 test('upscale doubles the source; Director keeps the given size; encode-vibe returns bytes; suggest-tags is empty', async t => {
   const service = await withService(t);
   const up = await post(service, '/ai/upscale', { image: placeholderPng(64, 96).toString('base64'), model: 'nai-diffusion-5-curated', declared_blur_sigma: 0 });
