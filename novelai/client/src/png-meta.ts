@@ -417,8 +417,8 @@ export function parseImportedParams(meta: Record<string, string>): ImportedParam
     smea: typeof comment.sm === "boolean" ? comment.sm : undefined,
     smeaDyn: typeof comment.sm_dyn === "boolean" ? comment.sm_dyn : undefined,
     model,
-    // A NovelAI image of V5 Full names its effort, so restoring a High image also leaves a Medium canvas.
-    effort: effort ?? (isNovelAi && model === "nai-diffusion-5-full" ? "high" : undefined),
+    // A NovelAI image names its effort (High unless it is a Medium image), so restoring it also leaves a Medium canvas.
+    effort: effort ?? (isNovelAi && model ? "high" : undefined),
     ucPreset: isNovelAi ? 3 : undefined,
     qualityToggle: isNovelAi ? false : undefined,
     qualityPreset: isNovelAi ? "none" : undefined,

@@ -132,7 +132,7 @@ describe("parseImportedParams", () => {
     expect(of({ Software: "NovelAI", Source: "NovelAI Diffusion V5 657484A5" })).toEqual({ model: "nai-diffusion-5-full", effort: "high" });
     expect(of({ Software: "NovelAI", Source: "NovelAI Diffusion V5 93F4BD30" })).toEqual({ model: "nai-diffusion-5-full", effort: "medium" });
     expect(of({ Software: "NovelAI", Source: "NovelAI Diffusion V5 70AB5786" })).toEqual({ model: "nai-diffusion-5-full", effort: "medium" });
-    expect(of({ Software: "NovelAI", Source: "NovelAI Diffusion V5 DB276663" })).toEqual({ model: "nai-diffusion-5-curated", effort: undefined });
+    expect(of({ Software: "NovelAI", Source: "NovelAI Diffusion V5 DB276663" })).toEqual({ model: "nai-diffusion-5-curated", effort: "high" });
     expect(of({ Comment: JSON.stringify({ model: "nai-diffusion-5-full-medium-inpainting" }) })).toEqual({ model: "nai-diffusion-5-full", effort: "medium" });
   });
 
