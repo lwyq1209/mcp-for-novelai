@@ -33,6 +33,8 @@ const SHORT_MODELS: Record<string, string> = {
   'nai-diffusion-4-full': 'NAI Diffusion 4 Full', 'nai-diffusion-4-curated': 'NAI Diffusion 4 Curated',
   'nai-diffusion-3': 'NAI Diffusion 3', 'nai-diffusion-furry-3': 'NAI Diffusion Furry 3',
   'nai-diffusion-4-5-full-inpainting': 'NAI Diffusion 4.5 Full Inpaint', 'nai-diffusion-5-full-inpainting': 'NAI Diffusion V5 Full Inpaint', 'nai-diffusion-5-curated-inpainting': 'NAI Diffusion V5 Curated Inpaint',
+  // V5 Full Effort Medium (src/nai-effort.ts): the history record's model is the model id that was sent.
+  'nai-diffusion-5-full-medium': 'NAI Diffusion V5 Full (Medium effort)', 'nai-diffusion-5-full-medium-inpainting': 'NAI Diffusion V5 Full Inpaint (Medium effort)',
 };
 /** A model id as a short name (the same in both languages); unknown ids show as they are. */
 export const modelName = (model: string) => SHORT_MODELS[model] ?? model;

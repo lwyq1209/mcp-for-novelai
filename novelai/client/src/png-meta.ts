@@ -40,6 +40,29 @@ function objectValue(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+/**
+ * PNG `Source` of the V5 checkpoints as the official web client maps them (https://novelai.net/image, build
+ * b94bdee-production, fetched 2026-11-06, chunk 1qr-_uukhj8ho.js): Full, Full with Medium effort, Curated.
+ */
+const V5_SOURCES: Record<string, { model: NAIModel; effort?: "medium" }> = {
+  "NovelAI Diffusion V5 657484A5": { model: "nai-diffusion-5-full" },
+  "NovelAI Diffusion V5 0ADF9AB7": { model: "nai-diffusion-5-full" },
+  "NovelAI Diffusion V5 93F4BD30": { model: "nai-diffusion-5-full", effort: "medium" },
+  "NovelAI Diffusion V5 70AB5786": { model: "nai-diffusion-5-full", effort: "medium" },
+  "NovelAI Diffusion V5 DB276663": { model: "nai-diffusion-5-curated" },
+};
+
+/** The model (and V5 Full's Medium effort) of an image's model id or `Source`. */
+function modelEffortOf(value: unknown): { model?: NAIModel; effort?: "medium" } {
+  if (typeof value !== "string") return {};
+  const source = V5_SOURCES[value.trim()];
+  if (source) return { ...source };
+  // Model ids (our own records, other clients): the Medium checkpoints are V5 Full with Medium effort.
+  if (value === "nai-diffusion-5-full-medium" || value === "nai-diffusion-5-full-medium-inpainting") return { model: "nai-diffusion-5-full", effort: "medium" };
+  const model = modelToNai(value);
+  return model ? { model } : {};
+}
+
 function modelToNai(value: unknown): NAIModel | undefined {
   if (typeof value !== "string") return undefined;
   if (NAI_MODELS.some((item) => item.value === value)) return value as NAIModel;
@@ -370,12 +393,13 @@ export function parseImportedParams(meta: Record<string, string>): ImportedParam
   const modelCandidate =
     (typeof comment.model === "string" ? comment.model : undefined) ?? meta.Source;
   const isNovelAi = /novelai/i.test(`${meta.Software ?? ""} ${meta.Source ?? ""}`) || Boolean(v4Prompt);
+  const { model, effort } = modelEffortOf(modelCandidate);
 
   return cleanImported({
     positivePrompt: prompt,
     negativePrompt,
     preservePromptText: isNovelAi ? true : undefined,
-    metadataReplay: isNovelAi ? metadataReplayFromComment(comment, modelToNai(modelCandidate)) : undefined,
+    metadataReplay: isNovelAi ? metadataReplayFromComment(comment, model) : undefined,
     // NovelAI embeds the already-expanded effective prompts. Restoring them
     // while retaining local style/quality/UC presets would append text twice.
     stylePrompt: isNovelAi ? "" : undefined,
@@ -392,7 +416,9 @@ export function parseImportedParams(meta: Record<string, string>): ImportedParam
     noiseSchedule: nonEmpty(comment.noise_schedule),
     smea: typeof comment.sm === "boolean" ? comment.sm : undefined,
     smeaDyn: typeof comment.sm_dyn === "boolean" ? comment.sm_dyn : undefined,
-    model: modelToNai(modelCandidate),
+    model,
+    // A NovelAI image of V5 Full names its effort, so restoring a High image also leaves a Medium canvas.
+    effort: effort ?? (isNovelAi && model === "nai-diffusion-5-full" ? "high" : undefined),
     ucPreset: isNovelAi ? 3 : undefined,
     qualityToggle: isNovelAi ? false : undefined,
     qualityPreset: isNovelAi ? "none" : undefined,

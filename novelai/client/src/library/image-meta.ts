@@ -34,7 +34,8 @@ export function reportFields(report: ImageMetadataReport) {
   return {
     stylePrompt: imported.stylePrompt ?? '', positivePrompt: imported.positivePrompt ?? '', negativePrompt: imported.negativePrompt ?? '',
     characters: report.characterCaptions.map(caption => ({ prompt: caption.prompt ?? '', negativePrompt: caption.negativePrompt ?? '' })),
-    model: imported.model, width: imported.width, height: imported.height, steps: imported.steps, cfgScale: imported.cfgScale, cfgRescale: imported.cfgRescale,
+    // V5 Full with Medium effort reads as its Medium model (library/present.ts names it).
+    model: imported.effort === 'medium' && imported.model === 'nai-diffusion-5-full' ? 'nai-diffusion-5-full-medium' : imported.model, width: imported.width, height: imported.height, steps: imported.steps, cfgScale: imported.cfgScale, cfgRescale: imported.cfgRescale,
     sampler: imported.sampler, noiseSchedule: imported.noiseSchedule, seed: imported.seed, ucPreset: imported.ucPreset,
   };
 }

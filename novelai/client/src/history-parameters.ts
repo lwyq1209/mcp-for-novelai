@@ -14,7 +14,7 @@ export const HISTORY_PARAMETER_LABELS: Record<keyof GenerateParams, UiStringKey>
   sampler: 'hp.f.sampler', noiseSchedule: 'hp.f.noiseSchedule', seed: 'hp.f.seed', seedMode: 'hp.f.seedMode',
   ucPreset: 'hp.f.ucPreset', qualityPreset: 'hp.f.qualityPreset', qualityToggle: 'hp.f.qualityToggle',
   transparentBackground: 'hp.f.transparentBackground', smea: 'hp.f.smea', smeaDyn: 'hp.f.smeaDyn', variety: 'hp.f.variety',
-  fileNamePrefix: 'hp.f.fileNamePrefix', preservePromptText: 'hp.f.preservePromptText', promptAssemblyVersion: 'hp.f.promptAssemblyVersion', metadataReplay: 'hp.f.metadataReplay',
+  fileNamePrefix: 'hp.f.fileNamePrefix', preservePromptText: 'hp.f.preservePromptText', promptAssemblyVersion: 'hp.f.promptAssemblyVersion', metadataReplay: 'hp.f.metadataReplay', effort: 'hp.f.effort',
 };
 /** A text of this dialog: a copy key with its params, rendered when shown so a language switch re-renders it. */
 export type HistoryText = { key: UiStringKey; params?: UiParams };
@@ -84,6 +84,8 @@ export function planHistoryParameters(item: HistoryItem, current: GenerateParams
   if (!own(saved, 'metadataReplay')) patch.metadataReplay = undefined;
   if (!own(saved, 'preservePromptText')) patch.preservePromptText = false;
   if (!own(saved, 'promptAssemblyVersion')) patch.promptAssemblyVersion = undefined;
+  // A record without effort ran on High: restoring it clears a Medium effort on the canvas.
+  if (!own(saved, 'effort')) patch.effort = undefined;
   if (!own(saved, 'qualityPreset') && typeof patch.qualityToggle === 'boolean') {
     patch.qualityPreset = patch.qualityToggle ? current.qualityPreset === 'none' ? 'standard' : current.qualityPreset : 'none';
     const index = missing.findIndex(text => text.key === HISTORY_PARAMETER_LABELS.qualityPreset); if (index >= 0) missing.splice(index, 1);

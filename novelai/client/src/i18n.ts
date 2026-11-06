@@ -94,6 +94,15 @@ const DESKTOP_OPTION_LABELS: Record<
     "zh-CN": "NAI Diffusion V5 Curated Inpaint",
     "en-US": "NAI Diffusion V5 Curated Inpaint",
   },
+  // V5 Full with Effort Medium (src/nai-effort.ts): the model ids history records and image metadata carry.
+  "nai-diffusion-5-full-medium": {
+    "zh-CN": "NAI Diffusion V5 Full（Medium 省量档）",
+    "en-US": "NAI Diffusion V5 Full (Medium effort)",
+  },
+  "nai-diffusion-5-full-medium-inpainting": {
+    "zh-CN": "NAI Diffusion V5 Full Inpaint（Medium 省量档）",
+    "en-US": "NAI Diffusion V5 Full Inpaint (Medium effort)",
+  },
   k_euler_ancestral: {
     "zh-CN": "Euler Ancestral（欧拉祖先，推荐）",
     "en-US": "Euler Ancestral (recommended)",

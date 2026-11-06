@@ -125,6 +125,17 @@ describe("parseImportedParams", () => {
       .toBe("nai-diffusion-5-curated");
   });
 
+  // The official web client's Source table (build b94bdee-production, 2026-11-06, chunk 1qr-_uukhj8ho.js).
+  it("recognizes V5 Full, its Medium effort and Curated by the official Source hashes and model ids", () => {
+    const of = (meta: Record<string, string>) => { const out = parseImportedParams(meta); return { model: out.model, effort: out.effort }; };
+    expect(of({ Software: "NovelAI", Source: "NovelAI Diffusion V5 0ADF9AB7" })).toEqual({ model: "nai-diffusion-5-full", effort: "high" });
+    expect(of({ Software: "NovelAI", Source: "NovelAI Diffusion V5 657484A5" })).toEqual({ model: "nai-diffusion-5-full", effort: "high" });
+    expect(of({ Software: "NovelAI", Source: "NovelAI Diffusion V5 93F4BD30" })).toEqual({ model: "nai-diffusion-5-full", effort: "medium" });
+    expect(of({ Software: "NovelAI", Source: "NovelAI Diffusion V5 70AB5786" })).toEqual({ model: "nai-diffusion-5-full", effort: "medium" });
+    expect(of({ Software: "NovelAI", Source: "NovelAI Diffusion V5 DB276663" })).toEqual({ model: "nai-diffusion-5-curated", effort: undefined });
+    expect(of({ Comment: JSON.stringify({ model: "nai-diffusion-5-full-medium-inpainting" }) })).toEqual({ model: "nai-diffusion-5-full", effort: "medium" });
+  });
+
   it("omits absent fields (no undefined keys)", () => {
     const out = parseImportedParams({ Comment: "{}" });
     expect(Object.keys(out)).toHaveLength(0);

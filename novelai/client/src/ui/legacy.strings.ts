@@ -68,6 +68,7 @@ export const LEGACY_STRINGS = {
   'hp.f.preservePromptText': ['保留提示词原文', 'Keep prompt text as written'],
   'hp.f.promptAssemblyVersion': ['提示词拼接方式', 'Prompt joining'],
   'hp.f.metadataReplay': ['原图高级采样覆盖', 'Advanced sampling override from the image'],
+  'hp.f.effort': ['生成档位（Effort）', 'Effort'],
   'hp.f.actualSeed': ['实际 seed（当前种子与策略保留）', 'Actual seed (current seed and seed mode kept)'],
   // A saved field without a label of its own: its name as it is.
   'hp.raw': ['{text}', '{text}'],
