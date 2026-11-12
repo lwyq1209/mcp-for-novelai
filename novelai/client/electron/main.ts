@@ -15,6 +15,7 @@ import { createHistoryImageReader } from './asset-library-image';
 import { createAssetImageExporter } from './asset-image-export';
 import { handleAssetImageExport } from './asset-image-export-ipc';
 import { createCensoredExporter, handleCensoredExport } from './censored-export';
+import { createCensorImageMethod } from './censor-image';
 import { createBatchService } from "./batch-service";
 import { createQueueRecipeService, QUEUE_METHODS, QUEUE_WORKSPACE } from "./queue-recipe-service";
 import { batchFactsOf, type BatchFacts } from "../src/library/image-facts";
@@ -772,6 +773,8 @@ function registerIpc() {
   Object.assign(legacyMaterialHandlers, materialMethods);
   // A deletion through the bridge is the agent's; through this window (novelai:materials, novelai:assets) the user's.
   materialMethods.asset_library = (args, caller) => assetService.asset_library(args, { deletedBy: caller ? agentOf(caller) : { kind: 'user' } });
+  // asset_library censor (MCP): the registered original through the library's own strict read, censored, returned as bytes.
+  materialMethods.censor_image = createCensorImageMethod(target => assetService.asset_library({ action: 'image', ...target, variant: 'original' }));
   Object.assign(queueMethods, Object.fromEntries(Object.entries(materialMethods).map(([method, call]) => [method, async (args: Record<string, unknown>, caller?: BridgeCaller) => {
     try { return await call(args, caller); }
     catch (error: any) { throw new BridgeError(/^[a-z_]+$/.test(error?.code ?? '') ? error.code : 'material_failed', error instanceof Error ? error.message : '素材操作未完成。'); }

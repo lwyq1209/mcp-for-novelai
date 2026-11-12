@@ -13,6 +13,11 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
   coarser; the edge of the covered area can be softened. One image is saved where you choose, several into a folder
   under their own names (an existing file is never replaced). The originals in the library are only read. Strokes are
   kept per image while the app runs.
+- `asset_library` `censor`: agents do the same through MCP. `{kind, id, revision, assetId?, mask, style?, sizePx?,
+  featherPx?, quality?, preview?}` covers the masked area of a history image or an imported image (the mask grammar of
+  the inpaint mask; mosaic, blur, black or white) and writes a metadata-free JPG into `novelai/library-exports`;
+  `preview: true` returns the censored picture and writes nothing. It needs an app that has the action
+  (`host_outdated` otherwise).
 - `read_queue` `wait: {until: "done" | "next", seconds}` (1–1200, default 300): the server polls the app every 1–2
   seconds and returns as soon as the batch ended, saved a new result, was paused or cancelled, or the time ran out, with
   `wait: {until, ended, waitedSeconds}`; failed reads on the way are read through and cancelling the request stops it.

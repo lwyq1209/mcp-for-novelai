@@ -147,6 +147,22 @@ The library as the app shows it, without the canvas. Items are identified by `ki
   deletion.
 - `export` copies one history original unchanged into `novelai/library-exports` (see
   [Files](#files-inboxes-and-exports)); it never overwrites a file.
+- `censor` covers part of one image and writes the result as a JPG **without any metadata** (no prompt, settings, EXIF
+  or NovelAI's hidden data) into `novelai/library-exports`, under a new name (`censored-history-<id>-r<revision>.jpg`,
+  `censored-study-<id>-r<revision>.jpg`); the image in the library is only read. It is the agent's way to the window's
+  *Censor and export* editor and renders the same way.
+  - The image: `{kind: "history", id, revision, assetId}` or an imported image `{kind: "study", id, revision}` (PNG,
+    JPEG or WebP; a rotated or mirrored original is refused, as for recipes).
+  - `mask` says what to cover, in the grammar of the inpaint mask of [`prepare_recipe`](#prepare_recipe) (`units`, `layers` of shapes
+    and alpha images, `growPx`, `invert`). Any selected pixel counts (the 8×8 cells of inpainting do not matter here);
+    a mask that selects nothing is refused (`mask_empty`). Cover generously: `growPx` widens a shape.
+  - `style`: `mosaic` (default), `blur`, `black` or `white`. `sizePx` (2–96) is the mosaic's cell edge or the blur's
+    radius; without it the mosaic uses 1/100 of the image's longer side and at least 4 px, the usual lower bound for
+    posting. `featherPx` (0–48) softens the edge of the covered area; `quality` (60–100, default 95) is the JPG's.
+  - `preview: true` writes nothing and returns the censored picture (long edge at most 1024) to look at; check that
+    everything is covered, adjust the mask, then call again without `preview`.
+  - The result names `file` (project-relative), the size, `covered` (`pixels`, `percent`, `bbox`) and the rounded mask.
+    An app older than this action answers `host_outdated`.
 
 ### `material_library`
 
@@ -559,7 +575,7 @@ File inputs are plain file names (no paths, URLs or symbolic links) in four fold
 | Folder | Used by |
 | --- | --- |
 | `novelai/library-inbox` | `material_library` save/import from a file, local tag covers |
-| `novelai/library-exports` | `material_library` export, `asset_library` export |
+| `novelai/library-exports` | `material_library` export, `asset_library` export and censor |
 | `novelai/study-inbox` | `material_studies` import |
 | `novelai/study-exports` | `material_studies` read (long sections), original, import reports |
 

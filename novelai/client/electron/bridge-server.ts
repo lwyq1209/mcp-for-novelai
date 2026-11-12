@@ -32,6 +32,8 @@ const MAX_BODY = 64 * 1024 * 1024;
 METHODS.add('read_prompt_review');
 for (const method of ['material_library', 'material_tags', 'material_samples', 'material_studies', 'asset_library']) METHODS.add(method);
 for (const method of ['capture_canvas_recipe', 'put_queue_recipe', 'read_queue_recipe', 'preview_queue_recipe', 'enqueue_queue_recipes', 'lookup_queue_request', 'list_queue', 'read_queue', 'pause_queue', 'resume_queue', 'cancel_queue', 'get_queue_result']) METHODS.add(method);
+// The censor action of the asset_library tool (electron/censor-image.ts).
+METHODS.add('censor_image');
 const MAX_IMAGE = 20 * 1024 * 1024;
 
 export class BridgeError extends Error {

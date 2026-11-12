@@ -175,9 +175,13 @@ test('N4 size budget: tools/list totals stay under the agreed ceilings', async t
   // prepare_recipe corrects instead of refusing and enqueue_recipes settles an unknown outcome itself, so the rules of
   // multipleOf/bounds, acceptDownscale, explicit seeds and the 130-second settle window are gone and the new behaviour
   // is described instead; core came out about 42.1k again, so the ceiling goes down to 42.4k (a few hundred spare).
+  // asset_library censor (the agent's way to the window's Censor and export; asked for by the user 2026-11-11) adds
+  // its action, five fields and the rules a caller must know before the call (what is written and where, the mask
+  // grammar it shares with inpaint, the default cell size, preview first): asset_library goes to 6.9k and core to
+  // 43.3k; the whole server still fits in 50k.
   assert.ok(total <= 50_000, `whole server ${total}`);
-  assert.ok(core <= 42_400, `core layer ${core}`);
-  assert.ok(asset <= 5_800, `asset_library ${asset}`);
+  assert.ok(core <= 43_300, `core layer ${core}`);
+  assert.ok(asset <= 6_900, `asset_library ${asset}`);
 });
 
 // --------------------------------------------------------------------------- N5
@@ -260,7 +264,8 @@ const w = { workspaceId: 'w' }, v = { workspaceId: 'w', expectedRevision: 1 };
 /** One valid call per tool (several for multi-method tools), enough to reach every fixed host method. */
 const EXERCISE = {
   material_library: [{ action: 'list' }, { action: 'search_tags', query: 'garden', limit: 20 }, { action: 'cover', entryId: 'e' }, { action: 'set_cover_from_history', entryId: UUID, revision: 1, expectedCoverRevision: 0, historyId: 'h', historyRevision: 1, assetId: 'a' }],
-  tag_details: [{ name: 'garden' }], material_studies: [{ action: 'list' }], asset_library: [{ action: 'list' }, { action: 'image', ...STRICT_HISTORY }, { action: 'export', ...STRICT_HISTORY }],
+  tag_details: [{ name: 'garden' }], material_studies: [{ action: 'list' }], asset_library: [{ action: 'list' }, { action: 'image', ...STRICT_HISTORY }, { action: 'export', ...STRICT_HISTORY },
+    { action: 'censor', ...STRICT_HISTORY, mask: { units: 'px', layers: [{ op: 'add', shape: { type: 'rect', x: 0, y: 0, width: 1, height: 1 } }] }, preview: true }],
   prepare_recipe: [T2I, { ...T2I, recipeId: UUID, expectedRevision: 1 }, UPSCALE, { ...UPSCALE, preview: true }, { mode: 't2i', canvas: { workspaceId: 'w', expectedRevision: 1 } }],
   enqueue_recipes: [{ requestKey: 'n10', items: [{ recipeId: UUID, recipeRevision: 1, inputHash: 'a'.repeat(64) }] }], lookup_enqueue: [{ requestKey: 'n10' }],
   list_queue: [{}], read_queue: [{ batchId: UUID }], get_queue_result: [{ batchId: UUID, itemIndex: 0 }], control_queue: ['pause', 'resume', 'cancel'].map(action => ({ batchId: UUID, action })),
@@ -293,7 +298,7 @@ function bridgeMethods() {
 
 test('N10 host methods: every declared method is a real bridge method, and every call made by a tool is on its own fixed list', async t => {
   const METHODS = await bridgeMethods();
-  assert.deepEqual([...METHODS].sort(), ['apply_edit', 'asset_library', 'cancel_queue', 'capture_canvas_recipe', 'draft_edit', 'enqueue_queue_recipes', 'get_asset', 'get_queue_result', 'list_queue',
+  assert.deepEqual([...METHODS].sort(), ['apply_edit', 'asset_library', 'cancel_queue', 'capture_canvas_recipe', 'censor_image', 'draft_edit', 'enqueue_queue_recipes', 'get_asset', 'get_queue_result', 'list_queue',
     'list_workspaces', 'lookup_queue_request', 'material_library', 'material_samples', 'material_studies', 'material_tags', 'pause_queue', 'preview_queue_recipe', 'put_queue_recipe', 'read_prompt_review',
     'read_queue', 'read_queue_recipe', 'read_workspace', 'resume_queue', 'undo_edit'], `parsed ${METHODS.size} bridge methods`);
   // The canvas generation methods left the bridge with their tools; the local-continuation methods in step 3e.

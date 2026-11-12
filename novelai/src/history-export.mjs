@@ -44,7 +44,7 @@ const numbered = (fileName, attempt) => attempt === 0 ? fileName : fileName.repl
 const NOT_A_DIRECTORY = 'novelai/library-exports must be a real directory, not a symlink; nothing was exported.';
 const UNAVAILABLE = 'novelai/library-exports under the project root could not be written; nothing was exported. Check that the folder exists or can be created and is writable.';
 /** Missing is fine (it is created); a symlink or anything but a directory is refused before the host is asked. */
-async function preflightDirectory(directory) {
+export async function preflightDirectory(directory) {
   let info;
   try { info = await lstat(directory); }
   catch (error) { if (error?.code === 'ENOENT') return; throw new BridgeError('file_unavailable', UNAVAILABLE); }
@@ -52,7 +52,7 @@ async function preflightDirectory(directory) {
 }
 
 /** Creates `bytes` under a new name in `directory` (never replacing anything) and returns its absolute path. */
-async function writeExclusive(directory, fileName, bytes) {
+export async function writeExclusive(directory, fileName, bytes) {
   try { return await createExclusive(directory, fileName, bytes); }
   catch (error) { if (error instanceof BridgeError) throw error; throw new BridgeError('file_unavailable', UNAVAILABLE); }
 }

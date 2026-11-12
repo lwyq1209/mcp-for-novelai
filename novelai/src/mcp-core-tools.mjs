@@ -13,6 +13,7 @@ import { BridgeError } from './bridge-client.mjs';
 import { assertInboxFile, assertRealDirectory, manifestFileNames, projectRelative, scrubText, withProjectPaths } from './business-guards.mjs';
 import { HISTORY_COVER_HOST_METHODS, setCoverFromHistory } from './history-cover.mjs';
 import { exportHistoryOriginal } from './history-export.mjs';
+import { CENSOR_HOST_METHODS, censorImage } from './image-censor.mjs';
 import { materialToolAction } from './material-tools.mjs';
 import { MAX_QUEUE_ITEMS, QUEUE_HOST_METHODS, QUEUE_RESULT_PAGE, QUEUE_THUMBNAIL_EDGE, QUEUE_WAIT, QUEUE_WAIT_UNTIL, queueBatchResults, queueControlAction, waitForQueuedBatch } from './queue-control.mjs';
 import { RECIPE_TOOL_SPECS } from './recipe-tool-schemas.mjs';
@@ -232,8 +233,16 @@ const materialStudies = core({
 });
 
 const assetLibrary = core({
-  name: 'asset_library', description: ASSET_LIBRARY_DESCRIPTION, inputSchema: assetLibraryFlatSchema, annotations: annotations(false), hostMethods: ['asset_library'],
+  name: 'asset_library', description: ASSET_LIBRARY_DESCRIPTION, inputSchema: assetLibraryFlatSchema, annotations: annotations(false), hostMethods: ['asset_library', CENSOR_HOST_METHODS.render],
   async handle(args, { bridge, signal, dirs, roots }) {
+    // censor: the image's size, the rasterized mask, one host render, then a new JPEG in novelai/library-exports
+    // (or, with preview, the picture as one native image and nothing written).
+    if (args.action === 'censor') {
+      const result = await censorImage(args, { bridge, signal, exportsDirectory: dirs.materialExports });
+      if (!result.preview) return success(withProjectPaths(result, ['file'], roots), [], roots);
+      const { data, ...previewImage } = result.previewImage;
+      return success({ ...result, previewImage: { ...previewImage, imageAttached: true } }, [imageBlock({ mimeType: previewImage.mimeType, data }, 'Preview again.')], roots);
+    }
     // export: one original read, then a new file in novelai/library-exports (the host contract has no export action).
     if (args.action === 'export') return success(withProjectPaths(await exportHistoryOriginal(args, { bridge, signal, exportsDirectory: dirs.materialExports }), ['file'], roots), [], roots);
     // The flat schema is the first check; the complete per-action public contract runs here, before the host.
