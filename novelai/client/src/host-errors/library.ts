@@ -88,6 +88,7 @@ export const LIBRARY_ERROR_TEXTS: HostErrorTexts = {
   "library.collections_changed": { "zh-CN": "收藏夹内容已经变化，请刷新。", "en-US": "The collections changed; refresh." },
   "library.custom_tags_history_only": { "zh-CN": "自定义图片标签只用于生成历史。", "en-US": "Custom image tags are only for generation history." },
   "library.export_refused": { "zh-CN": "导出请求无效或已有导出处理中。不会自动重试。", "en-US": "The export request is invalid or an export is already running. Nothing is retried automatically." },
+  "library.censored_export_failed": { "zh-CN": "这张图没有导出。请检查保存位置后再试。", "en-US": "The image was not exported. Check the destination and try again." },
   "library.export_window_only": { "zh-CN": "只接受当前主窗口的图片导出。", "en-US": "Image exports are accepted only from the current main window." },
   "library.favorite_collection_mismatch": { "zh-CN": "收藏来源与收藏夹不一致。", "en-US": "The favorite source does not match the collection." },
   "library.favorite_image_not_saved": { "zh-CN": "请先保存收藏图片到正式历史。", "en-US": "Save the favorite image to history first." },

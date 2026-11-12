@@ -45,6 +45,7 @@ import { versionUse } from './versions';
 import { applyReportToCanvas, readReport, reportHasSettings } from './image-meta';
 import { fileName, itemTitle } from './present';
 import { captureScenario, type LibraryScenario } from './scenarios';
+import { CensorEditor } from '../censor/CensorEditor';
 import { useLibraryIntent } from './intent';
 import './library.css';
 
@@ -340,6 +341,12 @@ export function LibraryPage({ api, active, monitor, capture = null, sampleImport
     else if (result.status === 'saved') showToast({ message: result.failed + result.skipped ? t('sel.exportPartial', { n: result.success, m: result.failed + result.skipped }) : t('sel.exported', { n: result.success }), tone: 'ok' });
     else showToast({ message: t('c.failed'), tone: 'danger' });
   });
+  // Censor and export as JPG: the editor takes the images as they are now, in the order they were selected.
+  const [censorItems, setCensorItems] = useState<AssetItem[] | null>(null);
+  const censorImages = api.exportCensoredImage ? (items: AssetItem[]) => {
+    if (items.length > 100) { showToast({ message: t('cz.tooMany'), tone: 'warn' }); return; }
+    if (items.length) setCensorItems(items);
+  } : undefined;
   const projectEntries: MenuEntry[] = [
     ...collections.projects.map(project => ({ id: project.id, icon: 'group' as const, label: project.name, onSelect: () => void run(async () => { await moveToProject(api, selectionImages.filter(item => item.kind === 'history'), project.id); showToast({ message: t('sel.moved', { name: project.name }), tone: 'ok' }); }) })),
     { kind: 'separator', id: 'sep' },
@@ -498,7 +505,7 @@ export function LibraryPage({ api, active, monitor, capture = null, sampleImport
       : isImageKind(detail.item.kind) ? <ImageDetail api={api} detail={detail} batches={batches} projects={collections.projects} collections={collections.user} tab={tab} onTab={setTab}
         onPrev={neighbour(order, activeKey!, -1) ? () => openKey(neighbour(order, activeKey!, -1)!) : undefined} onNext={neighbour(order, activeKey!, 1) ? () => openKey(neighbour(order, activeKey!, 1)!) : undefined}
         reuseEntries={reuseEntries(detail)} collectEntries={collectEntries([detail.item], userMemberOf)} collected={!!detail.memberships?.some(value => value.namespace === 'user')}
-        onExport={() => exportImages([detail.item])} onDelete={() => setDialog({ type: 'delete', target: { kind: 'items', items: [detail.item] } })} onOpenQueue={() => navigate('queue')} />
+        onExport={() => exportImages([detail.item])} onCensor={censorImages && (() => censorImages([detail.item]))} onDelete={() => setDialog({ type: 'delete', target: { kind: 'items', items: [detail.item] } })} onOpenQueue={() => navigate('queue')} />
       : <MaterialDetail api={api} detail={detail} onAddToTray={isTrayView(view) || detail.item.kind === 'tag' || detail.item.kind === 'combo' ? item => { if (!isTrayView(view)) setView({ type: 'category', category: item.kind === 'tag' ? 'tags' : 'combos' }); addToTray(item); } : undefined}
         onUseOnCanvas={useOnCanvas} onDelete={() => setDialog({ type: 'delete', target: { kind: 'items', items: [detail.item] } })} editing={editing} onEditing={setEditing} />}
   </Drawer>;
@@ -527,7 +534,7 @@ export function LibraryPage({ api, active, monitor, capture = null, sampleImport
           {list.loadingMore && <p className="lib-wait" role="status"><Spinner size={14} /> {t('lib.loadingMore')}</p>}
         </div>
         {selecting && <SelectionBar count={selection.length} outside={outside} allSelected={allVisibleSelected} loaded={list.hasMore ? visible.length : undefined} onAll={() => setSelected(current => allVisibleSelected ? new Map() : new Map([...current, ...visible.map(item => [itemKey(item), item] as const)]))}
-          collectEntries={collectEntries(selection)} projectEntries={selectionImages.some(item => item.kind === 'history') ? projectEntries : undefined} onExport={selectionImages.length ? () => exportImages(selectionImages) : undefined}
+          collectEntries={collectEntries(selection)} projectEntries={selectionImages.some(item => item.kind === 'history') ? projectEntries : undefined} onExport={selectionImages.length ? () => exportImages(selectionImages) : undefined} onCensor={censorImages && selectionImages.length ? () => censorImages(selectionImages) : undefined}
           archived={allArchived} onArchive={() => void run(async () => { await setArchived(api, selection, !allArchived); showToast({ message: allArchived ? t('sel.unarchived', { n: selection.length }) : t('sel.archived', { n: selection.length }), tone: 'ok' }); setSelected(new Map()); })}
           onDelete={() => setDialog({ type: 'delete', target: { kind: 'items', items: selection, outside } })} onDone={() => { setSelecting(false); setSelected(new Map()); }} />}
         {!selecting && isTrayView(view) && tray.length > 0 && <ComboTray api={api} members={tray} onChange={setTray} onApplied={() => navigate('canvas')} />}
@@ -536,6 +543,7 @@ export function LibraryPage({ api, active, monitor, capture = null, sampleImport
     <input ref={fileInput} type="file" hidden multiple accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" aria-label={t('imp.choose')} onChange={event => { const files = [...(event.target.files ?? [])]; event.target.value = ''; if (files.length) onFiles(files); }} />
     {dialog && <PageDialogs api={api} dialog={dialog} t={t} onClose={() => setDialog(null)} onDeleted={onDeleted} onPartial={deletedToast} onView={setView} currentView={view}
       onOpenItem={item => { setDialog(null); setOpen(item); }} />}
+    {censorItems && <CensorEditor api={api} items={censorItems} onClose={() => setCensorItems(null)} />}
     {importFiles && <ImportReader api={api} files={importFiles} onClose={() => setImportFiles(null)} onReused={() => { setImportFiles(null); navigate('canvas'); }} />}
     {paramsItem && <HistoryParametersDialog item={paramsItem} onClose={() => { setParamsItem(null); if (useAppStore.getState().params !== paramsBefore.current) { navigate('canvas'); showToast({ message: t('d.applied'), tone: 'ok' }); } }} />}
     {detail && versionsOf === itemKey(detail.item) && <VersionHistory api={api} current={detail.item} projects={projectNames} onClose={() => setVersionsOf(null)} onUse={useVersion} />}

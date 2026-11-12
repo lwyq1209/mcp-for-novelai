@@ -13,6 +13,8 @@ export interface SelectionBarProps {
   /** Images only: 移到项目 and 导出. */
   projectEntries?: MenuEntry[];
   onExport?(): void;
+  /** Images only: censor and export as JPG. */
+  onCensor?(): void;
   archived: boolean;
   onArchive(): void;
   onDelete(): void;
@@ -20,7 +22,7 @@ export interface SelectionBarProps {
 }
 
 /** The floating bar of a multiple selection (prototype 05). */
-export function SelectionBar({ count, outside = 0, allSelected, loaded, onAll, collectEntries, projectEntries, onExport, archived, onArchive, onDelete, onDone }: SelectionBarProps) {
+export function SelectionBar({ count, outside = 0, allSelected, loaded, onAll, collectEntries, projectEntries, onExport, onCensor, archived, onArchive, onDelete, onDone }: SelectionBarProps) {
   const { t } = useUiText();
   const none = count === 0;
   return <div className="lib-selbar" role="toolbar" aria-label={t('sel.label')} data-testid="selection-bar">
@@ -30,6 +32,7 @@ export function SelectionBar({ count, outside = 0, allSelected, loaded, onAll, c
     <MenuButton label={t('sel.collect')} entries={collectEntries} placement="top-start">{trigger => <Button {...trigger} size="sm" variant="ghost" icon="collection" disabled={none}>{t('sel.collect')}</Button>}</MenuButton>
     {projectEntries && <MenuButton label={t('sel.project')} entries={projectEntries} placement="top-start">{trigger => <Button {...trigger} size="sm" variant="ghost" icon="group" disabled={none}>{t('sel.project')}</Button>}</MenuButton>}
     {onExport && <Button size="sm" variant="ghost" icon="download" disabled={none} onClick={onExport}>{t('sel.export')}</Button>}
+    {onCensor && <Button size="sm" variant="ghost" icon="mosaic" disabled={none} onClick={onCensor} data-testid="selection-censor">{t('cz.openSelection')}</Button>}
     <Button size="sm" variant="ghost" icon="archive" disabled={none} onClick={onArchive}>{archived ? t('sel.unarchive') : t('sel.archive')}</Button>
     <span className="lib-selbar-sep" aria-hidden="true" />
     <Button size="sm" variant="dangerGhost" icon="trash" disabled={none} onClick={onDelete} data-testid="selection-delete">{t('sel.delete')}</Button>

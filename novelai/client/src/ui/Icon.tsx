@@ -77,6 +77,10 @@ const ICON_BODIES = {
   // Added for the client (not in the prototype set).
   edit: '<path d="M4.5 19.5l.9-4.1L15.6 5.2a1.9 1.9 0 0 1 2.7 0l.5.5a1.9 1.9 0 0 1 0 2.7L8.6 18.6z"/><path d="M13.6 7.2l3.2 3.2"/>',
   expand: '<path d="M14.5 4.5h5v5M19.5 4.5l-5.2 5.2M9.5 19.5h-5v-5M4.5 19.5l5.2-5.2M4.5 9.5v-5h5M4.5 4.5l5.2 5.2M19.5 14.5v5h-5M19.5 19.5l-5.2-5.2"/>',
+  // The censored JPG export (src/censor).
+  mosaic: '<rect x="4" y="4" width="16" height="16" rx="2.5"/><path d="M9.3 4v16M14.7 4v16M4 9.3h16M4 14.7h16"/><path d="M9.3 4h5.4v5.3H9.3zM4 9.3h5.3v5.4H4zM14.7 9.3H20v5.4h-5.3zM9.3 14.7h5.4V20H9.3z" fill="currentColor" stroke="none" opacity=".55"/>',
+  lasso: '<ellipse cx="12" cy="9.5" rx="8" ry="5.5"/><path d="M7.6 14.1c-1.7 1-2 2.9-.3 3.6 1.7.6 2.6 1.5 1.2 3.3"/>',
+  redo: '<path d="M15.5 6.5l4 4-4 4"/><path d="M19.5 10.5h-10a5 5 0 0 0 0 10H12"/>',
 } as const;
 
 export type IconName = keyof typeof ICON_BODIES;

@@ -1,6 +1,7 @@
 import { readHostError } from '../host-errors/bridge';
 import type { AssetItem, AssetLibraryApi } from '../asset-library/types';
 import type { ImageExportRequest, ImageExportResult } from '../asset-library/image-export';
+import type { CensoredExportRequest, CensoredExportResult } from '../censor/export-types';
 import type { HistoryGroup } from '../types';
 import type { DeleteReceipt, ReceiptRow, TrashEntry, TrashPage } from './impacts';
 
@@ -11,6 +12,7 @@ import type { DeleteReceipt, ReceiptRow, TrashEntry, TrashPage } from './impacts
  */
 export interface LibraryApi extends AssetLibraryApi {
   exportAssetImages?: (request: ImageExportRequest) => Promise<ImageExportResult>;
+  exportCensoredImage?: (request: CensoredExportRequest) => Promise<CensoredExportResult>;
   materialLibrary?: (args: Record<string, unknown>) => Promise<any>;
   materialSamples?: (args: Record<string, unknown>) => Promise<any>;
   materialTags?: (args: Record<string, unknown>) => Promise<any>;

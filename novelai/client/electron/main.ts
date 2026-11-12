@@ -14,6 +14,7 @@ import { createAssetLibraryService } from './asset-library-service';
 import { createHistoryImageReader } from './asset-library-image';
 import { createAssetImageExporter } from './asset-image-export';
 import { handleAssetImageExport } from './asset-image-export-ipc';
+import { createCensoredExporter, handleCensoredExport } from './censored-export';
 import { createBatchService } from "./batch-service";
 import { createQueueRecipeService, QUEUE_METHODS, QUEUE_WORKSPACE } from "./queue-recipe-service";
 import { batchFactsOf, type BatchFacts } from "../src/library/image-facts";
@@ -569,6 +570,24 @@ function registerIpc() {
     return selected.canceled ? undefined : selected.filePath;
   } });
   ipcMain.handle('novelai:assets:export-images', (event, args) => handleAssetImageExport(event, mainWindow, args, exportImages));
+  // Censored JPG export (src/censor): the window renders, the main process encodes and writes.
+  // Test clients (dev-tools): NAI_DEV_TOOLS_EXPORT_DIR names the folder to save in, without a dialog a test cannot answer.
+  const exportDirect = process.env.NAI_DEV_TOOLS_EXPORT_DIR;
+  const exportCensored = createCensoredExporter({
+    chooseFile: async defaultName => {
+      if (exportDirect) return path.join(exportDirect, defaultName);
+      if (!mainWindow || mainWindow.isDestroyed()) return undefined;
+      const selected = await dialog.showSaveDialog(mainWindow, { title: hostText('dialog.exportCensored'), defaultPath: defaultName, filters: [{ name: hostText('dialog.jpegFiles'), extensions: ['jpg'] }] });
+      return selected.canceled ? undefined : selected.filePath;
+    },
+    chooseFolder: async () => {
+      if (exportDirect) return exportDirect;
+      if (!mainWindow || mainWindow.isDestroyed()) return undefined;
+      const selected = await dialog.showOpenDialog(mainWindow, { title: hostText('dialog.exportCensoredFolder'), properties: ['openDirectory', 'createDirectory'] });
+      return selected.canceled ? undefined : selected.filePaths[0];
+    },
+  });
+  ipcMain.handle('novelai:assets:export-censored', (event, args) => handleCensoredExport(event, mainWindow, args, exportCensored));
   ipcMain.handle('novelai:assets', async (event, args) => {
     if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id || event.senderFrame !== mainWindow.webContents.mainFrame) return { ok: false, error: { code: 'forbidden_workspace', message: '只接受当前窗口的素材操作。' } };
     try { return { ok: true, result: await assetService.asset_library(args, { deletedBy: { kind: 'user' }, window: true }) }; }

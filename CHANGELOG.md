@@ -6,6 +6,13 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
 
 ### Added
 
+- **Censor and export** (library): an image's detail and a selection of images open an editor that covers what you
+  paint (brush, lasso, eraser, undo, zoom) with a mosaic, a blur, black or white, shown as it will be saved, and writes
+  JPGs with no metadata at all (no prompt, settings, EXIF or NovelAI's hidden data; JPG quality 70–100, full-resolution
+  colour). The mosaic's cells default to 1/100 of the image's longer side (at least 4 px) and can be made finer or
+  coarser; the edge of the covered area can be softened. One image is saved where you choose, several into a folder
+  under their own names (an existing file is never replaced). The originals in the library are only read. Strokes are
+  kept per image while the app runs.
 - `read_queue` `wait: {until: "done" | "next", seconds}` (1–1200, default 300): the server polls the app every 1–2
   seconds and returns as soon as the batch ended, saved a new result, was paused or cancelled, or the time ran out, with
   `wait: {until, ended, waitedSeconds}`; failed reads on the way are read through and cancelling the request stops it.

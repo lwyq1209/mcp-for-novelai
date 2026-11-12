@@ -1,4 +1,5 @@
 import { isImageExportResult } from '../src/asset-library/image-export';
+import { isCensoredExportResult, type CensoredExportRequest, type CensoredExportResult } from '../src/censor/export-types';
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { assertLocalCoverIpcSize } from './material-upload-guard';
 import { bridgeSafeApi, hostErrorBridgeKey } from '../src/host-errors/bridge';
@@ -53,6 +54,11 @@ contextBridge.exposeInMainWorld("naiDesktop", bridgeSafeApi({
   exportAssetImages: async (args: import('../src/asset-library/image-export').ImageExportRequest): Promise<import('../src/asset-library/image-export').ImageExportResult> => {
     const response = await ipcRenderer.invoke('novelai:assets:export-images', args);
     if (!response?.ok || !isImageExportResult(response.result) || response.result.stripMetadata !== args.stripMetadata) throw hostErrorOf(response?.error, 'image_export_failed', 'The export result is unknown; check the destination file. Nothing is retried automatically.');
+    return response.result;
+  },
+  exportCensoredImage: async (args: CensoredExportRequest): Promise<CensoredExportResult> => {
+    const response = await ipcRenderer.invoke('novelai:assets:export-censored', args);
+    if (!response?.ok || !isCensoredExportResult(response.result)) throw hostErrorOf(response?.error, 'export_failed', 'The image was not exported. Check the destination and try again.');
     return response.result;
   },
   assetLibrary: async (args: Record<string, unknown>) => {

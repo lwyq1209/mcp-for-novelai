@@ -11,6 +11,7 @@ import { ONBOARDING_STRINGS } from './onboarding.strings';
 import { CANVAS_STRINGS } from './canvas.strings';
 import { LEGACY_STRINGS } from './legacy.strings';
 import { PRESET_STRINGS } from './presets.strings';
+import { CENSOR_STRINGS } from './censor.strings';
 
 export const UI_STRINGS = {
   // Step 4b2: the queue page, the settings page, its MCP section and the first-run guide keep their copy in files of
@@ -25,6 +26,8 @@ export const UI_STRINGS = {
   ...LEGACY_STRINGS,
   // Step 4c2: the rebuilt reference preset manager and preset image dialogs.
   ...PRESET_STRINGS,
+  // The censored JPG export (src/censor).
+  ...CENSOR_STRINGS,
   // ── Shell ──────────────────────────────────────────────────────────────────
   'app.name': ['MCP for NovelAI', 'MCP for NovelAI'],
   'nav.main': ['主导航', 'Main navigation'],

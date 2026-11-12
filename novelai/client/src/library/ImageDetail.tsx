@@ -25,6 +25,8 @@ export interface ImageDetailProps {
   collectEntries: MenuEntry[];
   collected: boolean;
   onExport(): void;
+  /** Censor and export as JPG (for posting); absent where the host cannot (capture samples). */
+  onCensor?(): void;
   onDelete(): void;
   onOpenQueue(): void;
   /** Reading an imported image's own settings (renderer parser), for its prompt and settings tabs. */
@@ -44,7 +46,7 @@ const defaultRead = async (url: string) => { const response = await fetch(url); 
  * The image half of the detail drawer (prototype 02–04, 08): large image with ← → and full screen, time / size /
  * source / mode, 复用到画布 ▾, 收藏 ▾, export and delete, then the 提示词 / 参数 / 信息 tabs.
  */
-export function ImageDetail({ api, detail, batches, projects, collections, tab, onTab, onPrev, onNext, reuseEntries, collectEntries, collected, onExport, onDelete, onOpenQueue, readOriginal = defaultRead }: ImageDetailProps) {
+export function ImageDetail({ api, detail, batches, projects, collections, tab, onTab, onPrev, onNext, reuseEntries, collectEntries, collected, onExport, onCensor, onDelete, onOpenQueue, readOriginal = defaultRead }: ImageDetailProps) {
   const { t, lang } = useUiText();
   const item = detail.item, payload = item.payload ?? {};
   const image = detailImage(detail);
@@ -78,6 +80,7 @@ export function ImageDetail({ api, detail, batches, projects, collections, tab, 
       <MenuButton label={t('d.reuse')} entries={reuseEntries} minWidth={280}>{trigger => <Button {...trigger} data-capture="reuse" variant="primary" icon="canvas" iconAfter="down">{t('d.reuse')}</Button>}</MenuButton>
       <MenuButton label={t('d.collect.menu')} entries={collectEntries}>{trigger => <Button {...trigger} icon={collected ? 'starFill' : 'star'}>{collected ? t('d.collected') : t('d.collect')}</Button>}</MenuButton>
       <IconButton icon="download" label={t('d.export')} onClick={onExport} />
+      {onCensor && image && <IconButton icon="mosaic" label={t('cz.open')} onClick={onCensor} data-testid="detail-censor" />}
       <IconButton icon="trash" className="lib-danger-icon" label={t('d.delete')} onClick={onDelete} />
     </div>
     <Tabs<ImageTab> className="lib-dr-tabs" label={t('d.tab.label')} value={tab} onChange={onTab} tabs={[{ value: 'prompt', label: t('d.tab.prompt') }, { value: 'params', label: t('d.tab.params') }, { value: 'info', label: t('d.tab.info') }]} />

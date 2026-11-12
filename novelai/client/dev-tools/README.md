@@ -65,6 +65,8 @@ active, it hides at once and logs `[dev-tools] … became the active app; it was
 5 s after the client is ready (so `start` takes 5 s longer), and `ui.mjs` / `mcp.mjs` watch during every command; a
 test client in front fails that run with `front_detected` (its times and pid in the error; `start` also stops the
 client). The start result carries `frontWatch: {hits: 0, samples, maxGapMs, from, to}`.
+`NAI_DEV_TOOLS_EXPORT_DIR=<folder>` in the environment of `start` makes the client's censored JPG export (library ›
+Censor and export) save into that folder without its save dialog, which a test run cannot answer.
 `--foreground` shows it the ordinary way (the result says `background: true|false`). `--agent-start` starts it the way an
 agent's MCP server starts the app (`--started-by-agent=dev-tools`): its window then waits for the user (not shown on
 macOS and Linux, minimized on Windows) and its page is not throttled meanwhile, so the canvas tools can be checked

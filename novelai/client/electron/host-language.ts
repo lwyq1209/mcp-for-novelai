@@ -31,6 +31,9 @@ export const HOST_TEXTS = {
   'dialog.zipFiles': { 'zh-CN': 'ZIP 压缩包', 'en-US': 'ZIP archive' },
   'dialog.outputFolder': { 'zh-CN': '选择图片保存目录', 'en-US': 'Choose the image folder' },
   'dialog.exportImages': { 'zh-CN': '导出所选素材图片（新 ZIP 文件）', 'en-US': 'Export the selected images (a new ZIP file)' },
+  'dialog.exportCensored': { 'zh-CN': '导出打码后的 JPG', 'en-US': 'Export the censored JPG' },
+  'dialog.exportCensoredFolder': { 'zh-CN': '选择保存 JPG 的文件夹', 'en-US': 'Choose the folder for the JPG files' },
+  'dialog.jpegFiles': { 'zh-CN': 'JPEG 图片', 'en-US': 'JPEG image' },
   'name.ungrouped': { 'zh-CN': '未分组', 'en-US': 'Ungrouped' },
   'name.all': { 'zh-CN': '全部', 'en-US': 'All' },
 } as const satisfies Record<string, Record<AppLanguage, string>>;

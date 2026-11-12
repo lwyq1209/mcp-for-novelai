@@ -1137,6 +1137,8 @@ export interface ImportedParams {
 
 export interface NaiDesktopApi {
   exportAssetImages: (args: import('./asset-library/image-export').ImageExportRequest) => Promise<import('./asset-library/image-export').ImageExportResult>;
+  /** Censored JPG export (src/censor): where to save, one rendered image, done. */
+  exportCensoredImage: (args: import('./censor/export-types').CensoredExportRequest) => Promise<import('./censor/export-types').CensoredExportResult>;
   assetLibrary: (args: Record<string, unknown>) => Promise<any>;
   onAssetLibraryChange: (callback: (change: { revision: number; changedKinds?: string[]; ids?: string[] }) => void) => () => void;
   materialLibrary: (args: Record<string, unknown>) => Promise<any>;

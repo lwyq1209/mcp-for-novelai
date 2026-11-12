@@ -7,6 +7,7 @@ import { SETTINGS_STRINGS } from './settings.strings';
 import { MCP_STRINGS } from './mcp.strings';
 import { ONBOARDING_STRINGS } from './onboarding.strings';
 import { CANVAS_STRINGS } from './canvas.strings';
+import { CENSOR_STRINGS } from './censor.strings';
 import { fillUiText, formatBytes, formatDay, formatWhen, quotedList, uiLangOf, uiText } from './i18n';
 
 const CJK = /[\u3000-\u303f\u3400-\u9fff\uff00-\uffef]/;
@@ -51,7 +52,7 @@ describe('new interface copy: every key in both languages (step 4b1)', () => {
 
 describe('the copy files of step 4b2', () => {
   it('keep their own key prefix and never redefine a key of another file', () => {
-    const files: Array<[string, Record<string, unknown>]> = [['q.', QUEUE_STRINGS], ['set.', SETTINGS_STRINGS], ['mcp.', MCP_STRINGS], ['onb.', ONBOARDING_STRINGS], ['cv.', CANVAS_STRINGS]];
+    const files: Array<[string, Record<string, unknown>]> = [['q.', QUEUE_STRINGS], ['set.', SETTINGS_STRINGS], ['mcp.', MCP_STRINGS], ['onb.', ONBOARDING_STRINGS], ['cv.', CANVAS_STRINGS], ['cz.', CENSOR_STRINGS]];
     const seen = new Map<string, string>();
     for (const [prefix, strings] of files) for (const key of Object.keys(strings)) {
       expect(key.startsWith(prefix), key).toBe(true);
@@ -60,7 +61,7 @@ describe('the copy files of step 4b2', () => {
     }
     // strings.ts lists the base keys after the spreads, so a base key with one of these prefixes would hide a file's key.
     const base = readFileSync(path.resolve(__dirname, 'strings.ts'), 'utf8');
-    expect(base.match(/^  '(q|set|mcp|onb|cv)\.[^']*':/gm) ?? []).toEqual([]);
+    expect(base.match(/^  '(q|set|mcp|onb|cv|cz)\.[^']*':/gm) ?? []).toEqual([]);
   });
 });
 
@@ -136,7 +137,7 @@ describe('comment stripping of the copy check', () => {
 
 // The new interface's copy lives in strings.ts only: no Chinese text in the code or styles of the new interface
 // directories (comments aside). The capture sample data (names users typed in the prototype) is exempt.
-const NEW_UI_DIRS = ['ui', 'shell', 'library', 'queue', 'settings', 'onboarding', 'canvas'];
+const NEW_UI_DIRS = ['ui', 'shell', 'library', 'queue', 'settings', 'onboarding', 'canvas', 'censor'];
 describe('no hard-coded Chinese in the new interface code', () => {
   const root = path.resolve(__dirname, '..');
   const files = NEW_UI_DIRS.flatMap(folder => {
