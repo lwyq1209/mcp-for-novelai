@@ -237,7 +237,7 @@ async function connect(t, bridgeClient, { create = options => merged.createNovel
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport); await client.connect(clientTransport);
   t.after(async () => { await client.close(); await server.close(); });
-  return { call: (name, args) => client.callTool({ name, arguments: args }), readRecipe: directRecipes(bridgeClient) };
+  return { call: (name, args) => client.callTool({ name, arguments: fullDetail(name, args) }), readRecipe: directRecipes(bridgeClient) };
 }
 // read_recipe is no longer an MCP tool. Stored-revision readbacks go through the recipe module's read() on the same
 // bridge double, in the same success/error envelope a core tool returns.
@@ -248,6 +248,8 @@ const directRecipes = bridgeClient => {
     catch (error) { return errorResult(failure(error, { roots: projectRoots(PROJECT_ROOT), trusted: trustedIdentities(args), policy: 'opaque', layer: 'core' })); }
   };
 };
+// The assertions of this file read the full readback; the compact default has its own tests (search "compact readback").
+const fullDetail = (name, args) => name === 'prepare_recipe' && args !== null && typeof args === 'object' && !Array.isArray(args) && args.detail === undefined ? { ...args, detail: 'full' } : args;
 const errorOf = result => { assert.equal(result.isError, true, JSON.stringify(result.structuredContent ?? result).slice(0, 2000)); return result.structuredContent.error; };
 const ok = result => { assert.ok(!result.isError, JSON.stringify(result.structuredContent ?? result).slice(0, 4000)); return result.structuredContent; };
 const ref = recipe => ({ recipeId: recipe.recipeId, recipeRevision: recipe.recipeRevision, inputHash: recipe.inputHash });
@@ -356,6 +358,31 @@ test('P1 i2i, enhance, upscale and director: one source metadata read, one put b
     check(prepared);
     assert.deepEqual(ok(await readRecipe(ref(prepared))), readbackOf(prepared), `${label}: the stored readback is the same`);
   }
+});
+
+test('compact readback of image modes: the source keeps its identity and size, the mask its cells and layers; no prompt echo, hashes or spec', async t => {
+  const h = await realHost(t);
+  const { call } = await connect(t, h.bridge);
+  const source = h.addHistory('history-portrait', gradient(832, 1216), { width: 832, height: 1216 });
+  const r = recipes(source), mask = { units: 'fraction', layers: [{ op: 'add', shape: { type: 'ellipse', cx: 0.5, cy: 0.35, rx: 0.2, ry: 0.12 } }] };
+  const full = ok(await call('prepare_recipe', r.inpaint(mask, { preview: true })));
+  const result = await call('prepare_recipe', r.inpaint(mask, { preview: true, detail: 'compact' })), compact = ok(result);
+  assert.equal(result.content.filter(item => item.type === 'image').length, 1, 'the mask overlay is still attached');
+  assert.deepEqual([compact.inputHash, compact.lineage, compact.detail], [full.inputHash, 'plain', 'compact']);
+  assert.deepEqual(compact.source, { kind: 'history', historyId: source.historyId, historyRevision: source.historyRevision, assetId: source.assetId, width: 832, height: 1216 });
+  assert.deepEqual(compact.mask, { width: full.mask.width, height: full.mask.height, selectedCells: full.mask.selectedCells, totalCells: full.mask.totalCells, bboxCells: full.mask.bboxCells, layers: full.mask.layers });
+  assert.deepEqual(compact.effective.inpaint, full.effective.inpaint);
+  assert.deepEqual(compact.effective.requestSource, { width: 832, height: 1216 });
+  const text = JSON.stringify(compact);
+  for (const written of ['watercolor', '1girl, garden', 'blurry', '"spec"', full.source.sha256, full.mask.sha256]) assert.equal(text.includes(written), false, `${written} is not in the compact readback`);
+  assert.deepEqual(compact.warnings, full.warnings);
+  assert.deepEqual(compact.previewImage, { mimeType: 'image/webp', width: full.previewImage.width, height: full.previewImage.height, cells: full.previewImage.cells, imageAttached: true });
+  t.diagnostic(`inpaint readback characters: compact ${text.length}, full ${JSON.stringify(full).length}`);
+  const i2i = ok(await call('prepare_recipe', r.i2i({ preview: true, detail: 'compact' })));
+  assert.deepEqual(i2i.effective.i2i, ok(await call('prepare_recipe', r.i2i({ preview: true }))).effective.i2i);
+  const upscale = ok(await call('prepare_recipe', r.upscale({ preview: true, detail: 'compact' })));
+  assert.deepEqual(upscale.effective, ok(await call('prepare_recipe', r.upscale({ preview: true }))).effective);
+  assert.equal(Object.hasOwn(upscale, 'effectiveRequest'), false);
 });
 
 test('P1 inpaint with a shape mask, an inverted grown alpha layer and both combined: the host request mask has exactly the cells this server computed', async t => {

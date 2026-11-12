@@ -38,40 +38,6 @@ async function localBridge(t, handler) {
   return { runtimeDir, connection };
 }
 
-test('effective review snapshot preserves complete text and native images without applying or generating', async t => {
-  const input = { mode: 'inpaint', authored: { params: { positivePrompt: 'SFW garden', seed: 42 }, charCaptions: [{ prompt: 'adult gardener' }] }, effective: { request: { input: 'blue flower, very aesthetic, masterpiece, no text' } }, assets: Array.from({ length: 6 }, (_, index) => ({ role: `image-${index}`, ...picture, sha256: 'a'.repeat(64) })) };
-  const { client, calls } = await mcp(t, (_method, args) => ({ schemaVersion: 1, workspaceId: args.workspaceId, revision: args.expectedRevision, draftId: args.draftId ?? null, mode: args.mode, reviewInput: input }));
-  const args = { workspaceId: 'window-1', expectedRevision: 4, mode: 'inpaint', draftId: 'draft-1' };
-  const result = await client.callTool({ name: 'read_prompt_review', arguments: args });
-  assert.ok(!result.isError); assert.equal(result.content.filter(item => item.type === 'image').length, 5);
-  assert.equal(result.structuredContent.reviewInput.effective.request.input, input.effective.request.input);
-  assert.ok(!JSON.stringify(result.structuredContent).includes(png));
-  const extra = await client.callTool({ name: 'read_prompt_review', arguments: { ...args, assetRoles: ['image-5'] } });
-  assert.equal(extra.content.filter(item => item.type === 'image').length, 1);
-  assert.deepEqual(calls, [{ method: 'read_prompt_review', args }, { method: 'read_prompt_review', args }]);
-});
-
-test('review refuses mixed versions, wrong draft, and invalid image role without further calls', async t => {
-  for (const mismatch of [{ revision: 5 }, { draftId: 'wrong' }, { mode: 't2i' }]) {
-    const { client } = await mcp(t, () => ({ schemaVersion: 1, workspaceId: 'window-1', revision: 4, draftId: null, mode: 'inpaint', reviewInput: { assets: [] }, ...mismatch }));
-    const result = await client.callTool({ name: 'read_prompt_review', arguments: { workspaceId: 'window-1', expectedRevision: 4, mode: 'inpaint' } });
-    assert.equal(result.isError, true); assert.equal(result.structuredContent.error.code, 'invalid_response');
-  }
-  const { client, calls } = await mcp(t, () => { throw new Error('No request expected'); });
-  const result = await client.callTool({ name: 'read_prompt_review', arguments: { workspaceId: 'window-1', expectedRevision: 4, mode: 'inpaint', includeImages: false, assetRoles: ['source'] } });
-  assert.equal(result.isError, true); assert.equal(calls.length, 0);
-});
-
-test('detached scene review forwards only a validated t2i patch and keeps image handling unchanged', async t => {
-  const { client, calls } = await mcp(t, (_method, args) => ({ schemaVersion: 1, workspaceId: args.workspaceId, revision: args.expectedRevision, draftId: null, mode: args.mode, reviewInput: { assets: [{ role: 'source', ...picture }] } }));
-  const base = { workspaceId: 'window-1', expectedRevision: 4, mode: 't2i', patch: { params: { positivePrompt: 'sunlit garden' }, charCaptions: [] } };
-  const result = await client.callTool({ name: 'read_prompt_review', arguments: base });
-  assert.ok(!result.isError); assert.equal(result.content.filter(item => item.type === 'image').length, 1);
-  assert.deepEqual(calls, [{ method: 'read_prompt_review', args: base }]);
-  for (const extra of [{ draftId: 'visible-draft' }, { mode: 'inpaint' }, { patch: {} }, { patch: { inpaintMask: png } }, { styleOverrides: { params: 'watercolor' } }, { promptOverrides: [{ field: 'params.positivePrompt', value: '1.2::garden::' }] }]) assert.equal((await client.callTool({ name: 'read_prompt_review', arguments: { ...base, ...extra } })).isError, true);
-  assert.equal(calls.length, 1);
-});
-
 test('MCP initializes and advertises one server: core tools first, then canvas tools', async t => {
   const { client } = await mcp(t, () => ({}));
   assert.deepEqual(client.getServerVersion(), { name: 'novelai', version: '0.1.3' });
@@ -82,7 +48,7 @@ test('MCP initializes and advertises one server: core tools first, then canvas t
   assert.doesNotMatch(instructions, /novelai-business/, 'one server; the removed alias is not advertised');
   const { tools } = await client.listTools();
   assert.deepEqual(tools.map(tool => tool.name), ['material_library', 'tag_details', 'material_studies', 'asset_library', 'prepare_recipe', 'enqueue_recipes', 'lookup_enqueue', 'list_queue', 'read_queue', 'get_queue_result', 'control_queue',
-    'list_workspaces', 'read_workspace', 'read_prompt_review', 'get_asset', 'draft_edit', 'apply_edit', 'undo_edit']);
+    'list_workspaces', 'read_workspace']);
   assert.deepEqual(tools, TOOL_DEFINITIONS);
   // Every schema is a flat closed object: no top-level union (a client keeping only properties must still see every parameter).
   for (const tool of tools) {
@@ -121,13 +87,15 @@ test('control_queue: one tool for queued-batch pause/resume/cancel with the safe
   assert.ok(!tool.description.includes('control_generation'), 'the retired canvas control is no longer named');
 });
 
-test('the 26 removed, merged or retired tool names (11 removed, 7 merged, 8 canvas generation tools retired) are unknown_tool and never reach the host', async t => {
+test('the 31 removed, merged or retired tool names (11 removed, 7 merged, 8 canvas generation tools and 5 canvas self-check and draft tools retired) are unknown_tool and never reach the host', async t => {
   const { client, calls } = await mcp(t, () => { throw new Error('No host call expected'); });
   const removed = ['search_gallery', 'read_gallery', 'select_gallery_item', 'get_gallery_image', 'get_gallery_sheet', 'draft_gallery_import', 'save_project', 'list_projects', 'restore_project', 'draft_generation_source', 'read_recipe',
     'pause_queue', 'resume_queue', 'cancel_queue', 'pause_batch', 'resume_batch', 'cancel_batch', 'cancel_generation_job',
     // Retired on 2026-11-02: images from the canvas are prepare_recipe {canvas} + enqueue_recipes.
-    'submit_generation', 'submit_batch', 'list_generation_jobs', 'read_generation_job', 'get_generation_result', 'list_batches', 'read_batch', 'control_generation'];
-  assert.equal(removed.length, 26);
+    'submit_generation', 'submit_batch', 'list_generation_jobs', 'read_generation_job', 'get_generation_result', 'list_batches', 'read_batch', 'control_generation',
+    // Retired on 2026-11-12: the self-check is prepare_recipe {canvas, preview:true}, images are read_workspace {assetIds}, the canvas is edited in the app.
+    'read_prompt_review', 'get_asset', 'draft_edit', 'apply_edit', 'undo_edit'];
+  assert.equal(removed.length, 31);
   const listed = new Set((await client.listTools()).tools.map(tool => tool.name));
   for (const name of removed) {
     assert.ok(!listed.has(name), name);
@@ -162,6 +130,43 @@ test('read_workspace returns full state and manifest with native image attached 
   assert.deepEqual(result.content[1], { type: 'image', ...picture });
   assert.deepEqual(calls, [{ method: 'read_workspace', args: { workspaceId: 'window-1' } }, { method: 'get_asset', args: { workspaceId: 'window-1', expectedRevision: 4, assetId: 'current' } }]);
   assert.ok(!result.content[0].text.includes(png));
+});
+
+test('read_workspace is compact by default: image entries lose their own recipe, inpaint text shows only on the inpaint tab, and omitted names every path; detail:"full" returns the snapshot as it is', async t => {
+  const prompts = { stylePrompt: 'flat color', positivePrompt: 'SFW garden illustration', negativePrompt: 'blurry' };
+  const captions = [{ prompt: 'adult gardener', negativePrompt: '', useCoords: false, x: 0.5, y: 0.5 }];
+  const image = extra => ({ id: 'history-1', actualSeed: 7, width: 832, height: 1216, params: { ...prompts, steps: 28 }, characterSnapshot: { version: 1, captions }, characterPrompts: ['adult gardener'], assetId: 'current', ...extra });
+  const state = extra => ({ params: { ...prompts, steps: 28 }, charCaptions: captions, activeTab: 'generate', currentImage: image(), workbenchImage: { width: 64, height: 64, assetId: 'workbenchImage' },
+    inpaintPositivePrompt: 'silver brooch', inpaintRecipe: { positivePrompt: 'silver brooch' }, inpaintStrength: 0.7, ...extra });
+  let current = state();
+  const { client } = await mcp(t, method => method === 'read_workspace' ? { ...snapshot(), state: current } : picture);
+  const read = async (extra = {}) => (await client.callTool({ name: 'read_workspace', arguments: { workspaceId: 'window-1', includeImages: false, ...extra } })).structuredContent;
+
+  const compact = await read();
+  assert.equal(compact.detail, 'compact');
+  assert.deepEqual(compact.state.currentImage, { id: 'history-1', actualSeed: 7, width: 832, height: 1216, assetId: 'current', promptsMatchCanvas: true });
+  assert.deepEqual(compact.state.workbenchImage, current.workbenchImage, 'an entry without a recipe is left as it is');
+  assert.deepEqual(compact.omitted, ['state.currentImage.params', 'state.currentImage.characterSnapshot', 'state.currentImage.characterPrompts', 'state.inpaintPositivePrompt', 'state.inpaintRecipe']);
+  assert.deepEqual([compact.state.inpaintPositivePrompt, compact.state.inpaintRecipe, compact.state.inpaintStrength], [undefined, undefined, 0.7]);
+  assert.deepEqual(compact.state.params, current.params, 'the canvas prompts are stated once');
+  assert.deepEqual(compact.state.charCaptions, captions);
+  assert.equal(JSON.stringify(compact).split('SFW garden illustration').length - 1, 1);
+
+  const full = await read({ detail: 'full' });
+  assert.equal(full.detail, 'full'); assert.equal(full.omitted, undefined);
+  assert.deepEqual(full.state, current);
+
+  // The inpaint tab shows its text; an image made from other prompts or other characters says so.
+  current = state({ activeTab: 'inpaint', currentImage: image({ params: { ...prompts, positivePrompt: 'a lighthouse' } }) });
+  const inpaint = await read();
+  assert.deepEqual([inpaint.state.inpaintPositivePrompt, inpaint.state.inpaintRecipe], ['silver brooch', { positivePrompt: 'silver brooch' }]);
+  assert.equal(inpaint.state.currentImage.promptsMatchCanvas, false);
+  assert.ok(!inpaint.omitted.some(path => path.startsWith('state.inpaint')));
+  current = state({ charCaptions: [], inpaintPositivePrompt: '', inpaintRecipe: null });
+  const others = await read();
+  assert.equal(others.state.currentImage.promptsMatchCanvas, false, 'the image has a character the canvas no longer has');
+  assert.deepEqual(others.omitted, ['state.currentImage.params', 'state.currentImage.characterSnapshot', 'state.currentImage.characterPrompts'], 'empty inpaint text is not reported as omitted');
+  assert.equal(others.state.inpaintRecipe, null);
 });
 
 test('read supports explicit references and no-images without truncating text assets', async t => {
@@ -203,16 +208,13 @@ test('revision change while fetching an image fails the whole read without mixin
   assert.equal(calls.length, 2);
 });
 
-test('input validation rejects stale-style names, unknown patches and invalid versions before HTTP', async t => {
+test('input validation rejects stale-style names, unknown fields and invalid values before HTTP', async t => {
   const { client, calls } = await mcp(t, () => ({}));
   for (const [name, args] of [
     ['run_generation', {}],
     ['read_workspace', { workspace_id: 'window-1' }],
-    ['apply_edit', { workspaceId: 'window-1', expectedRevision: -1, draftId: 'draft-1' }],
-    ['apply_edit', { workspaceId: 'window-1', expectedRevision: 1.5, draftId: 'draft-1' }],
-    ['draft_edit', { workspaceId: 'window-1', expectedRevision: 4, patch: { settings: { token: 'no' } } }],
-    ['draft_edit', { workspaceId: 'window-1', expectedRevision: 4, patch: { inpaintMask: { path: '/arbitrary.png' } } }],
-    ['draft_edit', { workspaceId: 'window-1', expectedRevision: 4, patch: { inpaintNoise: 1 } }],
+    ['read_workspace', { workspaceId: 'window-1', detail: 'everything' }],
+    ['read_workspace', { workspaceId: 'window-1', expectedRevision: 4 }],
     ['read_workspace', { workspaceId: 'window-1', includeImages: false, assetIds: ['current'] }],
     ['read_workspace', { workspaceId: 'window-1', assetIds: Array.from({ length: 6 }, (_, i) => `image-${i}`) }],
   ]) {
@@ -220,27 +222,6 @@ test('input validation rejects stale-style names, unknown patches and invalid ve
     assert.equal(result.isError, true, name);
   }
   assert.equal(calls.length, 0);
-});
-
-test('get_asset cannot return a path-only placeholder as successful visual readback', async t => {
-  const { client } = await mcp(t, () => ({ mimeType: 'image/png', path: '/unavailable/local/file.png' }));
-  const result = await client.callTool({ name: 'get_asset', arguments: { workspaceId: 'window-1', expectedRevision: 4, assetId: 'current' } });
-  assert.equal(result.isError, true);
-  assert.equal(result.structuredContent.error.code, 'invalid_image');
-});
-
-test('all mutation routes preserve exact revision args and do not add retry or generation', async t => {
-  const { client, calls } = await mcp(t, (method, args) => ({ method, workspaceId: args.workspaceId, revision: 4 }));
-  const operations = [
-    ['draft_edit', { patch: { params: { prompt: 'SFW sunset garden' }, charCaptions: [{ prompt: 'adult visitor' }], inpaintMask: { assetId: 'mask' }, inpaintStrength: 0.5, inpaintNoise: 0.1, inpaintPositivePrompt: '', inpaintRecipe: { positivePrompt: 'small silver brooch', negativePrompt: 'oversized jewelry', steps: 24 }, preciseReferences: [{ id: 'ref', assetId: 'reference-1', strength: 0.8 }] } }],
-    ['apply_edit', { draftId: 'draft-1' }], ['undo_edit', {}],
-  ];
-  for (const [name, extra] of operations) {
-    const args = { workspaceId: 'window-1', expectedRevision: 4, ...extra };
-    assert.equal((await client.callTool({ name, arguments: args })).isError, undefined);
-    assert.deepEqual(calls.at(-1), { method: name, args });
-  }
-  assert.equal(calls.length, operations.length);
 });
 
 test('MCP result strips credentials from unexpected nested payloads', async t => {

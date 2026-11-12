@@ -1,13 +1,16 @@
 /**
- * Canvas layer of the NovelAI MCP server: tools bound to the live client workspace
- * (workspaceId) — workspace reads, the effective-recipe self-check and visible drafts.
- * Nothing here generates: an image from the canvas is prepare_recipe {canvas} (core
- * layer), then enqueue_recipes; the former canvas generation tools (submit_generation,
- * submit_batch and their job and batch reads and controls) were retired on 2026-11-02.
+ * Canvas layer of the NovelAI MCP server: the two reads of the live client workspace
+ * (workspaceId). Nothing here generates or edits: an image from the canvas is
+ * prepare_recipe {canvas} (core layer), then enqueue_recipes. The former canvas
+ * generation tools (submit_generation, submit_batch and their job and batch reads and
+ * controls) were retired on 2026-11-02; the self-check and draft tools
+ * (read_prompt_review, get_asset, draft_edit, apply_edit, undo_edit) on 2026-11-12:
+ * prepare_recipe {canvas, preview:true} gives the same effective-input check,
+ * read_workspace {assetIds} the images, and the canvas is edited in the app. The host
+ * keeps those methods for its own window.
  *
- * Definitions and their special handling moved here unchanged from the former
- * src/mcp.mjs. Each tool forwards to the host method of the same name unless its
- * entry says otherwise (hostMethods); every argument rule runs before the host.
+ * Each tool forwards to the host method of the same name unless its entry says
+ * otherwise (hostMethods); every argument rule runs before the host.
  */
 import { BridgeError } from './bridge-client.mjs';
 import { imageBlock, success } from './mcp-registry.mjs';
@@ -15,22 +18,63 @@ import { imageBlock, success } from './mcp-registry.mjs';
 const canvasImage = asset => imageBlock(asset, 'Read the workspace again.');
 const MAX_IMAGES = 5;
 const string = { type: 'string', minLength: 1, pattern: '\\S' };
-const revision = { type: 'integer', minimum: 0 };
 const workspace = { workspaceId: string };
-const versioned = { ...workspace, expectedRevision: revision };
 const schema = (properties = {}, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
-const scenePatch = schema({ params: { type: 'object' }, charCaptions: { type: 'array' } }, []);
+const DETAILS = ['compact', 'full'];
 
 // [name, description, inputSchema, readOnlyHint, openWorldHint]
 const CANVAS_DEFINITIONS = [
-  ['list_workspaces', 'List the live NovelAI client workspace. Select its workspaceId before reading or editing.', schema(), true],
-  ['read_workspace', 'Read the current complete creative state and asset manifest. Native image attachments default to activeImageAssetId, with currentImage/workbenchImage fallback for older snapshots. Other assets remain available through get_asset. Read again after any manual edit or conflict.', schema({ ...workspace, includeImages: { type: 'boolean', default: true }, assetIds: { type: 'array', items: string, uniqueItems: true, maxItems: MAX_IMAGES } }, ['workspaceId']), true],
-  ['read_prompt_review', 'Read the full effective recipe using the same builders as actual generation, at the exact workspace revision. Optional draftId reads the matching unapplied draft without applying. Alternatively patch previews detached t2i params/charCaptions against the same baseline without replacing the visible draft; patch and draftId are mutually exclusive. Includes all authored and effective prompts, automatic quality/UC, characters/positions, sampling, readiness and unused inputs. Images are native attachments (default first five); use assetRoles to inspect remaining source/Mask/reference images. Does not generate, encode references, choose a random seed or modify the workspace. This is a self-check of the effective input.', schema({ ...versioned, mode: { type: 'string', enum: ['t2i','i2i','inpaint','enhance','upscale','director'] }, draftId: string, patch: scenePatch, includeImages: { type: 'boolean', default: true }, assetRoles: { type: 'array', items: string, uniqueItems: true, minItems: 1, maxItems: MAX_IMAGES } }, ['workspaceId','expectedRevision','mode']), true],
-  ['get_asset', 'View one actual image from a previously read workspace manifest at its exact revision. Returns native image content; never reads arbitrary paths.', schema({ ...versioned, assetId: string }), true],
-  ['draft_edit', 'Stage a visible edit proposal at the exact current revision. Does not apply changes or generate. Arrays replace whole arrays; params, i2iParams and inpaintRecipe merge partial fields. A non-null inpaintRecipe explicitly enables an independent inpaint recipe, preserving base parameters and characters; null selects legacy inpaint. For existing reference entries and masks, use assetId from the current manifest instead of copying base64. Storing references does not prove generation support; never silently change the model. Respect read_workspace capabilities. params.effort "high"|"medium" is the V5 Full Effort (Medium: fixed 14 steps, Euler Ancestral, Heavy UC, no negatives; also inpaintRecipe.effort, used when the inpaint model is V5 Full inpainting); enhanceScale "max" is Enhance Max✨ (V5 only, paid on Opus too).', schema({ ...versioned, patch: schema({ params: { type: 'object' }, i2iParams: { type: 'object' }, charCaptions: { type: 'array' }, vibeImages: { type: 'array' }, preciseReferences: { type: 'array' }, inpaintMask: { type: ['string', 'null', 'object'], properties: { assetId: string }, required: ['assetId'], additionalProperties: false }, inpaintModel: string, inpaintStrength: { type: 'number', minimum: 0, maximum: 1 }, inpaintNoise: { type: 'number', minimum: 0, maximum: 0.99 }, inpaintPositivePrompt: { type: 'string' }, inpaintRecipe: { type: ['object', 'null'] }, enhanceMagnitude: { type: 'integer', minimum: 1, maximum: 10 }, enhanceScale: { enum: [1, 2, 'max'] }, upscaleScale: { type: 'integer', enum: [2, 4] }, directorTool: { type: 'string', enum: ['bg-removal', 'lineart', 'sketch', 'colorize', 'emotion', 'declutter'] }, augmentOptions: schema({ defry: { type: 'integer', minimum: 0, maximum: 5 }, colorizePrompt: { type: 'string' }, emotion: string, emotionLevel: { type: 'integer', minimum: 0, maximum: 5 } }, []) }, []) }), false],
-  ['apply_edit', 'Apply a previously staged, visible draft only if its base and current revision still match. Never automatically retry a failed or timed-out mutation. Does not generate.', schema({ ...versioned, draftId: string }), false],
-  ['undo_edit', 'Undo the last bridge edit only while its resulting state still matches. Refuses to overwrite later manual changes. Does not generate.', schema(versioned), false],
+  ['list_workspaces', 'List the live NovelAI client workspace. Select its workspaceId before reading it.', schema(), true],
+  ['read_workspace', 'Read the current creative state of the canvas and its asset manifest; revision is the expectedRevision of prepare_recipe {canvas}. One native image is attached by default (activeImageAssetId, else currentImage/workbenchImage); assetIds picks up to 5 from the manifest, includeImages:false none. '
+    + 'Default detail compact lists what it left out in omitted: an image entry (currentImage, workbenchImage, i2iOriginalImage, comparisonBeforeImage) keeps its identity, seed and size without its own recipe (promptsMatchCanvas says whether its prompts equal the canvas ones), and the inpaint prompt and recipe appear only while the inpaint tab is active. detail:"full" returns everything. Read again after any manual edit or conflict.',
+    schema({ ...workspace, includeImages: { type: 'boolean', default: true }, assetIds: { type: 'array', items: string, uniqueItems: true, maxItems: MAX_IMAGES }, detail: { type: 'string', enum: DETAILS, default: 'compact' } }, ['workspaceId']), true],
 ];
+
+// ---------------------------------------------------------------- compact view
+const record = value => typeof value === 'object' && value !== null && !Array.isArray(value);
+const IMAGE_ROLES = ['currentImage', 'workbenchImage', 'i2iOriginalImage', 'comparisonBeforeImage'];
+/** The recipe an image entry carries: its own params and characters, a copy of the canvas prompts in the usual case. */
+const IMAGE_RECIPE_KEYS = ['params', 'characterSnapshot', 'characterPrompts'];
+const PROMPT_KEYS = ['stylePrompt', 'positivePrompt', 'negativePrompt'];
+/** The inpaint text, shown only while the inpaint tab is active (prepare_recipe {canvas, mode:"inpaint"} reads it back anyway). */
+const INPAINT_TEXT_KEYS = ['inpaintPositivePrompt', 'inpaintRecipe'];
+const characterPromptsOf = image => Array.isArray(image.characterSnapshot?.captions) ? image.characterSnapshot.captions.map(caption => caption?.prompt ?? '')
+  : Array.isArray(image.characterPrompts) ? image.characterPrompts : null;
+
+/** Whether an image entry's own prompts and character prompts equal the canvas ones; null when the entry carries no recipe. */
+function promptsMatchCanvas(image, state) {
+  if (!record(image.params)) return null;
+  const canvas = record(state.params) ? state.params : {};
+  if (PROMPT_KEYS.some(key => (image.params[key] ?? '') !== (canvas[key] ?? ''))) return false;
+  const own = characterPromptsOf(image), current = Array.isArray(state.charCaptions) ? state.charCaptions.map(caption => caption?.prompt ?? '') : [];
+  return own === null ? current.length === 0 : own.length === current.length && own.every((prompt, index) => prompt === current[index]);
+}
+
+/**
+ * The default read_workspace view: the same snapshot without what repeats the canvas prompts. Each image entry
+ * loses its own recipe (params, characterSnapshot, characterPrompts) and says whether its prompts match the
+ * canvas; the inpaint prompt and recipe are left out unless the inpaint tab is active. `omitted` names every
+ * path left out, so nothing disappears silently; detail:"full" returns the host snapshot as it is.
+ */
+export function compactWorkspace(result) {
+  if (!record(result?.state)) return result;
+  const state = { ...result.state }, omitted = [];
+  for (const role of IMAGE_ROLES) {
+    const image = state[role];
+    if (!record(image)) continue;
+    const dropped = IMAGE_RECIPE_KEYS.filter(key => image[key] !== undefined);
+    if (!dropped.length) continue;
+    const match = promptsMatchCanvas(image, state);
+    state[role] = { ...Object.fromEntries(Object.entries(image).filter(([key]) => !IMAGE_RECIPE_KEYS.includes(key))), ...(match === null ? {} : { promptsMatchCanvas: match }) };
+    omitted.push(...dropped.map(key => `state.${role}.${key}`));
+  }
+  if (state.activeTab !== 'inpaint') for (const key of INPAINT_TEXT_KEYS) {
+    if (state[key] === undefined || state[key] === null || state[key] === '') continue;
+    delete state[key];
+    omitted.push(`state.${key}`);
+  }
+  return { ...result, state, detail: 'compact', omitted };
+}
 
 // ---------------------------------------------------------------- handlers
 // Each returns the MCP result; anything thrown becomes the shared error envelope.
@@ -42,28 +86,12 @@ const HANDLERS = {
     if (result.workspaceId !== args.workspaceId || !Number.isInteger(result.revision) || !Array.isArray(result.assets)) throw new BridgeError('invalid_response', 'The client returned an invalid workspace snapshot.');
     const defaultAsset = result.activeImageAssetId ?? result.assets.find(asset => asset.role === 'currentImage')?.id ?? result.assets.find(asset => asset.role === 'workbenchImage')?.id;
     const selected = args.includeImages === false ? [] : args.assetIds ?? (defaultAsset ? [defaultAsset] : []);
-    if (selected.length > MAX_IMAGES) throw new BridgeError('image_limit', 'Select at most five assetIds, or read without images and request assets individually.');
+    if (selected.length > MAX_IMAGES) throw new BridgeError('image_limit', 'Select at most five assetIds, or read without images and request them in another read.');
     for (const id of selected) if (!result.assets.some(asset => asset.id === id)) throw new BridgeError('unknown_asset', 'The requested image is not in this workspace snapshot.', { assetId: id });
     const images = [];
     for (const assetId of selected) images.push(canvasImage(await bridge.call('get_asset', { workspaceId: args.workspaceId, expectedRevision: result.revision, assetId }, signal)));
-    return success({ ...result, imageAttachments: { includedAssetIds: selected, availableAssetIds: result.assets.map(asset => asset.id), limit: MAX_IMAGES } }, images, roots);
-  },
-  async read_prompt_review(args, { bridge, signal, roots }) {
-    const { assetRoles, includeImages = true, ...identity } = args;
-    const result = await bridge.call('read_prompt_review', identity, signal);
-    if (result?.schemaVersion !== 1 || result.workspaceId !== args.workspaceId || result.revision !== args.expectedRevision || result.mode !== args.mode || (result.draftId ?? null) !== (args.draftId ?? null) || !Array.isArray(result.reviewInput?.assets)) throw new BridgeError('invalid_response', 'The effective recipe snapshot does not match the requested version.');
-    const assets = result.reviewInput.assets;
-    const roles = !includeImages ? [] : assetRoles ?? assets.slice(0, MAX_IMAGES).map(asset => asset.role);
-    const images = roles.map(role => {
-      const asset = assets.find(item => item.role === role);
-      if (!asset) throw new BridgeError('unknown_asset', 'The requested role is not in this review snapshot.');
-      return canvasImage(asset);
-    });
-    return success({ ...result, reviewInput: { ...result.reviewInput, assets: assets.map(({ data, ...asset }) => asset) }, imageAttachments: { includedRoles: roles, availableRoles: assets.map(asset => asset.role), limit: MAX_IMAGES } }, images, roots);
-  },
-  async get_asset(args, { bridge, signal, roots }) {
-    const asset = await bridge.call('get_asset', args, signal);
-    return success({ workspaceId: args.workspaceId, revision: args.expectedRevision, assetId: args.assetId, mimeType: asset.mimeType, imageAttached: true }, [canvasImage(asset)], roots);
+    const view = args.detail === 'full' ? { ...result, detail: 'full' } : compactWorkspace(result);
+    return success({ ...view, imageAttachments: { includedAssetIds: selected, availableAssetIds: result.assets.map(asset => asset.id), limit: MAX_IMAGES } }, images, roots);
   },
 };
 
@@ -72,16 +100,12 @@ const VALIDATORS = {
   read_workspace(args) {
     if (args.includeImages === false && args.assetIds?.length) throw new BridgeError('invalid_arguments', 'assetIds cannot be combined with includeImages:false.');
   },
-  read_prompt_review(args) {
-    if (args.patch !== undefined && (args.mode !== 't2i' || args.draftId !== undefined || !Object.keys(args.patch).length)) throw new BridgeError('invalid_arguments', 'Detached review requires a nonempty t2i text patch and no draftId.');
-    if (args.includeImages === false && args.assetRoles) throw new BridgeError('invalid_arguments', 'assetRoles requires includeImages:true.');
-  },
 };
 
 // Host methods beyond the tool's own name.
 const EXTRA_HOST_METHODS = { read_workspace: ['get_asset'] };
 
-/** The 7 canvas tools in tools/list order. Generating from the canvas is prepare_recipe {canvas} + enqueue_recipes. */
+/** The 2 canvas tools in tools/list order. Generating from the canvas is prepare_recipe {canvas} + enqueue_recipes. */
 export const CANVAS_TOOLS = [
   ...CANVAS_DEFINITIONS.map(([name, description, inputSchema, readOnlyHint, openWorldHint = false]) => ({
     name, layer: 'canvas', errors: 'opaque', description, inputSchema,

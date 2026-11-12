@@ -37,13 +37,27 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
   sent and the fixed UC text.
 - **Enhance Max✨** (V5 models): the image is sent at its own size and comes back about twice as large (at most about
   3.1 MP) through NovelAI's new upscaler. Canvas Enhance offers it beside 1× and 2×; `prepare_recipe` takes
-  `scale: "max"` and `draft_edit` `enhanceScale: "max"`. Max costs Anlas on Opus too.
+  `scale: "max"`. Max costs Anlas on Opus too.
 - `lookup_enqueue` reports `inFlight`: whether the app has received an enqueue under the key and is still handling it.
 - `prepare_recipe` i2i may leave out `width`/`height`: the source's aspect ratio is used at about 832×1216 pixels,
   within the Opus free size (warning `i2i_size_from_source`).
 
 ### Changed
 
+- **Compact reads** (less of an agent's context per call). `prepare_recipe` returns a compact readback by default: it no
+  longer repeats the prompts and character texts the caller just wrote (the server compares the stored fields with the
+  request and refuses a difference as `recipe_input_mismatch`), and keeps the model id, sampling, mode parameters,
+  warnings and the text the app appended (`automaticQuality.appendedText`, `ucPreset.text`). A canvas recipe states its
+  texts once (`authoredPrompts`, `effective.characters`). `detail: "full"` returns the former readback (`authored`, the
+  final prompts, the raw request `effectiveRequest`, `unusedInputs`, `assets`, hashes, the mask spec). A typical t2i
+  readback goes from about 5,200 to about 1,300 characters and no longer grows with the prompt.
+- `read_workspace` is compact by default too: image entries no longer carry their own recipe (`promptsMatchCanvas`
+  says whether it matches the canvas), and the inpaint prompt and recipe appear only on the inpaint tab; `omitted`
+  lists what was left out and `detail: "full"` returns everything.
+- **13 tools instead of 18.** The canvas self-check and draft tools are retired: `read_prompt_review` (use
+  `prepare_recipe {canvas, preview: true}`), `get_asset` (use `read_workspace {assetIds}`), `draft_edit`, `apply_edit`
+  and `undo_edit` (edit the canvas in the app). They answer `unknown_tool`. `list_workspaces` and `read_workspace`
+  stay, and `prepare_recipe {canvas}` still generates what the canvas holds.
 - The local Anlas estimate prices V5 models at 1.5× the formula, as NovelAI's own client does (it was lower before).
 - Imported V5 Curated images (metadata `Source` "NovelAI Diffusion V5 DB276663") are recognised as Curated, not Full.
 - **No failure stops the shared queue any more.** An image that fails, is refused before it is sent or has an unknown

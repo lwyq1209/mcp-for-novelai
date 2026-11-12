@@ -227,7 +227,7 @@ test('after a start by this call, workspace_not_ready is sent again every 500 ms
   const other = world({ onLaunch: s => { s.bridge = 'up'; } });
   const conflict = new BridgeError('conflict', 'revision');
   const second = client([noBridge(), notReady, conflict]);
-  await assert.rejects(createAutostartBridge(second, other.options).call('apply_edit', {}), thrown => thrown === conflict);
+  await assert.rejects(createAutostartBridge(second, other.options).call('read_workspace', {}), thrown => thrown === conflict);
   assert.equal(second.sent.length, 3);
   // Not started by this call (the app was already starting): workspace_not_ready is returned at once.
   const waited = world(); waited.state.running = true; waited.state.tick = x => { x.bridge = 'up'; };
@@ -390,13 +390,13 @@ test('the server instructions describe the automatic start and how it is turned 
   const { INSTRUCTIONS, TOOL_DEFINITIONS } = await import('../src/mcp.mjs');
   assert.match(INSTRUCTIONS, /When a call finds it not running \(the call certainly reached no app\), the server starts it in the background without taking the focus, waits up to 30 seconds and then sends the call; a call whose outcome may be unknown is never sent again\./);
   assert.match(INSTRUCTIONS, /With NOVELAI_MCP_AUTOSTART=0, or when the server does not run with the app's own executable, it does not start the app/);
-  assert.equal(TOOL_DEFINITIONS.length, 18);
+  assert.equal(TOOL_DEFINITIONS.length, 13);
   assert.match(TOOL_DEFINITIONS.find(tool => tool.name === 'list_queue').description, /Read-only; never enqueues, starts or retries a batch\./);
 });
 
 test('review rework: workspace_not_ready is sent again only for the canvas methods and the canvas capture', async () => {
   const notReady = () => new BridgeError('workspace_not_ready', 'loading');
-  assert.deepEqual([...CANVAS_RETRY_METHODS].sort(), ['apply_edit', 'capture_canvas_recipe', 'draft_edit', 'get_asset', 'list_workspaces', 'read_prompt_review', 'read_workspace', 'undo_edit']);
+  assert.deepEqual([...CANVAS_RETRY_METHODS].sort(), ['capture_canvas_recipe', 'get_asset', 'list_workspaces', 'read_workspace']);
   for (const method of ['enqueue_queue_recipes', 'list_queue', 'put_queue_recipe', 'asset_library']) {
     const w = world({ onLaunch: s => { s.bridge = 'up'; } });
     const bridge = client([noBridge(), notReady]);

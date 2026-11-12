@@ -17,7 +17,7 @@ import { CENSOR_HOST_METHODS, censorImage } from './image-censor.mjs';
 import { materialToolAction } from './material-tools.mjs';
 import { MAX_QUEUE_ITEMS, QUEUE_HOST_METHODS, QUEUE_RESULT_PAGE, QUEUE_THUMBNAIL_EDGE, QUEUE_WAIT, QUEUE_WAIT_UNTIL, queueBatchResults, queueControlAction, waitForQueuedBatch } from './queue-control.mjs';
 import { RECIPE_TOOL_SPECS } from './recipe-tool-schemas.mjs';
-import { mcpHostRequestKey } from './recipe-queue.mjs';
+import { compactReadback, mcpHostRequestKey } from './recipe-queue.mjs';
 import { studyToolAction } from './study-tools.mjs';
 import { queryTagDetails } from './tag-details.mjs';
 import { ASSET_LIBRARY_DESCRIPTION, assetLibraryFlatSchema, normalizeAssetLibraryRequest } from './asset-library-categories.mjs';
@@ -275,7 +275,10 @@ const recipeTool = name => {
   const spec = RECIPE_TOOL_SPECS[name];
   return core({ name, description: spec.description, inputSchema: spec.inputSchema, annotations: annotations(spec.readOnlyHint, spec.openWorldHint), hostMethods: spec.hostMethods,
     async handle(args, { recipes, signal, roots }) {
-      const result = await recipes[RECIPE_TOOL_ACTIONS[name]](args, { signal });
+      // prepare_recipe detail is a view of the readback, not a recipe field: the full readback is built either way.
+      const { detail, ...input } = name === 'prepare_recipe' ? args : { ...args, detail: 'full' };
+      const readback = await recipes[RECIPE_TOOL_ACTIONS[name]](input, { signal });
+      const result = detail === 'full' ? readback : compactReadback(readback);
       // A preview's overlay goes out as one native image; its bytes never enter the JSON readback.
       if (typeof result?.previewImage?.data !== 'string') return success(result, [], roots);
       const { data, ...previewImage } = result.previewImage;

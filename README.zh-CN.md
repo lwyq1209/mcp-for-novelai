@@ -17,8 +17,8 @@
 - **素材库**（首页）：按天分组的历史图片、导入的图片，以及提示词素材——标签、组合、心得、预设、画师收藏；支持
   搜索、筛选（模式、模型、日期、来源、归档）、收藏夹、项目、详情抽屉、版本历史和多选。删除的条目进入**最近删除**，
   保留 30 天。
-- **画布**：手动工作台，支持文生图、图生图、局部重绘（可画蒙版）和后期（增强、放大、Director 工具）。Agent 提出的
-  修改以可见草稿出现，由你应用或放弃。
+- **画布**：手动工作台，支持文生图、图生图、局部重绘（可画蒙版）和后期（增强、放大、Director 工具）。Agent 可以
+  读取画布并把画布上的稿直接出图，但不修改画布。
 - **共享队列**：Agent 和画布的每张图都按顺序走同一个队列。可以按批次暂停、继续、取消。一张图失败或结果未知不会卡住
   任何人：只标记这一张（不会重发），队列接着往下出；NovelAI 回复「请求过多」时会在约一分钟内自动重发；应用重启后，
   没出完的批次自动接着出。
@@ -33,16 +33,16 @@
 
 （截图为英文界面，使用合成示例数据。）
 
-### 18 个 MCP 工具
+### 13 个 MCP 工具
 
 | 分组 | 工具 |
 | --- | --- |
 | 素材库 | `asset_library`、`material_library`、`material_studies`、`tag_details` |
 | 配方与队列 | `prepare_recipe`、`enqueue_recipes`、`lookup_enqueue`、`list_queue`、`read_queue`、`get_queue_result`、`control_queue` |
-| 画布 | `list_workspaces`、`read_workspace`、`read_prompt_review`、`get_asset`、`draft_edit`、`apply_edit`、`undo_edit` |
+| 画布 | `list_workspaces`、`read_workspace` |
 
-只有 `enqueue_recipes` 会开始出图（`control_queue` 继续一个已暂停的批次时，也会接着出图）。画布工具只读取画布、
-提交可见草稿，从不出图。详见 [MCP 工具参考](docs/mcp-tools.md)（英文）。
+只有 `enqueue_recipes` 会开始出图（`control_queue` 继续一个已暂停的批次时，也会接着出图）。画布工具只读取画布，
+不出图也不改画布。详见 [MCP 工具参考](docs/mcp-tools.md)（英文）。
 
 ## 开始之前
 

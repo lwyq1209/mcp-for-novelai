@@ -261,7 +261,7 @@ export const CANVAS_STRINGS = {
   'cv.matches': ['与左侧参数一致', 'Matches the settings'],
   'cv.changed': ['参数已改动', 'Settings changed'],
   'cv.shared': ['共用画布', 'Shared canvas'],
-  'cv.sharedTip': ['Agent 能读取这张画布。它的修改先成为草稿，由你决定是否应用；Agent 从画布出的图进入队列和素材库，不会替换这里的图。', 'Agents can read this canvas. Their edits arrive as drafts you choose to apply. Images they generate from it go to the queue and the library, never onto this canvas.'],
+  'cv.sharedTip': ['Agent 能读取这张画布，但不会改动它；Agent 从画布出的图进入队列和素材库，不会替换这里的图。', 'Agents can read this canvas but never change it. Images they generate from it go to the queue and the library, never onto this canvas.'],
   'cv.img.compare': ['前后对比', 'Compare'],
   'cv.img.fit': ['适应窗口', 'Fit'],
   'cv.img.full': ['全屏查看', 'Full screen'],

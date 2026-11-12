@@ -20,7 +20,7 @@ prepares recipes, queues images and organises your library through MCP, while yo
   presets, artist picks — with search, filters (mode, model, date, source, archived), collections, projects, a detail
   drawer, version history and multi-select. Deleted items go to **Recently deleted** for 30 days.
 - **Canvas**: a manual workbench for Txt2Img, Img2Img, Inpaint (with mask painting) and Post (Enhance, Upscale,
-  Director tools). An agent's proposed edits appear as visible drafts that you apply or discard.
+  Director tools). Agents read the canvas and can generate what it holds; they do not edit it.
 - **Shared queue**: every image, from an agent or from the canvas, goes through one queue in order. Pause, resume and
   cancel per batch. A failed or unknown image never holds anyone up: only that image is marked (never resent) and the
   queue goes on; a "too many requests" answer is retried for about a minute, and after a restart unfinished batches
@@ -34,16 +34,16 @@ prepares recipes, queues images and organises your library through MCP, while yo
 | --- | --- | --- |
 | ![The canvas](docs/images/canvas.png) | ![The queue page](docs/images/queue.png) | ![Settings › MCP access](docs/images/settings-mcp.png) |
 
-### 18 MCP tools
+### 13 MCP tools
 
 | Group | Tools |
 | --- | --- |
 | Library | `asset_library`, `material_library`, `material_studies`, `tag_details` |
 | Recipes & queue | `prepare_recipe`, `enqueue_recipes`, `lookup_enqueue`, `list_queue`, `read_queue`, `get_queue_result`, `control_queue` |
-| Canvas | `list_workspaces`, `read_workspace`, `read_prompt_review`, `get_asset`, `draft_edit`, `apply_edit`, `undo_edit` |
+| Canvas | `list_workspaces`, `read_workspace` |
 
 Only `enqueue_recipes` starts generation (and `control_queue` resuming a paused batch continues one). The canvas tools
-read the canvas and stage visible drafts; they never generate. Details: [MCP tools reference](docs/mcp-tools.md).
+only read the canvas; they never generate or edit it. Details: [MCP tools reference](docs/mcp-tools.md).
 
 ## Before you start
 

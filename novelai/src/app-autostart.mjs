@@ -205,7 +205,7 @@ export const AUTOSTART_STATES = Object.freeze(Object.keys(MESSAGES));
  * the canvas capture of prepare_recipe {canvas}. The host answers that code for them before anything runs
  * (client/electron/bridge-host.ts, main.ts); any other method gets it back at once.
  */
-export const CANVAS_RETRY_METHODS = Object.freeze(new Set(['list_workspaces', 'read_workspace', 'get_asset', 'draft_edit', 'apply_edit', 'undo_edit', 'read_prompt_review', 'capture_canvas_recipe']));
+export const CANVAS_RETRY_METHODS = Object.freeze(new Set(['list_workspaces', 'read_workspace', 'get_asset', 'capture_canvas_recipe']));
 /** The text added to a workspace_not_ready answer that outlasted the wait after a start. */
 export const STILL_LOADING = 'The app was just started by this MCP server and is still loading; call again in a few seconds.';
 

@@ -166,7 +166,9 @@ async function start(options: { enqueueItemLimit?: number } = {}) {
   const settled = () => waitUntil(() => { expect({ batches: useAppStore.getState().manualBatches, status: useAppStore.getState().statusText }).toMatchObject({ batches: [] }); expect(useAppStore.getState().manualPreparing).toBe(false); }, { interval: 20 });
   const agentRecipe = async (positivePrompt: string) => ok('prepare_recipe', { mode: 't2i', model: 'nai-diffusion-4-5-full', width: 64, height: 64, steps: 1, cfgScale: 5, sampler: 'k_euler_ancestral', noiseSchedule: 'karras', ucPreset: 0, qualityPreset: 'standard', stylePrompt: '', positivePrompt, negativePrompt: '', seed: 9 });
   const call = async (name: string, args: Record<string, unknown> = {}) => (await client.callTool({ name, arguments: args })) as any;
-  return { queue, manual, sources, batch, generation, ok, call, workspaceId, revision, listed, settled, previews, enqueueCalls, lose, agentRecipe, queueUi };
+  // The draft methods are the window's own (the MCP draft tools were retired on 2026-11-12): called on the renderer as the window does.
+  const host = (method: string, args: Record<string, unknown>) => toRenderer(method, args);
+  return { queue, manual, sources, batch, generation, ok, host, call, workspaceId, revision, listed, settled, previews, enqueueCalls, lose, agentRecipe, queueUi };
 }
 const ref = (recipe: any) => ({ recipeId: recipe.recipeId, recipeRevision: recipe.recipeRevision, inputHash: recipe.inputHash });
 
@@ -236,8 +238,8 @@ describe('manual generation through the shared queue', () => {
     await waitUntil(() => expect(fixture.post).toHaveBeenCalledTimes(1));
     // A draft is applied while the agent batch runs.
     const r0 = await h.revision();
-    const draft = await h.ok('draft_edit', { workspaceId: h.workspaceId, expectedRevision: r0, patch: { params: { positivePrompt: 'a manual pier' } } });
-    expect((await h.ok('apply_edit', { workspaceId: h.workspaceId, expectedRevision: r0, draftId: draft.draftId })).revision).toBe(r0 + 1);
+    const draft = await h.host('draft_edit', { workspaceId: h.workspaceId, expectedRevision: r0, patch: { params: { positivePrompt: 'a manual pier' } } });
+    expect((await h.host('apply_edit', { workspaceId: h.workspaceId, expectedRevision: r0, draftId: draft.draftId })).revision).toBe(r0 + 1);
     await useAppStore.getState().generate();
     expect(useAppStore.getState().statusText).toBe('Added to the queue; 2 ahead.');
     expect(useAppStore.getState().generationPhase).toBe('queued');

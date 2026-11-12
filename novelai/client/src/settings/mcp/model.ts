@@ -10,7 +10,7 @@ export const MCP_SERVER_NAME = 'novelai';
 export const MCP_TOOL_GROUPS = {
   library: ['asset_library', 'material_library', 'material_studies', 'tag_details'],
   queue: ['prepare_recipe', 'enqueue_recipes', 'lookup_enqueue', 'list_queue', 'read_queue', 'get_queue_result', 'control_queue'],
-  canvas: ['list_workspaces', 'read_workspace', 'read_prompt_review', 'get_asset', 'draft_edit', 'apply_edit', 'undo_edit'],
+  canvas: ['list_workspaces', 'read_workspace'],
 } as const;
 export type McpToolGroup = keyof typeof MCP_TOOL_GROUPS;
 export const MCP_TOOL_NAMES: readonly string[] = Object.values(MCP_TOOL_GROUPS).flat();

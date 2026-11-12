@@ -58,17 +58,16 @@ const NO_ARGUMENT_TOOLS = ['list_queue', 'list_workspaces'];
 // non-strict Anthropic messages conversion); every tool must still have its parameters after that projection.
 const minimalProjection = schema => ({ type: 'object', properties: schema.properties ?? {}, required: schema.required ?? [] });
 
-test('N1 surface: 18 tools, core layer first, flat closed schemas that survive a minimal client projection', async t => {
+test('N1 surface: 13 tools, core layer first, flat closed schemas that survive a minimal client projection', async t => {
   const { client } = await connect(t);
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 18);
+  assert.equal(tools.length, 13);
   assert.deepEqual(tools, TOOL_DEFINITIONS);
   assert.deepEqual(tools.map(tool => tool.name), [...CORE_TOOL_NAMES, ...CANVAS_TOOL_NAMES]);
-  assert.equal(CORE_TOOL_NAMES.length, 11); assert.equal(CANVAS_TOOL_NAMES.length, 7);
-  assert.equal(CANVAS_TOOL_NAMES.at(-1), 'undo_edit', 'the canvas generation tools were retired (2026-11-02)');
+  assert.equal(CORE_TOOL_NAMES.length, 11); assert.deepEqual(CANVAS_TOOL_NAMES, ['list_workspaces', 'read_workspace'], 'the canvas generation tools were retired on 2026-11-02, the self-check and draft tools on 2026-11-12');
   assert.ok(!tools.some(tool => tool.name === 'style_sweep'), 'the style sweep tool was removed');
   assert.ok(!tools.some(tool => tool.name === 'search_tags'));
-  assert.deepEqual(new Set(tools.map(tool => tool.name)).size, 18, 'no duplicate names');
+  assert.deepEqual(new Set(tools.map(tool => tool.name)).size, 13, 'no duplicate names');
   for (const tool of TOOL_REGISTRY) assert.ok(['core', 'canvas'].includes(tool.layer), tool.name);
   assert.deepEqual(TOOL_REGISTRY.filter(tool => tool.layer === 'core').map(tool => tool.name), CORE_TOOL_NAMES);
   for (const tool of tools) {
@@ -178,8 +177,10 @@ test('N4 size budget: tools/list totals stay under the agreed ceilings', async t
   // asset_library censor (the agent's way to the window's Censor and export; asked for by the user 2026-11-11) adds
   // its action, five fields and the rules a caller must know before the call (what is written and where, the mask
   // grammar it shares with inpaint, the default cell size, preview first): asset_library goes to 6.9k and core to
-  // 43.3k; the whole server still fits in 50k.
-  assert.ok(total <= 50_000, `whole server ${total}`);
+  // 43.3k; the whole server still fits in 50k. Compact reads (asked for by the user 2026-11-12): the five canvas
+  // self-check and draft tools are retired and prepare_recipe describes its compact readback inside the same core
+  // ceiling, so the whole server goes down to 45.5k (about 44.9k used).
+  assert.ok(total <= 45_500, `whole server ${total}`);
   assert.ok(core <= 43_300, `core layer ${core}`);
   assert.ok(asset <= 6_900, `asset_library ${asset}`);
 });
@@ -234,17 +235,17 @@ test('N9 one error envelope: canvas tools hide unrecognized failures, scrub path
   }
   const projectFile = join(PROJECT_ROOT, 'novelai', 'library', 'entry.json');
   thrower = () => { throw new BridgeError('conflict', `open '/Users/someone/x/y.json' and '${projectFile}' failed; api_key: k-123; Authorization: Bearer abc.def.ghi`, { note: "path '/Users/someone/a.png'", currentRevision: 5, apiKey: 'dropped', requestKey: 'injected /Users/someone/x token=zz' }); };
-  const conflict = envelope(await call('apply_edit', { workspaceId: 'w', expectedRevision: 4, draftId: 'd' }));
+  const conflict = envelope(await call('read_workspace', { workspaceId: 'w', includeImages: false }));
   assert.equal(conflict.code, 'conflict');
   for (const secret of ['/Users/someone', 'k-123', 'abc.def.ghi', 'zz', PROJECT_ROOT]) assert.ok(!JSON.stringify(conflict).includes(secret), `${secret} leaked: ${JSON.stringify(conflict)}`);
   assert.match(conflict.message, /novelai\/library\/entry\.json/, 'project paths become project-relative');
   assert.match(conflict.message, /<path>/);
   assert.deepEqual(Object.keys(conflict.details).sort(), ['currentRevision', 'note', 'requestKey']);
   assert.equal(conflict.details.currentRevision, 5);
-  // An identity the call itself sent (here the draftId of apply_edit) comes back byte-for-byte; other identity-named fields are scrubbed.
+  // A host key in its own format comes back byte-for-byte; other identity-named fields are scrubbed.
   const requestKey = 'night /Users/Alice/drafts token: v1';
   thrower = () => { throw new BridgeError('timeout', 'Outcome unknown; read the workspace before continuing.', { requestKey: `mcp-${'a'.repeat(24)}-${'b'.repeat(64)}`, other: { requestKey: 'different /Users/Alice/x/y' }, note: requestKey }); };
-  const unknown = envelope(await call('apply_edit', { workspaceId: 'w', expectedRevision: 4, draftId: 'd' }));
+  const unknown = envelope(await call('read_workspace', { workspaceId: 'w', includeImages: false }));
   assert.equal(unknown.code, 'timeout');
   assert.equal(unknown.details.requestKey, `mcp-${'a'.repeat(24)}-${'b'.repeat(64)}`, 'a host key in its own format passes unchanged');
   assert.equal(unknown.details.other.requestKey, 'different <path>');
@@ -260,7 +261,7 @@ test('N9 one error envelope: canvas tools hide unrecognized failures, scrub path
 const STRICT_HISTORY = { kind: 'history', id: 'h', revision: 1, assetId: 'a' };
 const T2I = { mode: 't2i', model: 'nai-diffusion-5-full', width: 832, height: 1216, steps: 28, cfgScale: 5, sampler: 'k_euler_ancestral', noiseSchedule: 'karras', ucPreset: 0, qualityPreset: 'standard', stylePrompt: '', positivePrompt: 'garden', negativePrompt: '', seed: 1 };
 const UPSCALE = { mode: 'upscale', source: { kind: 'history', historyId: 'h', historyRevision: 1, assetId: 'a' }, scale: 2 };
-const w = { workspaceId: 'w' }, v = { workspaceId: 'w', expectedRevision: 1 };
+const w = { workspaceId: 'w' };
 /** One valid call per tool (several for multi-method tools), enough to reach every fixed host method. */
 const EXERCISE = {
   material_library: [{ action: 'list' }, { action: 'search_tags', query: 'garden', limit: 20 }, { action: 'cover', entryId: 'e' }, { action: 'set_cover_from_history', entryId: UUID, revision: 1, expectedCoverRevision: 0, historyId: 'h', historyRevision: 1, assetId: 'a' }],
@@ -269,8 +270,7 @@ const EXERCISE = {
   prepare_recipe: [T2I, { ...T2I, recipeId: UUID, expectedRevision: 1 }, UPSCALE, { ...UPSCALE, preview: true }, { mode: 't2i', canvas: { workspaceId: 'w', expectedRevision: 1 } }],
   enqueue_recipes: [{ requestKey: 'n10', items: [{ recipeId: UUID, recipeRevision: 1, inputHash: 'a'.repeat(64) }] }], lookup_enqueue: [{ requestKey: 'n10' }],
   list_queue: [{}], read_queue: [{ batchId: UUID }], get_queue_result: [{ batchId: UUID, itemIndex: 0 }], control_queue: ['pause', 'resume', 'cancel'].map(action => ({ batchId: UUID, action })),
-  list_workspaces: [{}], read_workspace: [w], read_prompt_review: [{ ...v, mode: 't2i' }], get_asset: [{ ...v, assetId: 'current' }], draft_edit: [{ ...v, patch: {} }], apply_edit: [{ ...v, draftId: 'd' }],
-  undo_edit: [v],
+  list_workspaces: [{}], read_workspace: [w],
 };
 // Replies just complete enough to reach each tool's follow-up host calls.
 const pngBytes = Buffer.from(png, 'base64'), pngSha = createHash('sha256').update(pngBytes).digest('hex');
@@ -330,7 +330,7 @@ test('N10 host methods: every declared method is a real bridge method, and every
 });
 
 test('N10 every host call observed across this file was made by a tool that declares that method', () => {
-  assert.ok(observed.length > 40, `${observed.length} host calls observed`);
+  assert.ok(observed.length > 25, `${observed.length} host calls observed`);
   const outside = observed.filter(({ tool, method }) => !registry.get(tool)?.hostMethods.includes(method));
   assert.deepEqual(outside, []);
 });
@@ -404,10 +404,10 @@ test('hostCallScope denies by default: in the production wiring a host call outs
 test('P3-5 the instructions say which canvas tools take no workspaceId', async t => {
   const { client } = await connect(t);
   const instructions = client.getInstructions() ?? '';
-  assert.doesNotMatch(instructions, /(?<!Most )Canvas tools take a workspaceId/);
+  assert.doesNotMatch(instructions, /canvas tools take a workspaceId/i);
   const without = TOOL_REGISTRY.filter(tool => tool.layer === 'canvas' && !tool.inputSchema.properties?.workspaceId).map(tool => tool.name);
   assert.deepEqual(without, ['list_workspaces']);
-  for (const name of without) assert.ok(new RegExp(`except[^.]*\\b${name}\\b`).test(instructions), `${name} is named as an exception: ${instructions}`);
+  for (const name of without) assert.ok(new RegExp(`\\b${name}\\b \\(no arguments\\)`).test(instructions), `${name} is named as taking none: ${instructions}`);
 });
 
 test('host_call_outside_tool is mapped like host_method_not_allowed when a tool loses its call context', async t => {

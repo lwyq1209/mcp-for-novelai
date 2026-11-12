@@ -149,7 +149,7 @@ async function connect(t, bridgeClient, options = {}) {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport); await client.connect(clientTransport);
   t.after(async () => { await client.close(); await server.close(); });
-  return { call: (name, args) => client.callTool({ name, arguments: args }), readRecipe: directRecipes(bridgeClient) };
+  return { call: (name, args) => client.callTool({ name, arguments: fullDetail(name, args) }), raw: (name, args) => client.callTool({ name, arguments: args }), readRecipe: directRecipes(bridgeClient) };
 }
 // read_recipe is no longer an MCP tool. Stored-revision readbacks go through the recipe module's read() on the same
 // bridge double, in the same success/error envelope a core tool returns.
@@ -160,6 +160,8 @@ const directRecipes = bridgeClient => {
     catch (error) { return errorResult(failure(error, { roots: projectRoots(PROJECT_ROOT), trusted: trustedIdentities(args), policy: 'opaque', layer: 'core' })); }
   };
 };
+// The assertions of this file read the full readback; the compact default has its own tests (search "compact readback").
+const fullDetail = (name, args) => name === 'prepare_recipe' && args !== null && typeof args === 'object' && !Array.isArray(args) && args.detail === undefined ? { ...args, detail: 'full' } : args;
 const errorOf = result => { assert.equal(result.isError, true, JSON.stringify(result.structuredContent ?? result)); return result.structuredContent.error; };
 const ok = result => { assert.ok(!result.isError, JSON.stringify(result.structuredContent ?? result)); return result.structuredContent; };
 const t2i = (patch = {}) => ({ mode: 't2i', model: 'nai-diffusion-5-full', width: 832, height: 1216, steps: 28, cfgScale: 5, sampler: 'k_euler_ancestral', noiseSchedule: 'karras',
@@ -173,6 +175,62 @@ const policyFile = async (t, required) => {
   await writeFile(file, JSON.stringify({ schemaVersion: 1, required, updatedAt: '2026-09-27T00:00:00.000Z' }));
   return file;
 };
+
+test('prepare_recipe readback is compact by default: nothing the caller wrote is echoed, what the host appended is kept, and detail:"full" is the same recipe', async t => {
+  const h = await realHost(t);
+  const { call, raw } = await connect(t, h.bridge);
+  const args = t2i({ stylePrompt: 'watercolor, soft light', positivePrompt: '1girl, garden, wide shot from across the pond', negativePrompt: 'blurry, extra fingers',
+    characters: [{ prompt: 'girl, red dress', negativePrompt: 'hat', useCoords: true, x: 0.3, y: 0.5 }, { prompt: 'boy, blue coat', useCoords: true, x: 0.7, y: 0.5 }] });
+  const full = ok(await call('prepare_recipe', { ...args, detail: 'full' }));
+  const compact = ok(await raw('prepare_recipe', args));
+  assert.deepEqual(h.methods(), ['put_queue_recipe', 'put_queue_recipe'], 'detail is a view: the host call is the same and detail never reaches it');
+  assert.equal(JSON.stringify(h.calls).includes('"detail"'), false);
+  assert.deepEqual([compact.inputHash, compact.ready, compact.lineage, compact.saved, compact.generationSubmitted], [full.inputHash, true, 'plain', true, false]);
+  assert.match(compact.recipeId, /^[a-f0-9-]{36}$/); assert.equal(compact.recipeRevision, 1); assert.match(compact.next, /Check warnings and effective/);
+  assert.equal(compact.detail, 'compact'); assert.deepEqual(compact.omitted, ['authored', 'effectiveRequest', 'unusedInputs', 'assets']);
+  for (const key of ['authored', 'effectiveRequest', 'unusedInputs', 'assets', 'readiness', 'authoredPrompts']) assert.equal(Object.hasOwn(compact, key), false, key);
+  const text = JSON.stringify(compact);
+  for (const written of [args.stylePrompt, args.positivePrompt, args.negativePrompt, 'girl, red dress', 'boy, blue coat', '"hat"']) assert.equal(text.includes(written), false, `${written} is not echoed`);
+  assert.deepEqual(compact.effective, {
+    model: 'nai-diffusion-5-full', width: 832, height: 1216, steps: 28, cfgScale: 5, cfgRescale: 0, sampler: 'k_euler_ancestral', noiseSchedule: 'karras', seed: 1234, seedPolicy: 'fixed', useCoords: true,
+    automaticQuality: { preset: 'standard', appendedText: 'very aesthetic, masterpiece, no text' }, ucPreset: { preset: 2, text: V5_HUMAN },
+    characters: [{ index: 0, center: { x: 0.3, y: 0.5 } }, { index: 1, center: { x: 0.7, y: 0.5 } }] });
+  // The parts the compact readback names rebuild the final prompts of the full one.
+  assert.equal(full.effective.positivePrompt, [args.stylePrompt, args.positivePrompt, compact.effective.automaticQuality.appendedText].join(', '));
+  assert.equal(full.effective.negativePrompt, [args.negativePrompt, compact.effective.ucPreset.text].join(', '));
+  assert.ok(text.length < JSON.stringify(full).length / 3, `compact ${text.length} of full ${JSON.stringify(full).length}`);
+  t.diagnostic(`t2i readback characters: compact ${text.length}, full ${JSON.stringify(full).length}`);
+
+  assert.deepEqual(ok(await raw('prepare_recipe', { ...args, detail: 'compact' })).effective, compact.effective, 'compact is the default');
+  assert.equal(errorOf(await call('prepare_recipe', { ...args, detail: 'everything' })).code, 'invalid_arguments');
+
+  // Medium: the values it replaces are warnings (the stored recipe already holds what runs), and its fixed UC is named once.
+  const medium = ok(await raw('prepare_recipe', t2i({ effort: 'medium' })));
+  assert.deepEqual(medium.effective.characters, [{ index: 0, center: { x: 0.3, y: 0.5 } }]);
+  assert.equal(medium.effective.effort.level, 'medium'); assert.equal(Object.hasOwn(medium.effective.effort.fixed, 'undesiredContent'), false);
+  assert.equal(medium.effective.ucPreset.fixedByEffort, true);
+  assert.equal(JSON.stringify(medium).split(medium.effective.ucPreset.text).length - 1, 1, 'the fixed UC is stated once');
+  assert.ok(medium.warnings.length > 0, 'the replaced fields are named');
+  const transparent = ok(await raw('prepare_recipe', t2i({ transparentBackground: true })));
+  assert.equal(transparent.effective.transparentBackground.enabled, true);
+});
+
+test('compactReadback: final prompts stay when the appended text cannot be separated; a blocked recipe keeps its readiness; other values pass through', () => {
+  const { compactReadback } = recipeQueue;
+  const effective = { model: 'm', width: 64, height: 64, steps: 1, cfgScale: 1, cfgRescale: 0, sampler: 's', noiseSchedule: 'n', seed: 1, seedPolicy: 'fixed', nSamples: 1, positivePrompt: 'legacy final', negativePrompt: 'legacy negative',
+    automaticQuality: { preset: 'standard', appendedText: null, derivedFromBuilderOutput: false }, ucPreset: { preset: 0, text: null, derivedFromBuilderOutput: false }, effort: { level: 'high', requestModel: 'm' },
+    transparentBackground: { enabled: false, straightAlpha: false, appendedText: null }, useCoords: false, characters: [] };
+  const full = { recipeId: 'r', recipeRevision: 1, inputHash: 'h', mode: 't2i', lineage: 'plain', ready: true, readiness: { status: 'ready', issues: [] }, warnings: [{ code: 'readback_not_derived', message: 'm' }],
+    authored: { stylePrompt: '', positivePrompt: 'p', negativePrompt: '', characters: [] }, effective, effectiveRequest: { input: 'legacy final' }, unusedInputs: ['mask'], assets: [], saved: true, generationSubmitted: false, next: 'n' };
+  const compact = compactReadback(full);
+  assert.deepEqual([compact.effective.positivePrompt, compact.effective.negativePrompt], ['legacy final', 'legacy negative']);
+  assert.deepEqual(compact.effective.automaticQuality, effective.automaticQuality);
+  assert.equal(Object.hasOwn(compact.effective, 'effort'), false); assert.equal(Object.hasOwn(compact.effective, 'transparentBackground'), false); assert.equal(Object.hasOwn(compact.effective, 'nSamples'), false);
+  assert.deepEqual([compact.saved, compact.generationSubmitted, compact.next, compact.warnings], [true, false, 'n', full.warnings]);
+  const blocked = compactReadback({ ...full, ready: false, readiness: { status: 'blocked', issues: [{ code: 'x' }] }, effective: null });
+  assert.deepEqual([blocked.ready, blocked.readiness, blocked.effective], [false, { status: 'blocked', issues: [{ code: 'x' }] }, null]);
+  for (const other of [null, undefined, { status: 'enqueued' }, 'text']) assert.equal(compactReadback(other), other);
+});
 
 test('prepare_recipe freezes a t2i recipe through the real host builder and reads back the actual effective input', async t => {
   const h = await realHost(t);

@@ -103,8 +103,10 @@ async function connect(t, bridgeClient) {
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(b); await client.connect(a);
   t.after(async () => { await client.close(); await server.close(); });
-  return (name, args) => client.callTool({ name, arguments: args });
+  return (name, args) => client.callTool({ name, arguments: fullDetail(name, args) });
 }
+// The assertions of this file read the full readback; the compact default has its own tests (search "compact readback").
+const fullDetail = (name, args) => name === 'prepare_recipe' && args !== null && typeof args === 'object' && !Array.isArray(args) && args.detail === undefined ? { ...args, detail: 'full' } : args;
 const ok = result => { assert.ok(!result.isError, JSON.stringify(result.structuredContent ?? result).slice(0, 3000)); return result.structuredContent; };
 const errorOf = result => { assert.equal(result.isError, true, JSON.stringify(result.structuredContent ?? result).slice(0, 3000)); return result.structuredContent.error; };
 const ref = recipe => ({ recipeId: recipe.recipeId, recipeRevision: recipe.recipeRevision, inputHash: recipe.inputHash });
@@ -136,6 +138,40 @@ test('t2i: the canvas becomes a new recipe with canvas lineage; only the images 
   assert.equal(receipt.status, 'enqueued');
   assert.equal(receipt.warnings, undefined, 'no warning for a canvas recipe');
   assert.equal(h.jobs[0].args.mode, 't2i'); assert.deepEqual(h.jobs[0].args.seeds, [5, 6]);
+});
+
+test('compact readback of a canvas recipe: its texts are stated once (authoredPrompts, characters); image modes keep the source and mask without hashes or spec', async t => {
+  const h = await realHost(t), call = await connect(t, h.bridge);
+  h.canvas.state = canvasState({ params: { stylePrompt: 'ink wash, muted palette', positivePrompt: 'a lighthouse on a cliff at dusk', negativePrompt: 'blurry, text' },
+    charCaptions: [{ prompt: 'keeper, long coat', negativePrompt: 'hat', useCoords: true, x: 0.4, y: 0.6 }, { prompt: 'black cat', negativePrompt: '', useCoords: true, x: 0.7, y: 0.8 }] });
+  const full = ok(await call('prepare_recipe', { mode: 't2i', canvas: at(), preview: true }));
+  const compact = ok(await call('prepare_recipe', { mode: 't2i', canvas: at(), preview: true, detail: 'compact' }));
+  assert.deepEqual(h.calls.at(-1).args, { workspaceId: WORKSPACE, expectedRevision: 3, mode: 't2i', preview: true }, 'detail never reaches the host');
+  assert.deepEqual([compact.lineage, compact.inputHash, compact.detail, compact.preview], ['canvas', full.inputHash, 'compact', true]);
+  assert.deepEqual(compact.canvas, full.canvas);
+  assert.deepEqual(compact.authoredPrompts, { stylePrompt: 'ink wash, muted palette', positivePrompt: 'a lighthouse on a cliff at dusk', negativePrompt: 'blurry, text' });
+  assert.deepEqual(compact.effective.characters, [{ index: 0, center: { x: 0.4, y: 0.6 }, prompt: 'keeper, long coat', negativePrompt: 'hat' }, { index: 1, center: { x: 0.7, y: 0.8 }, prompt: 'black cat' }]);
+  assert.equal(full.effective.positivePrompt, ['ink wash, muted palette', 'a lighthouse on a cliff at dusk', compact.effective.automaticQuality.appendedText].join(', '));
+  assert.equal(full.effective.negativePrompt, ['blurry, text', compact.effective.ucPreset.text].join(', '));
+  const text = JSON.stringify(compact);
+  for (const once of ['ink wash, muted palette', 'a lighthouse on a cliff at dusk', 'blurry, text', 'keeper, long coat', 'black cat', compact.effective.ucPreset.text]) assert.equal(text.split(once).length - 1, 1, once);
+  for (const key of ['authored', 'effectiveRequest', 'unusedInputs', 'assets']) assert.equal(Object.hasOwn(compact, key), false, key);
+  t.diagnostic(`canvas t2i readback characters: compact ${text.length}, full ${JSON.stringify(full).length}`);
+
+  const source = gradient(512, 768);
+  h.canvas.state = canvasState({ params: { width: 512, height: 768 }, inpaintPositivePrompt: 'a red umbrella' });
+  h.canvas.images = { source, mask: rectMask(512, 768) };
+  const preview = await call('prepare_recipe', { mode: 'inpaint', canvas: at(), preview: true, detail: 'compact' });
+  const inpaint = ok(preview);
+  assert.equal(preview.content.filter(item => item.type === 'image').length, 1, 'the mask overlay is still attached');
+  assert.equal(inpaint.previewImage.imageAttached, true); assert.equal(Object.hasOwn(inpaint.previewImage, 'data'), false);
+  assert.deepEqual(inpaint.source, { kind: 'embedded', width: 512, height: 768 });
+  assert.deepEqual(Object.keys(inpaint.mask), ['width', 'height', 'selectedCells', 'totalCells', 'bboxCells', 'layers']);
+  assert.deepEqual(inpaint.effective.requestSource, { width: 512, height: 768 }); assert.deepEqual(Object.keys(inpaint.effective.requestMask), ['width', 'height']);
+  assert.equal(inpaint.authoredPrompts.positivePrompt, 'a red umbrella');
+  const upscale = ok(await call('prepare_recipe', { mode: 'upscale', canvas: at(), preview: true, detail: 'compact' }));
+  assert.deepEqual(upscale.effective, ok(await call('prepare_recipe', { mode: 'upscale', canvas: at(), preview: true })).effective, 'a post-processing view is small and stays whole');
+  assert.equal(Object.hasOwn(upscale, 'authoredPrompts'), false);
 });
 
 test('a V5 Full canvas on Medium effort is captured as the Medium request; the readback names what Medium replaced', async t => {
@@ -268,7 +304,7 @@ test('image modes copy the canvas source (and the inpaint mask) in; preview save
   assert.deepEqual(value.canvas, { workspaceId: WORKSPACE, revision: 3, draftId: null, patched: false, capturedAt: '2026-11-02T10:00:00.000Z' });
   assert.equal(value.ready, true, JSON.stringify(value.readiness)); assert.equal(value.previewImage.imageAttached, true); assert.ok(value.previewImage.cells.selected > 0);
   assert.equal(preview.content.filter(item => item.type === 'image').length, 1);
-  assert.match(value.next, /draft_edit/);
+  assert.match(value.next, /Change the mask on the canvas in the app/);
   assert.equal((await h.records()).length, 1, 'the preview saved nothing');
   const inpaint = ok(await call('prepare_recipe', { mode: 'inpaint', canvas: at() }));
   assert.equal(inpaint.mask.width, 512); assert.equal(inpaint.effective.inpaint.strength, 0.8);
@@ -278,7 +314,7 @@ test('image modes copy the canvas source (and the inpaint mask) in; preview save
   const blocked = ok(await call('prepare_recipe', { mode: 'inpaint', canvas: at() }));
   assert.equal(blocked.ready, false); assert.match(blocked.next, /blocked/);
   // A canvas recipe is never revised: the next step is to edit the canvas and capture it again.
-  assert.match(blocked.next, /cannot be revised: edit the canvas .*then capture it again with prepare_recipe \{canvas\}/); assert.doesNotMatch(blocked.next, /new revision/);
+  assert.match(blocked.next, /cannot be revised: change the canvas in the app, then capture it again with prepare_recipe \{canvas\}/); assert.doesNotMatch(blocked.next, /new revision/);
   assert.equal(errorOf(await call('enqueue_recipes', { requestKey: 'canvas-blocked', items: [ref(blocked)] })).code, 'recipe_blocked');
 });
 

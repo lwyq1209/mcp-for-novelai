@@ -720,7 +720,7 @@ function unappliedDraftWarning(reply, canvas) {
   const draftId = reply?.unappliedDraftId;
   if (canvas.draftId !== undefined || typeof draftId !== 'string' || !draftId) return [];
   const named = /^[\w.:-]{1,120}$/.test(draftId) ? ` (${draftId})` : '';
-  return [{ code: 'canvas_draft_not_captured', message: `The canvas has an unapplied draft${named}; this recipe captured the visible canvas state${canvas.patch !== undefined ? ' with your detached patch' : ''}, not that draft. To use the draft, capture again with canvas.draftId, or apply it (apply_edit) and capture the new revision.` }];
+  return [{ code: 'canvas_draft_not_captured', message: `The canvas has an unapplied draft${named}; this recipe captured the visible canvas state${canvas.patch !== undefined ? ' with your detached patch' : ''}, not that draft. To use the draft, capture again with canvas.draftId, or apply it in the app and capture the new revision.` }];
 }
 
 /** A canvas recipe's origin as the host stores it (client queue-recipe-service CanvasOrigin). */
@@ -927,6 +927,67 @@ export function recipeReadback(result, { built = null } = {}) {
     ...(source ? { source } : {}),
     ...(maskAsset ? { mask: maskReadback(maskAsset, result.assetProvenance?.mask, built) } : {}),
     ...(result.canvasOrigin ? { canvas: { workspaceId: result.canvasOrigin.workspaceId, revision: result.canvasOrigin.revision, draftId: result.canvasOrigin.draftId, patched: result.canvasOrigin.patched, capturedAt: result.canvasOrigin.capturedAt } } : {}),
+  };
+}
+
+/** What the compact readback leaves out of the full one (reported as `omitted`). */
+export const COMPACT_READBACK_OMITTED = Object.freeze(['authored', 'effectiveRequest', 'unusedInputs', 'assets']);
+export const READBACK_DETAILS = Object.freeze(['compact', 'full']);
+
+/** The effective view of a generation mode without the texts the caller already has; every text appears at most once. */
+function compactEffective(effective, authored, known) {
+  const { positivePrompt, negativePrompt, nSamples: _samples, automaticQuality, ucPreset, effort, transparentBackground, characters, requestSource, requestMask, sourceResized, ...rest } = effective;
+  // Not separable (legacy assembly or a mode prefix): the final texts are the only statement of what is sent.
+  const derived = automaticQuality?.appendedText !== null && ucPreset?.text !== null;
+  const sent = Array.isArray(authored?.characters) ? authored.characters : [];
+  return {
+    ...rest,
+    ...(derived ? {} : { positivePrompt, negativePrompt }),
+    automaticQuality: derived ? { preset: automaticQuality.preset, appendedText: automaticQuality.appendedText } : automaticQuality,
+    ucPreset: derived ? { preset: ucPreset.preset, text: ucPreset.text, ...(ucPreset.fixedByEffort ? { fixedByEffort: true } : {}) } : ucPreset,
+    // Medium: its fixed UC is ucPreset.text. High runs the model named above.
+    ...(effort?.level === 'medium' ? { effort: { ...effort, fixed: Object.fromEntries(Object.entries(effort.fixed ?? {}).filter(([key]) => key !== 'undesiredContent')) } } : {}),
+    ...(transparentBackground?.enabled ? { transparentBackground } : {}),
+    characters: (characters ?? []).map(({ index, prompt, negativePrompt: negative, center }) => {
+      const own = known ? sent[index] : undefined;
+      return { index, center,
+        ...(own && own.prompt === prompt ? {} : { prompt }),
+        ...(own ? ((own.negativePrompt ?? '') === negative ? {} : { negativePrompt: negative }) : negative === '' ? {} : { negativePrompt: negative }) };
+    }),
+    ...(requestSource ? { requestSource: { width: requestSource.width, height: requestSource.height } } : {}),
+    ...(sourceResized ? { sourceResized } : {}),
+    ...(requestMask ? { requestMask: { width: requestMask.width, height: requestMask.height } } : {}),
+  };
+}
+
+/**
+ * The default prepare_recipe readback: what the host made of the recipe, without repeating what the caller wrote.
+ * The full readback states every prompt three to five times (authored, effective, and the raw request, which
+ * carries it in input and v4_prompt, and the negative in uc, negative_prompt and v4_negative_prompt).
+ *
+ * - A plain recipe's stored inputs were compared with the request field by field (authoredDifferences; a difference
+ *   is recipe_input_mismatch, not a readback), so its prompts and character texts are not echoed: the readback
+ *   keeps the effective sampling, the text the host appended (automaticQuality.appendedText, ucPreset.text) and
+ *   any character text that differs from what was sent. The final positive prompt is stylePrompt, positivePrompt
+ *   and that quality text joined with ", "; the final negative is negativePrompt and the UC text.
+ * - A canvas recipe's inputs were never sent by the caller: authoredPrompts and the character texts state them once.
+ * - When the appended text could not be separated (warning readback_not_derived), the final prompts stay.
+ * - Post-processing modes keep their effective view; source and mask keep identity, size and cell counts.
+ */
+export function compactReadback(full) {
+  if (!record(full) || !MODES.includes(full.mode)) return full;
+  const { authored, effective, effectiveRequest: _request, unusedInputs: _unused, assets: _assets, readiness, source, mask, previewImage, recipeId, recipeRevision, inputHash, mode, lineage, ready, warnings, ...rest } = full;
+  const known = lineage === 'plain', generation = seeded(mode) && record(effective) && record(effective.automaticQuality);
+  return {
+    recipeId, recipeRevision, inputHash, mode, lineage, ready, ...(ready ? {} : { readiness }), warnings,
+    detail: 'compact', omitted: COMPACT_READBACK_OMITTED,
+    effective: generation ? compactEffective(effective, authored, known) : effective ?? null,
+    ...(seeded(mode) && !known && record(authored) ? { authoredPrompts: { stylePrompt: authored.stylePrompt ?? '', positivePrompt: authored.positivePrompt ?? '', negativePrompt: authored.negativePrompt ?? '' } } : {}),
+    ...(source ? { source: Object.fromEntries(Object.entries(source).filter(([key]) => !['sha256', 'mimeType', 'byteLength'].includes(key))) } : {}),
+    ...(mask ? { mask: { width: mask.width, height: mask.height, selectedCells: mask.selectedCells, totalCells: mask.totalCells, bboxCells: mask.bboxCells, layers: mask.layers } } : {}),
+    ...rest,
+    // The overlay itself is attached as an image; its bytes (data) leave the JSON in the tool handler.
+    ...(record(previewImage) ? { previewImage: Object.fromEntries(Object.entries(previewImage).filter(([key]) => !['sha256', 'byteLength', 'basis'].includes(key))) } : {}),
   };
 }
 
@@ -1247,9 +1308,9 @@ export function createRecipeQueue({ bridge, monotonicNow = () => performance.now
 
   /** The next step after a saved recipe, by readiness and mode. A canvas recipe cannot be revised: the canvas is captured again. */
   const nextStep = (observed, mode) => observed.snapshot.reviewInput.readiness.status !== 'ready' ? (recipeLineage(observed) === 'canvas'
-    ? 'This canvas recipe is blocked (see readiness) and cannot be revised: edit the canvas (draft_edit, apply_edit), then capture it again with prepare_recipe {canvas}.'
+    ? 'This canvas recipe is blocked (see readiness) and cannot be revised: change the canvas in the app, then capture it again with prepare_recipe {canvas}.'
     : 'This recipe is blocked (see readiness); fix the inputs with a new revision before enqueueing.')
-    : seeded(mode) ? `Check effective (final prompts, automaticQuality, ucPreset, ${mode === 't2i' ? 'transparentBackground' : 'mode parameters, source'}, characters) against your intent, then enqueue_recipes with exactly this recipeId, recipeRevision and inputHash.`
+    : seeded(mode) ? `Check warnings and effective (sampling, automaticQuality, ucPreset, ${mode === 't2i' ? 'transparentBackground' : 'mode parameters, source'}, characters) against your intent, then enqueue_recipes with exactly this recipeId, recipeRevision and inputHash.`
       : `Check effective (${mode} parameters and input size) against your intent, then enqueue_recipes with exactly this recipeId, recipeRevision and inputHash, once, without seeds or count: ${mode} makes one image per recipe per enqueue.`;
 
   /**
@@ -1305,7 +1366,7 @@ export function createRecipeQueue({ bridge, monotonicNow = () => performance.now
     if (image && built && image.cells.selected !== built.selectedCells) warnings.push({ code: 'mask_cells_differ', message: `The host request mask selects ${image.cells.selected} cells; this server computed ${built.selectedCells}. Trust the host count and the preview image.` });
     return { ...readback, warnings, preview: true, saved: false, generationSubmitted: false,
       previewImage: image && { mimeType: image.mimeType, width: image.width, height: image.height, byteLength: image.byteLength, sha256: image.sha256, ...(record(image.basis) ? { basis: image.basis } : {}), cells: { selected: image.cells.selected, total: image.cells.total }, data: image.data },
-      next: image ? `Look at the attached preview: the latent cells the host will repaint are tinted red on the actual request source. ${observed.canvasOrigin ? 'Change the canvas mask (draft_edit) and preview again, or call prepare_recipe with the same canvas arguments without preview to save the recipe.' : 'Adjust the mask and preview again, or call prepare_recipe with the same arguments without preview to save the recipe.'}`
+      next: image ? `Look at the attached preview: the latent cells the host will repaint are tinted red on the actual request source. ${observed.canvasOrigin ? 'Change the mask on the canvas in the app and preview again (read_workspace gives the new revision), or call prepare_recipe with the same canvas arguments without preview to save the recipe.' : 'Adjust the mask and preview again, or call prepare_recipe with the same arguments without preview to save the recipe.'}`
         : 'Nothing was saved. Check the readback, then call prepare_recipe with the same arguments without preview to save the recipe.' };
   }
 

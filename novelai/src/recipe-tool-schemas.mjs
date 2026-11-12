@@ -6,7 +6,7 @@
  * field again (per mode) before any host call; the mask is validated only there,
  * so its errors carry details {reason, path}.
  */
-import { DIRECTOR_EMOTIONS, DIRECTOR_TOOLS, EFFORT_VALUES, MAX_QUEUE_ITEMS, MAX_QUEUE_SEED, MAX_TEXT, NOISE_SCHEDULES, QUALITY_PRESETS, QUEUE_FILE_PREFIX_MAX, QUEUE_FILE_PREFIX_PATTERN, QUEUE_HISTORY_GROUP_MAX, RECIPE_HOST_METHODS, RECIPE_MODES, RECIPE_SOURCE_HOST_METHODS, T2I_MODELS, T2I_SAMPLERS } from './recipe-queue.mjs';
+import { DIRECTOR_EMOTIONS, DIRECTOR_TOOLS, EFFORT_VALUES, MAX_QUEUE_ITEMS, MAX_QUEUE_SEED, MAX_TEXT, NOISE_SCHEDULES, QUALITY_PRESETS, QUEUE_FILE_PREFIX_MAX, QUEUE_FILE_PREFIX_PATTERN, QUEUE_HISTORY_GROUP_MAX, READBACK_DETAILS, RECIPE_HOST_METHODS, RECIPE_MODES, RECIPE_SOURCE_HOST_METHODS, T2I_MODELS, T2I_SAMPLERS } from './recipe-queue.mjs';
 
 const schema = (properties = {}, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
 const positive = { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER };
@@ -22,9 +22,9 @@ const requestKey = { type: 'string', minLength: 1, maxLength: 120, pattern: '\\S
 const recipeRef = { recipeId: { ...uuid, description: 'Recipe ID from prepare_recipe.' }, recipeRevision: positive, inputHash: { ...hash64, description: 'Exact inputHash returned with that recipe revision.' } };
 
 const text = { type: 'string', minLength: 1, pattern: '\\S' };
-// The live-canvas input (src/recipe-queue.mjs canvasPlan checks it again); patch is read_prompt_review's detached t2i text patch.
+// The live-canvas input (src/recipe-queue.mjs canvasPlan checks it again); patch is a detached t2i text patch.
 const canvasInput = { type: 'object', additionalProperties: false, required: ['workspaceId', 'expectedRevision'],
-  description: 'Capture the live canvas instead of inline fields (only mode and preview may accompany it); see the tool description.',
+  description: 'Capture the live canvas instead of inline fields (only mode, preview and detail may accompany it); see the tool description.',
   properties: { workspaceId: text, expectedRevision: { type: 'integer', minimum: 0, description: 'The workspace revision from read_workspace.' }, draftId: text,
     patch: { type: 'object', additionalProperties: false, properties: { params: { type: 'object' }, charCaptions: { type: 'array' } }, description: 't2i only, without draftId: a detached text patch.' } } };
 
@@ -34,6 +34,7 @@ const PREPARE_RECIPE_SCHEMA = schema({
   expectedRevision: positive,
   mode: { type: 'string', enum: [...RECIPE_MODES] },
   preview: { type: 'boolean', description: 'Dry run: validate and build without saving (no recipeId, revision or quota).' },
+  detail: { type: 'string', enum: [...READBACK_DETAILS], default: 'compact' },
   // Two shapes in one nested object (no anyOf); the server checks the per-kind fields (src/recipe-sources.mjs sourceIdentity).
   source: { type: 'object', additionalProperties: false, required: ['kind'], description: 'Image modes: see the tool description.',
     properties: { kind: { enum: ['history', 'study'] }, historyId: identity, historyRevision: positive, assetId: identity, studyId: uuid, studyRevision: positive } },
@@ -87,8 +88,8 @@ const PREPARE_RECIPE_DESCRIPTION = 'Freeze one independent recipe revision in th
   + 'upscale: source (scale 2). director: source, tool, optional defry 0–5, colorizePrompt (colorize only), emotion + optional emotionLevel 0–5 (emotion only). upscale/director use no seed; a source over 1,048,576 px is downscaled (warning source_downscaled) unless acceptDownscale:false. '
   + 'preview:true runs the same checks and the host builder without saving anything; for inpaint it returns a WebP of the actual request source with the latent cells the mask selects tinted red, so check the mask, adjust and preview again before saving. '
   + 'To revise, pass recipeId with its current expectedRevision, the same mode and every field again (source too); the host saves a new immutable revision. '
-  + 'canvas {workspaceId, expectedRevision, draftId?|patch?} with mode (and optional preview) instead captures the live canvas at exactly that revision into a new recipe: every input of that mode as the canvas holds it, its source and mask copied in. draftId reads that unapplied draft, patch a detached t2i text patch (params/charCaptions), as read_prompt_review does; nothing is adopted or changed, and a newer revision is a conflict (read the workspace again). A canvas recipe takes no other field, cannot be revised and does not inherit the canvas history group (pass historyGroup to enqueue_recipes); to show a draft on the canvas, apply_edit it. '
-  + 'Returns recipeId, recipeRevision, inputHash and a readback of the actual effective input from the host builder: the model id sent, final prompts with the automatic quality text (and the transparent-background text when enabled), final negative with the UC preset text, characters, sampling, mode parameters, source (identity, sha256, size), mask (selected cells, layers, spec) and warnings. Check the readback before enqueueing. Does not generate or enqueue. An unknown save outcome is never retried automatically.';
+  + 'canvas {workspaceId, expectedRevision, patch?} with mode (optional preview, detail) instead captures the live canvas at exactly that revision into a new recipe: every input of that mode as the canvas holds it, its source and mask copied in. patch is a detached t2i text patch (params/charCaptions); nothing is adopted or changed, and a newer revision is a conflict (read the workspace again). A canvas recipe takes no other field, cannot be revised and does not inherit the canvas history group (pass historyGroup to enqueue_recipes). '
+  + 'Returns recipeId, recipeRevision, inputHash and a readback of the actual effective input from the host builder. It is compact by default and does not echo your fields (the stored copy was compared with them; a difference is recipe_input_mismatch): the model id sent, sampling, mode parameters, the text the host appended (automaticQuality.appendedText, ucPreset.text), characters, source, mask cells and warnings; a canvas recipe adds its texts (authoredPrompts). detail:"full" adds authored, the final prompts, the raw request and the mask spec. Check the readback before enqueueing. Does not generate or enqueue. An unknown save outcome is never retried automatically.';
 
 const { put, read, preview, lookup, enqueue, list, capture } = RECIPE_HOST_METHODS;
 /**

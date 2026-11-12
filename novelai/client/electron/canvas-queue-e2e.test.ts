@@ -59,7 +59,8 @@ import { InMemoryTransport } from '../../node_modules/@modelcontextprotocol/sdk/
 import { waitUntil } from '../src/test-support/wait-until';
 
 const DAY = 24 * 60 * 60 * 1000;
-const RETIRED = ['submit_generation', 'submit_batch', 'list_generation_jobs', 'read_generation_job', 'get_generation_result', 'list_batches', 'read_batch', 'control_generation'];
+const RETIRED = ['submit_generation', 'submit_batch', 'list_generation_jobs', 'read_generation_job', 'get_generation_result', 'list_batches', 'read_batch', 'control_generation',
+  'read_prompt_review', 'get_asset', 'draft_edit', 'apply_edit', 'undo_edit'];
 const png = (width: number, height: number, value: number) => { const image = new PNG({ width, height }); for (let i = 0; i < image.data.length; i += 4) image.data.set([value, (i / 4) % 255, 120, 255], i); return PNG.sync.write(image); };
 const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; };
 async function zipReply(width = 64, height = 64) { const zip = new JSZip(); zip.file('image_0.png', png(width, height, 200)); return { data: await zip.generateAsync({ type: 'nodebuffer' }) }; }
@@ -128,14 +129,17 @@ async function start(options: { batch?: Partial<Parameters<typeof createBatchSer
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(b); await client.connect(a);
   closers.push(async () => { await client.close(); await server.close(); });
-  const call = async (name: string, args: Record<string, unknown> = {}) => { const result: any = await client.callTool({ name, arguments: args }); return { ok: !result.isError, value: result.structuredContent, content: result.content }; };
+  // These tests read the full readback (authored, the final prompts); the compact default is tested in novelai/tests.
+  const call = async (name: string, args: Record<string, unknown> = {}) => { const result: any = await client.callTool({ name, arguments: name === 'prepare_recipe' && args.detail === undefined ? { ...args, detail: 'full' } : args }); return { ok: !result.isError, value: result.structuredContent, content: result.content }; };
+  // The draft methods are the window's own (the MCP draft tools were retired on 2026-11-12): called on the renderer as the window does.
+  const host = (method: string, args: Record<string, unknown>) => toRenderer(method, args);
   const ok = async (name: string, args: Record<string, unknown> = {}) => { const result = await call(name, args); expect(result.ok, `${name}: ${JSON.stringify(result.value).slice(0, 1500)}`).toBe(true); return result.value; };
   const refused = async (name: string, args: Record<string, unknown>) => { const result = await call(name, args); expect(result.ok, `${name} should fail`).toBe(false); return result.value.error; };
   // Until the batch ends (the test timeout bounds it).
   const settle = (batchId: string) => waitUntil(async () => { const read = await ok('read_queue', { batchId }); expect(['succeeded', 'partial', 'blocked', 'cancelled'], `batch ${read.status}`).toContain(read.status); return read; }, { interval: 25 });
   const workspaceId = (await ok('list_workspaces')).workspaces[0].workspaceId;
   const revision = async () => (await ok('read_workspace', { workspaceId, includeImages: false })).revision;
-  return { queue, repository, clock, projectRoot, call, ok, refused, settle, workspace, workspaceId, revision, dispatched };
+  return { queue, repository, clock, projectRoot, call, ok, host, refused, settle, workspace, workspaceId, revision, dispatched };
 }
 const ref = (recipe: any) => ({ recipeId: recipe.recipeId, recipeRevision: recipe.recipeRevision, inputHash: recipe.inputHash });
 
@@ -143,7 +147,7 @@ describe('canvas → prepare_recipe {canvas} → enqueue_recipes → read_queue/
   it('t2i: a draft is read, not adopted; the queue runs while apply_edit works; results carry their seeds; a stale revision is a conflict; retired tools never reach the host', async () => {
     const h = await start();
     const r0 = await h.revision();
-    const draft = await h.ok('draft_edit', { workspaceId: h.workspaceId, expectedRevision: r0, patch: { params: { positivePrompt: 'a lighthouse at dusk' } } });
+    const draft = await h.host('draft_edit', { workspaceId: h.workspaceId, expectedRevision: r0, patch: { params: { positivePrompt: 'a lighthouse at dusk' } } });
     const recipe = await h.ok('prepare_recipe', { mode: 't2i', canvas: { workspaceId: h.workspaceId, expectedRevision: r0, draftId: draft.draftId } });
     expect(recipe).toMatchObject({ lineage: 'canvas', saved: true, ready: true, canvas: { workspaceId: h.workspaceId, revision: r0, draftId: draft.draftId, patched: false } });
     expect(recipe.authored.positivePrompt).toBe('a lighthouse at dusk');
@@ -167,7 +171,7 @@ describe('canvas → prepare_recipe {canvas} → enqueue_recipes → read_queue/
     expect((await h.ok('read_queue', { batchId: receipt.batch.batchId })).status).toBe('running');
     expect(useAppStore.getState().isGenerating).toBe(false);
     // (Manual generation joins this same queue since step 4a: electron/manual-queue-e2e.test.ts.)
-    const applied = await h.ok('apply_edit', { workspaceId: h.workspaceId, expectedRevision: r0, draftId: draft.draftId });
+    const applied = await h.host('apply_edit', { workspaceId: h.workspaceId, expectedRevision: r0, draftId: draft.draftId });
     expect(applied.state.params.positivePrompt).toBe('a lighthouse at dusk');
     expect(applied.revision).toBe(r0 + 1);
     first.resolve(await zipReply());
@@ -189,10 +193,10 @@ describe('canvas → prepare_recipe {canvas} → enqueue_recipes → read_queue/
 
     // A manual batch of this window is frozen too (step 4a): apply_edit works while it runs, and a capture reads as before.
     const r1 = await h.revision();
-    const next = await h.ok('draft_edit', { workspaceId: h.workspaceId, expectedRevision: r1, patch: { params: { positivePrompt: 'a quiet pier' } } });
+    const next = await h.host('draft_edit', { workspaceId: h.workspaceId, expectedRevision: r1, patch: { params: { positivePrompt: 'a quiet pier' } } });
     useAppStore.setState({ isGenerating: true, activeGenerationRunId: 'manual-run', generationPhase: 'requesting' });
     expect((await h.ok('prepare_recipe', { mode: 't2i', canvas: { workspaceId: h.workspaceId, expectedRevision: r1, draftId: next.draftId }, preview: true })).saved).toBe(false);
-    await h.ok('apply_edit', { workspaceId: h.workspaceId, expectedRevision: r1, draftId: next.draftId });
+    await h.host('apply_edit', { workspaceId: h.workspaceId, expectedRevision: r1, draftId: next.draftId });
     useAppStore.setState({ isGenerating: false, activeGenerationRunId: null, generationPhase: 'idle' });
 
     // The retired canvas generation tools are unknown and reach nothing.

@@ -76,7 +76,7 @@ const ok = result => { assert.ok(!result.isError, JSON.stringify(result.structur
 test('surface: the core layer lists the 11 core tools first, with flat object schemas, fixed annotations and no workspace', async t => {
   const { client } = await connect(t);
   const { tools: listed } = await client.listTools();
-  assert.equal(listed.length, 18);
+  assert.equal(listed.length, 13);
   assert.deepEqual(listed, TOOL_DEFINITIONS);
   assert.deepEqual(CORE_TOOL_NAMES, CORE_TOOLS);
   const tools = listed.slice(0, CORE_TOOLS.length);
@@ -551,7 +551,7 @@ test('source stays a whitelist: one guarded bridge, fixed host methods per tool,
   // Core tools reach the host only through the cores, plus asset_library by its literal name.
   assert.deepEqual([...coreTools.matchAll(/bridge\.call\(([^,]+),/g)].map(match => match[1]), ["'asset_library'"]);
   // Canvas tools call their own registered name or a fixed literal follow-up read.
-  assert.deepEqual([...new Set([...canvasTools.matchAll(/bridge\.call\(([^,]+),/g)].map(match => match[1]))].sort(), ["'get_asset'", "'read_prompt_review'", "'read_workspace'", 'name'].sort());
+  assert.deepEqual([...new Set([...canvasTools.matchAll(/bridge\.call\(([^,]+),/g)].map(match => match[1]))].sort(), ["'get_asset'", "'read_workspace'", 'name'].sort());
   for (const source of server) {
     assert.ok(!/enqueue_queue_recipes|put_queue_recipe|read_queue_recipe|derive_queue_recipe|lookup_queue_request|style_trial|style_experiment|style_sweep/.test(source), 'no server module names a raw recipe or a removed style host method');
     assert.deepEqual(importsOf(source).filter(item => writeOrReview.test(item) && !['./recipe-queue.mjs', './recipe-tool-schemas.mjs'].includes(item)), []);

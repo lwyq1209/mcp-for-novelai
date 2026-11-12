@@ -29,7 +29,7 @@ export const ONBOARDING_STRINGS = {
   'onb.t3': ['准备好了', 'You’re all set'],
   'onb.d3': ['应用会先打开素材库，Agent 和你出的图都在这里。', 'The app opens on your library, where images from your agents and from you land.'],
   'onb.output': ['图片保存在', 'Images are saved to'],
-  'onb.tip1': ['Agent 改画布会先变成草稿，你点「应用」才生效。', 'Agent edits to the canvas arrive as drafts. Nothing changes until you apply them.'],
+  'onb.tip1': ['Agent 能读取画布、把画布上的稿拿去出图，但不会改动画布。', 'Agents can read the canvas and generate what it holds. They never change it.'],
   'onb.tip2': ['队列在顶栏，随时可以暂停或取消。', 'The queue is in the top bar. Pause or cancel at any time.'],
   'onb.tip3': ['删除的东西先进「最近删除」，30 天内能恢复。', 'Deleted items go to Recently deleted and can be restored for 30 days.'],
   'onb.openLib': ['打开素材库', 'Open library'],

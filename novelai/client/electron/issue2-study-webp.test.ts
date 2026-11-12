@@ -86,7 +86,8 @@ async function chain() {
   const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(b); await client.connect(a);
   cleanups.push(async () => { await client.close(); await server.close(); });
   const call = async (name: string, args: Record<string, unknown>) => {
-    const result: any = await client.callTool({ name, arguments: args });
+    // These tests read the full readback (source hash, readiness); the compact default is tested in novelai/tests.
+    const result: any = await client.callTool({ name, arguments: name === 'prepare_recipe' && args.detail === undefined ? { ...args, detail: 'full' } : args });
     expect(result.isError, `${name}: ${JSON.stringify(result.structuredContent).slice(0, 2000)}`).not.toBe(true);
     return result.structuredContent;
   };

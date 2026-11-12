@@ -1,6 +1,6 @@
 # MCP tools reference
 
-MCP for NovelAI ships one MCP server, named `novelai`, with 18 tools. This page describes what each tool does, how
+MCP for NovelAI ships one MCP server, named `novelai`, with 13 tools. This page describes what each tool does, how
 generation, request keys and the shared queue work, and what the server returns when something goes wrong. The tool
 definitions an agent receives (`tools/list`) and the instructions the server sends when an agent connects are the
 authoritative text; this page explains them for people.
@@ -113,14 +113,9 @@ The groups are the ones Settings › MCP access shows.
 | Recipes & queue | `get_queue_result` | View one saved image of a batch |
 | Recipes & queue | `control_queue` | Pause, resume or cancel one batch the user names |
 | Canvas | `list_workspaces` | The app's canvas workspace and its ID |
-| Canvas | `read_workspace` | The canvas's complete state and its images |
-| Canvas | `read_prompt_review` | The effective request the canvas (or a draft) would send, built by the real request builder |
-| Canvas | `get_asset` | View one image of the canvas |
-| Canvas | `draft_edit` | Stage a visible edit proposal on the canvas |
-| Canvas | `apply_edit` | Apply a staged draft |
-| Canvas | `undo_edit` | Undo the last edit made through MCP |
+| Canvas | `read_workspace` | The canvas's state and its images |
 
-Only `enqueue_recipes` generates images, and only when an agent calls it. Browsing, editing, drafting and saving never
+Only `enqueue_recipes` generates images, and only when an agent calls it. Browsing, reading and saving never
 generate anything. `control_queue` can resume a paused batch, which continues generating with the batch's original
 recipes, and a restarted app continues the batches that were already queued.
 
@@ -206,9 +201,27 @@ that input, one NovelAI request per image, in order.
 ### `prepare_recipe`
 
 Freezes one recipe revision and returns `recipeId`, `recipeRevision`, `inputHash` and a **readback** of the effective
-input the app would send: the final prompts including the automatic quality text, the final negative prompt including
-the UC preset text, characters, sampling, mode parameters, the source image (identity, sha256, size), the mask and
-warnings. Check the readback before enqueueing.
+input the app would send. Check the readback before enqueueing.
+
+The readback is compact by default (`detail: "compact"`): it says what the app made of the recipe without repeating
+what the caller wrote.
+
+- A recipe prepared from inline fields does not echo its prompts or character texts. The server compares the stored
+  fields with the request one by one, and a difference is the error `recipe_input_mismatch`, not a readback. What it
+  returns: the model id sent, sampling, mode parameters, `warnings`, the text the app appended
+  (`effective.automaticQuality.appendedText`, `effective.ucPreset.text`), characters by `index` and `center` (with a
+  text only where it differs from the request), the source (identity and size) and the mask (size, cells, layers). The
+  final positive prompt is `stylePrompt`, `positivePrompt` and the quality text joined with `, `; the final negative is
+  `negativePrompt` and the UC text.
+- A canvas recipe's texts were never sent by the caller, so they are stated once: `authoredPrompts` (`stylePrompt`,
+  `positivePrompt`, `negativePrompt`) and the character texts in `effective.characters`.
+- When the appended text cannot be separated from the builder output (warning `readback_not_derived`), the final
+  `effective.positivePrompt` and `effective.negativePrompt` are returned instead.
+- `readiness` appears only for a blocked recipe (`ready: false`). `omitted` lists what was left out.
+
+`detail: "full"` adds `authored` (the recipe's fields as stored), the final prompts, `effectiveRequest` (the raw
+NovelAI request), `unusedInputs`, `assets`, the hashes of the source and the mask, and the mask spec. It is several
+times larger, because the raw request alone carries each prompt two or three times; ask for it only to debug.
 
 - Six modes: `t2i`, `i2i`, `enhance`, `inpaint`, `upscale`, `director`. A field that does not belong to the mode is
   refused rather than ignored.
@@ -248,8 +261,8 @@ warnings. Check the readback before enqueueing.
   built from shapes (rectangles, ellipses, polygons, strokes) and alpha layers; `preview: true` returns the source
   with the selected cells tinted red so the mask can be checked before saving.
 - `preview: true` runs every check and the real request builder without saving anything.
-- `canvas: {workspaceId, expectedRevision, draftId?}` freezes the live canvas (or a staged draft) at exactly that
-  revision instead of inline fields.
+- `canvas: {workspaceId, expectedRevision, patch?}` freezes the live canvas at exactly that revision instead of inline
+  fields; `patch` is a detached t2i text patch (`params`, `charCaptions`) read over the canvas without changing it.
 - To revise, pass `recipeId` with its current `expectedRevision` and every field again; a new revision is saved.
 
 ### Corrections (`prepare_recipe`)
@@ -296,11 +309,11 @@ Medium request sends was read from NovelAI's own web client (build of 2026-11-06
 - Medium on any other model (V5 Curated has no Medium) or in enhance, upscale or director runs on High, with the
   warning `effort_not_applied` (before 0.1.4 this was refused). `effort: "high"` is accepted everywhere and changes
   nothing.
-- The readback shows the model id sent (`effective.model`), `effective.effort` (`level`, and for Medium the fixed values
-  with the full UC text) and `authored.effort`.
+- The readback shows the model id sent (`effective.model`) and, for Medium, `effective.effort` (`level` and the fixed
+  values; the fixed UC text is `effective.ucPreset.text`). `detail: "full"` adds `authored.effort`.
 - On the canvas the effort is the parameter `params.effort` (`"medium"`, or absent for High; also
   `inpaintRecipe.effort`). It applies where the model that runs is V5 Full: the txt2img/img2img model, or the inpaint
-  model for inpaint. `draft_edit` sets it with `params.effort: "high" | "medium"`. A canvas capture of a Medium canvas
+  model for inpaint; it is set in the app. A canvas capture of a Medium canvas
   is the Medium request; its readback says which canvas values Medium replaced (`effort_medium_fixed`), and a Medium
   setting on a model without it is reported as `effort_not_applied` (and listed in `unusedInputs`).
 - Enhance always runs High.
@@ -410,21 +423,28 @@ The queue page in the app offers the same pause, resume and cancel for every bat
 
 ## Canvas tools
 
-The canvas is the app's manual workbench. The canvas tools read it and stage visible edits; **they never generate.**
+The canvas is the app's manual workbench. The two canvas tools read it; **they never generate and never edit it.**
+The canvas is edited in the app.
 
-- `list_workspaces` gives the `workspaceId`; `read_workspace` returns the complete creative state with its revision
-  and an asset manifest (images are attached natively, at most five per call; `get_asset` views one more).
-- `read_prompt_review {workspaceId, expectedRevision, mode, draftId?}` returns the full effective request built by the
-  same code that sends it — prompts with the automatic quality and UC text, characters and positions, sampling,
-  readiness and inputs the mode does not use. A detached t2i `patch` can be previewed without staging it.
-- `draft_edit` stages a visible proposal at the exact current revision (the user sees it on the canvas). It also sets
-  V5 Full's effort (`params.effort`) and Enhance Max✨ (`enhanceScale: "max"`);
-  `apply_edit` applies it only if nothing changed in between; `undo_edit` undoes the last MCP edit only while its
-  result is still unchanged. A newer revision is a conflict: read the workspace again.
-- To generate what the canvas holds: read it, stage a draft if it needs changes, freeze it with
-  `prepare_recipe {canvas: {workspaceId, expectedRevision, draftId?}}`, check the readback, then `enqueue_recipes`.
-  `apply_edit` is only needed to show the draft on the canvas. Results of an agent enqueue go to the library and the
-  queue, not back onto the canvas.
+- `list_workspaces` gives the `workspaceId`; `read_workspace` returns the creative state with its revision and an asset
+  manifest. Images are attached natively: by default the one the canvas shows, `assetIds` picks up to five from the
+  manifest, `includeImages: false` none.
+- `read_workspace` is compact by default and lists what it left out in `omitted`:
+  - an image entry (`currentImage`, `workbenchImage`, `i2iOriginalImage`, `comparisonBeforeImage`) keeps its identity,
+    seed and size but not its own recipe (`params`, `characterSnapshot`, `characterPrompts`), which in the usual case
+    repeats the canvas prompts; `promptsMatchCanvas` says whether its prompts and character prompts equal the canvas
+    ones;
+  - `inpaintPositivePrompt` and `inpaintRecipe` appear only while the inpaint tab is active.
+
+  `detail: "full"` returns the whole snapshot.
+- To generate what the canvas holds: read it, freeze it with
+  `prepare_recipe {canvas: {workspaceId, expectedRevision}}`, check the readback, then `enqueue_recipes`. With
+  `preview: true` the same call is a dry run of the canvas's effective input that saves nothing. A newer revision is
+  a conflict: read the workspace again. Results of an agent enqueue go to the library and the queue, not back onto the
+  canvas.
+- Retired on 2026-11-12: `read_prompt_review` (use `prepare_recipe {canvas, preview: true}`), `get_asset` (use
+  `read_workspace {assetIds}`), `draft_edit`, `apply_edit` and `undo_edit` (edit the canvas in the app). They answer
+  `unknown_tool`.
 
 ## Request keys and paid requests
 
