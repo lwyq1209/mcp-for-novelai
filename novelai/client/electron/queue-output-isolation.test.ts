@@ -120,7 +120,7 @@ async function startHost() {
 
 /** One agent session: its own MCP server process (own recipe-queue state), the shared host behind it. */
 async function session(bridgeClient: unknown) {
-  const server = createNovelAiMcpServer({ bridgeClient, projectRoot: base });
+  const server = createNovelAiMcpServer({ wholeResults: true,  bridgeClient, projectRoot: base });
   const client = new Client({ name: 'queue-isolation-test', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport); await client.connect(clientTransport);

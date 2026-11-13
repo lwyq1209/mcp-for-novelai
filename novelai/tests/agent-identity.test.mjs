@@ -17,7 +17,7 @@ const BATCH = '11111111-2222-4333-8444-555555555555';
 async function connect(t, clientInfo, handler) {
   const calls = [];
   const bridgeClient = { async call(method, args, signal, caller) { calls.push({ method, args: structuredClone(args), caller: structuredClone(caller), signal: signal instanceof AbortSignal }); return handler(method, args); } };
-  const server = createNovelAiMcpServer({ bridgeClient });
+  const server = createNovelAiMcpServer({ wholeResults: true, bridgeClient });
   const client = new Client(clientInfo);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
@@ -29,13 +29,13 @@ async function connect(t, clientInfo, handler) {
 test('each host call names the tool, the initialize client and one call id; arguments are never in it', async t => {
   const { calls, call } = await connect(t, { name: 'claude-code', version: '2.1.112' }, method => method === 'list_queue' ? { batches: [] } : { workspaces: [] });
   await call('list_queue', {});
-  await call('list_workspaces', {});
+  await call('asset_library', { action: 'collections' });
   assert.equal(calls.length, 2);
   const [first, second] = calls;
   assert.deepEqual(Object.keys(first.caller).sort(), ['callId', 'client', 'tool']);
   assert.deepEqual(first.caller.client, { name: 'claude-code', version: '2.1.112' });
   assert.equal(first.caller.tool, 'list_queue');
-  assert.equal(second.caller.tool, 'list_workspaces');
+  assert.equal(second.caller.tool, 'asset_library');
   assert.match(first.caller.callId, /^[a-f0-9-]{36}$/);
   assert.notEqual(first.caller.callId, second.caller.callId, 'one id per tool call');
   assert.ok(first.signal && second.signal);

@@ -28,11 +28,11 @@ const info: McpAccessInfo = buildMcpAccess({
 const lang = (language: 'zh-CN' | 'en-US') => useAppStore.setState({ settings: { ...(useAppStore.getState().settings ?? {}), language } as never });
 
 describe('Settings › MCP access (step 4b2)', () => {
-  it('lists exactly the MCP server’s 13 tools, in three groups', async () => {
+  it('lists exactly the MCP server’s 10 tools, in three groups', async () => {
     const mcp = await import(/* @vite-ignore */ new URL('../../../../src/mcp.mjs', import.meta.url).href) as { TOOL_DEFINITIONS: Array<{ name: string }> };
     expect([...MCP_TOOL_NAMES].sort()).toEqual(mcp.TOOL_DEFINITIONS.map(tool => tool.name).sort());
-    expect(MCP_TOOL_NAMES).toHaveLength(13);
-    expect(Object.fromEntries(Object.entries(MCP_TOOL_GROUPS).map(([group, names]) => [group, names.length]))).toEqual({ library: 4, queue: 7, canvas: 2 });
+    expect(MCP_TOOL_NAMES).toHaveLength(10);
+    expect(Object.fromEntries(Object.entries(MCP_TOOL_GROUPS).map(([group, names]) => [group, names.length]))).toEqual({ library: 4, queue: 5, canvas: 1 });
   });
 
   it('names times relative to now and lists the clients most recent first, never their arguments', () => {
@@ -91,7 +91,7 @@ describe('Settings › MCP access (step 4b2)', () => {
     const now = new Date();
     const ready = renderToStaticMarkup(<ServerStatus info={info} active={false} activity={captureActivity(now, 'sample')} />);
     expect(ready).toContain('MCP 服务就绪');
-    expect(ready).toContain('novelai · 13 个工具');
+    expect(ready).toContain('novelai · 10 个工具');
     expect(ready).toContain('Claude Code');
     expect(ready).toContain('不记参数');
     const starting = renderToStaticMarkup(<ServerStatus info={{ ...info, bridgeReady: false, temporaryLocation: true }} active={false} activity={null} />);

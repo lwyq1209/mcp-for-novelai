@@ -19,7 +19,7 @@ const captureClient = (capture: CaptureRequest | null): McpClientId | null => {
 
 /**
  * Settings › MCP access (step 4b2, prototype 22–23): whether the MCP server is ready, the recent connections (client,
- * time, last tool; never arguments), the configuration for each agent with this run's real paths, the 13 tools, and
+ * time, last tool; never arguments), the configuration for each agent with this run's real paths, the 10 tools, and
  * the advanced details the old page had (project folder and inboxes, data folder, running from source).
  */
 export function McpSection({ active, capture = null }: { active: boolean; capture?: CaptureRequest | null }) {

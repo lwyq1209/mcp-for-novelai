@@ -34,16 +34,16 @@ prepares recipes, queues images and organises your library through MCP, while yo
 | --- | --- | --- |
 | ![The canvas](docs/images/canvas.png) | ![The queue page](docs/images/queue.png) | ![Settings › MCP access](docs/images/settings-mcp.png) |
 
-### 13 MCP tools
+### 10 MCP tools
 
 | Group | Tools |
 | --- | --- |
 | Library | `asset_library`, `material_library`, `material_studies`, `tag_details` |
-| Recipes & queue | `prepare_recipe`, `enqueue_recipes`, `lookup_enqueue`, `list_queue`, `read_queue`, `get_queue_result`, `control_queue` |
-| Canvas | `list_workspaces`, `read_workspace` |
+| Recipes & queue | `prepare_recipe`, `enqueue_recipes`, `list_queue`, `read_queue`, `get_queue_result` |
+| Canvas | `read_workspace` |
 
-Only `enqueue_recipes` starts generation (and `control_queue` resuming a paused batch continues one). The canvas tools
-only read the canvas; they never generate or edit it. Details: [MCP tools reference](docs/mcp-tools.md).
+Only `enqueue_recipes` starts generation. `read_workspace` only reads the canvas; batches are paused, resumed and
+cancelled on the queue page of the app. Details: [MCP tools reference](docs/mcp-tools.md).
 
 ## Before you start
 

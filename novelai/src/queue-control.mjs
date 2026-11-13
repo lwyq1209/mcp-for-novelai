@@ -1,5 +1,6 @@
 /**
- * Runtime-neutral inspection and control of the shared independent host queue.
+ * Runtime-neutral inspection of the shared independent host queue (list, read, result). Pausing, resuming and
+ * cancelling a batch left this server with the control_queue tool on 2026-11-13: the user does that in the app.
  *
  * Behavioural twin of the former `novelai_queue` tool of the removed native agent
  * extension, kept as a dependency-free module so any runtime can reuse it. It deliberately imports
@@ -11,7 +12,7 @@ const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif
 const KEYS = new Set(['action', 'batchId', 'itemIndex', 'index']);
 
 export const QUEUE_HOST_METHODS = Object.freeze({
-  list: 'list_queue', read: 'read_queue', pause: 'pause_queue', resume: 'resume_queue', cancel: 'cancel_queue', result: 'get_queue_result',
+  list: 'list_queue', read: 'read_queue', result: 'get_queue_result',
 });
 export const QUEUE_ACTIONS = Object.freeze(Object.keys(QUEUE_HOST_METHODS));
 export const QUEUE_LIST_LIMIT = 8;
@@ -124,7 +125,7 @@ export function compactCleanedBatch(batch) {
     cleaned: true, ...(batch.recovered === true ? { recovered: true, savedImages: Number.isSafeInteger(batch.savedImages) ? batch.savedImages : null } : {}),
     cleanedAt: isoTime(batch.cleanedAt), finishedAt: isoTime(batch.finishedAt), itemCounts: counts };
 }
-/** What an agent does with a cleaned batch (lookup_enqueue, a repeated enqueue_recipes, read_queue). */
+/** What an agent does with a cleaned batch (a repeated enqueue_recipes, read_queue). */
 export const cleanedBatchInstruction = batch => batch.recovered === true
   ? `This requestKey was accepted. Its queue record was lost and rebuilt from the library${typeof batch.cleanedAt === 'string' ? ` on ${batch.cleanedAt}` : ''} (${Number.isSafeInteger(batch.savedImages) ? batch.savedImages : 'some'} saved images); how the batch ended and its plan are unknown. It is never queued or sent again: never enqueue this intent again. Its saved images are in the library: asset_library {action:"list", category:"history", queueRequestKey: this requestKey} (or queueBatchId) lists them.`
   : `This requestKey was accepted. Its batch ended (${batch.status}) and its queue record was cleaned${typeof batch.cleanedAt === 'string' ? ` on ${batch.cleanedAt}` : ''} under the client's queue retention; only how it ended and its per-status image counts are kept. It is never queued or sent again: never enqueue this intent again. Its saved images stay in the library: asset_library {action:"list", category:"history", queueRequestKey: this requestKey} (or queueBatchId) lists them.`;
@@ -134,7 +135,7 @@ const unknownInstruction = batch => {
   return unknown.length ? { instruction: `Item${unknown.length > 1 ? 's' : ''} ${unknown.join(', ')} ha${unknown.length > 1 ? 've' : 's'} an unknown outcome: ${unknown.length > 1 ? 'they' : 'it'} may have been generated and charged, and ${unknown.length > 1 ? 'are' : 'is'} never resent. First check asset_library {action:"list", category:"history", queueBatchId:"${batch.batchId}"}; only if the images are not there, decide with the user whether to make them again (that is a new paid request under a new requestKey).` } : {};
 };
 
-/** The compact projection of a queued batch that read_queue and control_queue (pause, resume, cancel) return. */
+/** The projection of a queued batch that read_queue is built on. */
 export function compactQueuedBatch(batch) {
   if (batch?.cleaned === true) return compactCleanedBatch(batch);
   return { batchId: batch.batchId, requestKey: batch.requestKey, execution: batch.execution, source: batchSource(batch.source), status: batch.status, stopReason: batchReason(batch.error), count: batch.count,
@@ -237,10 +238,10 @@ export async function queueControlAction(args, { bridge, signal, projectPath } =
     if (args.itemIndex !== undefined || args.index !== undefined) invalidArguments('Only result accepts an image index.');
     const result = await bridge.call(QUEUE_HOST_METHODS[args.action], { batchId: args.batchId }, signal);
     if (!record(result) || result.batchId !== args.batchId || result.execution !== 'queued') invalidResponse('The host returned a different queued batch.');
-    // A cleaned batch (queue retention): how it ended and when it was cleaned; pause and cancel changed nothing.
-    if (result.cleaned === true) return { value: { ...compactCleanedBatch(result), ...(args.action === 'read' ? { results: [] } : {}),
-      instruction: args.action === 'read' ? 'This batch ended and its queue record was cleaned under the client\'s queue retention; its per-image details are gone and nothing of it runs or is resent. Its saved images stay in the library: asset_library {action:"list", category:"history", queueBatchId} lists them.' : 'This batch ended and its queue record was cleaned under the client\'s queue retention; nothing was changed.' } };
-    return { value: { ...compactQueuedBatch(result), ...(args.action === 'read' ? { ...readExtras(result, projectPath), ...positionOf(result), ...itemReasonsOf(result), ...unknownInstruction(result) } : {}) } };
+    // A cleaned batch (queue retention): how it ended and when it was cleaned.
+    if (result.cleaned === true) return { value: { ...compactCleanedBatch(result), results: [],
+      instruction: 'This batch ended and its queue record was cleaned under the client\'s queue retention; its per-image details are gone and nothing of it runs or is resent. Its saved images stay in the library: asset_library {action:"list", category:"history", queueBatchId} lists them.' } };
+    return { value: { ...compactQueuedBatch(result), ...readExtras(result, projectPath), ...positionOf(result), ...itemReasonsOf(result), ...unknownInstruction(result) } };
   }
   if (!Number.isSafeInteger(args.itemIndex) || args.itemIndex < 0 || args.itemIndex >= MAX_QUEUE_ITEMS || (args.index !== undefined && (!Number.isSafeInteger(args.index) || args.index < 0))) invalidArguments('Select a queue item and nonnegative image index.');
   const index = args.index ?? 0;

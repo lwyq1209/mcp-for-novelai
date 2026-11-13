@@ -81,12 +81,12 @@ async function chain() {
   const { createNovelAiMcpServer, createBridgeClient } = await load('../../src/mcp.mjs');
   const { Client } = await load('../../node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js');
   const { InMemoryTransport } = await load('../../node_modules/@modelcontextprotocol/sdk/dist/esm/inMemory.js');
-  const server = createNovelAiMcpServer({ rawRecipeReadback: true, bridgeClient: createBridgeClient({ runtimeDir }), studyInbox, studyExports });
+  const server = createNovelAiMcpServer({ wholeResults: true, bridgeClient: createBridgeClient({ runtimeDir }), studyInbox, studyExports });
   const client = new Client({ name: 'issue2-webp', version: '1' });
   const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(b); await client.connect(a);
   cleanups.push(async () => { await client.close(); await server.close(); });
   const call = async (name: string, args: Record<string, unknown>) => {
-    // rawRecipeReadback above (a test option of the server): these tests read the whole readback; the compact one agents get is tested in novelai/tests.
+    // wholeResults above (a test option of the server): these tests read the whole readback; the compact one agents get is tested in novelai/tests.
     const result: any = await client.callTool({ name, arguments: args });
     expect(result.isError, `${name}: ${JSON.stringify(result.structuredContent).slice(0, 2000)}`).not.toBe(true);
     return result.structuredContent;

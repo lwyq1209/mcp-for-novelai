@@ -232,23 +232,26 @@ async function realHost(t, { realBatch = false, frozenLimits = null, wrapStorage
 async function connect(t, bridgeClient, { create = options => merged.createNovelAiMcpServer(options), compact = false } = {}) {
   // 0.1.4: an unknown enqueue outcome is settled in the call; its sleeps advance a fake clock here instead of waiting.
   const clock = { t: 0 };
-  const server = create({ bridgeClient, rawRecipeReadback: !compact, recipeQueue: { monotonicNow: () => clock.t, sleep: async ms => { clock.t += ms; } } });
+  const server = create({ bridgeClient, wholeResults: !compact, recipeQueue: { monotonicNow: () => clock.t, sleep: async ms => { clock.t += ms; } } });
   const client = new Client({ name: 'recipes-modes-test', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport); await client.connect(clientTransport);
   t.after(async () => { await client.close(); await server.close(); });
-  return { call: (name, args) => client.callTool({ name, arguments: args }), readRecipe: directRecipes(bridgeClient) };
+  return { call: withLookup(client, bridgeClient, { monotonicNow: () => clock.t, sleep: async ms => { clock.t += ms; } }), readRecipe: directRecipes(bridgeClient) };
 }
 // read_recipe is no longer an MCP tool. Stored-revision readbacks go through the recipe module's read() on the same
 // bridge double, in the same success/error envelope a core tool returns.
-const directRecipes = bridgeClient => {
-  const recipes = recipeQueue.createRecipeQueue({ bridge: bridgeClient });
+const directRecipes = (bridgeClient, action = 'read', options = {}) => {
+  const recipes = recipeQueue.createRecipeQueue({ bridge: bridgeClient, ...options });
   return async args => {
-    try { return success(await recipes.read(args), [], projectRoots(PROJECT_ROOT)); }
+    try { return success(await recipes[action](args), [], projectRoots(PROJECT_ROOT)); }
     catch (error) { return errorResult(failure(error, { roots: projectRoots(PROJECT_ROOT), trusted: trustedIdentities(args), policy: 'opaque', layer: 'core' })); }
   };
 };
-// The servers of this file answer prepare_recipe with the whole readback (rawRecipeReadback, a test option); connect {compact:true} is the
+// lookup_enqueue is no longer an MCP tool either (retired on 2026-11-13: enqueue_recipes with the same key and plan answers
+// what a key holds). What a key holds is still asserted here through the recipe module's lookup(), under the old name.
+const withLookup = (client, bridgeClient, options) => { const lookup = directRecipes(bridgeClient, 'lookup', options); return (name, args) => name === 'lookup_enqueue' ? lookup(args) : client.callTool({ name, arguments: args }); };
+// The servers of this file answer prepare_recipe with the whole readback (wholeResults, a test option); connect {compact:true} is the
 // server an agent gets, with the compact readback (search "compact readback").
 const errorOf = result => { assert.equal(result.isError, true, JSON.stringify(result.structuredContent ?? result).slice(0, 2000)); return result.structuredContent.error; };
 const ok = result => { assert.ok(!result.isError, JSON.stringify(result.structuredContent ?? result).slice(0, 4000)); return result.structuredContent; };
@@ -1276,7 +1279,7 @@ test('refused(): details.status is rejected only when the confirming lookup find
     const refused = errorOf(await call('enqueue_recipes', plan));
     assert.equal(refused.code, code, label); assert.equal(refused.details.keyStatus, keyStatus, label);
     assert.equal(refused.details.status, 'unknown', `${label}: not a confirmed rejection`); assert.equal(refused.details.enqueueSent, true);
-    assert.match(refused.message, /lookup_enqueue/, label);
+    assert.match(refused.message, /call enqueue_recipes (again )?with the same requestKey and plan/i, label);
     // No hold (0.1.4): the lookup says nothing was recorded, and the same call again is safe and enqueues it.
     assert.equal(ok(await call('lookup_enqueue', { requestKey })).status, 'not_found', `${label}: the host never recorded it`);
     assert.equal(ok(await call('enqueue_recipes', plan)).status, 'enqueued', `${label}: the same key works`);
@@ -1627,7 +1630,7 @@ test('parity: the Medium constants and the Max✨ size ports mirror the client',
 });
 
 test('every host method observed across this file is declared by the recipe and queue tools', () => {
-  const declared = new Set(['prepare_recipe', 'enqueue_recipes', 'lookup_enqueue', 'list_queue', 'read_queue', 'get_queue_result'].flatMap(name => registry.get(name).hostMethods));
+  const declared = new Set(['prepare_recipe', 'enqueue_recipes', 'list_queue', 'read_queue', 'get_queue_result'].flatMap(name => registry.get(name).hostMethods));
   assert.deepEqual([...new Set(observed)].filter(method => !declared.has(method)), []);
   for (const method of ['asset_library', 'put_queue_recipe', 'read_queue_recipe', 'preview_queue_recipe', 'lookup_queue_request', 'enqueue_queue_recipes']) assert.ok(observed.includes(method), method);
   assert.deepEqual(registry.get('prepare_recipe').hostMethods, ['read_queue_recipe', 'asset_library', 'put_queue_recipe', 'preview_queue_recipe', 'capture_canvas_recipe']);

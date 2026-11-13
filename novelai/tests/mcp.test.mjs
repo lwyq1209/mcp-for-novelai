@@ -47,8 +47,8 @@ test('MCP initializes and advertises one server: core tools first, then canvas t
   for (const phrase of ['MCP for NovelAI tools in two layers', 'settles an unknown outcome itself', 'never a new key while an outcome is still settling', 'Credentials are local']) assert.ok(instructions.includes(phrase), phrase);
   assert.doesNotMatch(instructions, /novelai-business/, 'one server; the removed alias is not advertised');
   const { tools } = await client.listTools();
-  assert.deepEqual(tools.map(tool => tool.name), ['material_library', 'tag_details', 'material_studies', 'asset_library', 'prepare_recipe', 'enqueue_recipes', 'lookup_enqueue', 'list_queue', 'read_queue', 'get_queue_result', 'control_queue',
-    'list_workspaces', 'read_workspace']);
+  assert.deepEqual(tools.map(tool => tool.name), ['material_library', 'tag_details', 'material_studies', 'asset_library', 'prepare_recipe', 'enqueue_recipes', 'list_queue', 'read_queue', 'get_queue_result',
+    'read_workspace']);
   assert.deepEqual(tools, TOOL_DEFINITIONS);
   // Every schema is a flat closed object: no top-level union (a client keeping only properties must still see every parameter).
   for (const tool of tools) {
@@ -58,7 +58,7 @@ test('MCP initializes and advertises one server: core tools first, then canvas t
   }
   assert.equal(tools.find(tool => tool.name === 'read_workspace').annotations.readOnlyHint, true);
   // Only enqueue_recipes generates (open world); no canvas tool does.
-  assert.deepEqual(tools.filter(tool => tool.annotations.openWorldHint && !['material_library', 'tag_details'].includes(tool.name)).map(tool => tool.name), ['enqueue_recipes', 'control_queue']);
+  assert.deepEqual(tools.filter(tool => tool.annotations.openWorldHint && !['material_library', 'tag_details'].includes(tool.name)).map(tool => tool.name), ['enqueue_recipes']);
   for (const tool of tools.filter(tool => tool.name !== 'prepare_recipe')) assert.doesNotMatch(tool.description, /submit_generation|submit_batch|list_batches|read_batch|control_generation|generation_jobs?|get_generation_result/, tool.name);
   assert.match(instructions, /prepare_recipe \{canvas:/);
   assert.doesNotMatch(instructions, /submit_generation|submit_batch|generation jobs and batches/);
@@ -75,27 +75,17 @@ test('unified material MCP route uses shared cross-kind schemas and excludes ima
   assert.equal(calls.length,requests.length);
 });
 
-const CONTROL_SAFETY = ['only when the user explicitly asks', 'pausing is not upstream cancellation', 'ORIGINAL frozen', 'under existing generation authorization', 'ever automatic', 'Never automatically repeat an uncertain mutation'];
-
-test('control_queue: one tool for queued-batch pause/resume/cancel with the safety wording of all three', async t => {
-  const { client } = await mcp(t, () => ({}));
-  const tool = (await client.listTools()).tools.find(item => item.name === 'control_queue');
-  assert.deepEqual(tool.annotations, { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true });
-  assert.deepEqual(tool.inputSchema.required, ['batchId', 'action']);
-  assert.deepEqual(Object.keys(tool.inputSchema.properties), ['batchId', 'action']);
-  for (const phrase of [...CONTROL_SAFETY, 'An active image may still finish and be saved', 'does not guarantee that upstream stopped or nothing was charged', 'read_queue until the outcome is known', 'Does not adopt edits, re-enqueue or retry failed/unknown items']) assert.ok(tool.description.includes(phrase), phrase);
-  assert.ok(!tool.description.includes('control_generation'), 'the retired canvas control is no longer named');
-});
-
-test('the 31 removed, merged or retired tool names (11 removed, 7 merged, 8 canvas generation tools and 5 canvas self-check and draft tools retired) are unknown_tool and never reach the host', async t => {
+test('the 34 removed, merged or retired tool names (11 removed, 7 merged, 8 canvas generation tools, 5 canvas self-check and draft tools and 3 more retired) are unknown_tool and never reach the host', async t => {
   const { client, calls } = await mcp(t, () => { throw new Error('No host call expected'); });
   const removed = ['search_gallery', 'read_gallery', 'select_gallery_item', 'get_gallery_image', 'get_gallery_sheet', 'draft_gallery_import', 'save_project', 'list_projects', 'restore_project', 'draft_generation_source', 'read_recipe',
     'pause_queue', 'resume_queue', 'cancel_queue', 'pause_batch', 'resume_batch', 'cancel_batch', 'cancel_generation_job',
     // Retired on 2026-11-02: images from the canvas are prepare_recipe {canvas} + enqueue_recipes.
     'submit_generation', 'submit_batch', 'list_generation_jobs', 'read_generation_job', 'get_generation_result', 'list_batches', 'read_batch', 'control_generation',
     // Retired on 2026-11-12: the self-check is prepare_recipe {canvas, preview:true}, images are read_workspace {assetIds}, the canvas is edited in the app.
-    'read_prompt_review', 'get_asset', 'draft_edit', 'apply_edit', 'undo_edit'];
-  assert.equal(removed.length, 31);
+    'read_prompt_review', 'get_asset', 'draft_edit', 'apply_edit', 'undo_edit',
+    // Retired on 2026-11-13: enqueue_recipes with the same key answers what a key holds, batches are paused or cancelled in the app, read_workspace finds the one workspace itself.
+    'lookup_enqueue', 'control_queue', 'list_workspaces'];
+  assert.equal(removed.length, 34);
   const listed = new Set((await client.listTools()).tools.map(tool => tool.name));
   for (const name of removed) {
     assert.ok(!listed.has(name), name);
@@ -226,7 +216,8 @@ test('input validation rejects stale-style names, unknown fields and invalid val
 
 test('MCP result strips credentials from unexpected nested payloads', async t => {
   const { client } = await mcp(t, () => ({ workspaces: [{ workspaceId: 'window-1', token: 'secret', nested: { apiKey: 'secret', authorization: 'secret' } }], settings: { harmless: false, token: 'secret' } }));
-  const result = await client.callTool({ name: 'list_workspaces', arguments: {} });
+  const result = await client.callTool({ name: 'asset_library', arguments: { action: 'collections' } });
+  assert.equal(result.isError, undefined); assert.equal(result.structuredContent.workspaces[0].workspaceId, 'window-1');
   assert.ok(!JSON.stringify(result).includes('secret'));
   assert.equal(result.structuredContent.settings, undefined);
 });

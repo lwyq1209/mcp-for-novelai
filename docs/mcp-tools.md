@@ -1,6 +1,6 @@
 # MCP tools reference
 
-MCP for NovelAI ships one MCP server, named `novelai`, with 13 tools. This page describes what each tool does, how
+MCP for NovelAI ships one MCP server, named `novelai`, with 10 tools. This page describes what each tool does, how
 generation, request keys and the shared queue work, and what the server returns when something goes wrong. The tool
 definitions an agent receives (`tools/list`) and the instructions the server sends when an agent connects are the
 authoritative text; this page explains them for people.
@@ -107,17 +107,14 @@ The groups are the ones Settings › MCP access shows.
 | Library | `tag_details` | Danbooru facts about tags: canonical name, aliases, post count, wiki, co-occurring tags |
 | Recipes & queue | `prepare_recipe` | Freeze one generation recipe (six modes) and read back the exact effective input |
 | Recipes & queue | `enqueue_recipes` | **Generate:** put frozen recipes into the queue (paid, no further confirmation) |
-| Recipes & queue | `lookup_enqueue` | Look up what happened to an enqueue by its request key |
 | Recipes & queue | `list_queue` | The queue: counts and the first 8 batches, agent and manual ones |
 | Recipes & queue | `read_queue` | One batch: status, per-image progress, saved images with their file names |
 | Recipes & queue | `get_queue_result` | View one saved image of a batch |
-| Recipes & queue | `control_queue` | Pause, resume or cancel one batch the user names |
-| Canvas | `list_workspaces` | The app's canvas workspace and its ID |
 | Canvas | `read_workspace` | The canvas's state and its images |
 
 Only `enqueue_recipes` generates images, and only when an agent calls it. Browsing, reading and saving never
-generate anything. `control_queue` can resume a paused batch, which continues generating with the batch's original
-recipes, and a restarted app continues the batches that were already queued.
+generate anything. A batch is paused, resumed or cancelled on the queue page of the app (a resumed batch continues with
+its original recipes), and a restarted app continues the batches that were already queued.
 
 ## Library tools
 
@@ -126,11 +123,17 @@ recipes, and a restarted app continues the batches that were already queued.
 The library as the app shows it, without the canvas. Items are identified by `kind` + `id` and an exact `revision`
 (`expectedRevision` for changes); categories are `history`, `imports`, `tags`, `presets` and `notes`.
 
-- `list` returns summaries (default 10, at most 20 per page) with filters: text query, category or kinds, collection,
+- `list` returns rows (identity, name, model, size, a prompt excerpt and the image's `assetId`; default 10, at most
+  20 per page) with filters: text query, category or kinds, collection,
   history tags, archived items, sorting. `queueRequestKey` (an `enqueue_recipes` key) or `queueBatchId` lists the images
   that batch saved. A project is the collection `history:<historyGroupId>`.
-- `read` loads one item (`detail: summary|full`); `image` returns one history image (a thumbnail of at most 384 px
-  unless `variant: "original"` is asked for). The image's `assetId` is what `prepare_recipe` and covers use.
+- `read` loads one item. A history image is returned as what it was made with, each once: its prompts and
+  parameters (`params`), `characters`, `actualSeed`, `mode`, the saved file (`filePath`), its `assetId` and the queue
+  batch it came from. Left out are the prompt split into tags, second copies of the character prompts and of the
+  file, and the host's own identifiers. Other kinds are returned in full. `detail: "full"` is the raw record and
+  `"summary"` a short excerpt; both are rarely needed.
+- `image` returns one history image (a thumbnail of at most 384 px unless `variant: "original"` is asked for). The
+  image's `assetId` (from `list` or `read`) is what `prepare_recipe` and covers use.
 - `collections`, `create-collection`, and `mutate` with `archive`, `update` (only the fields each kind allows),
   `add-to-collection` and `remove-from-collection`.
 - `mutate` `delete` moves items to **Recently deleted**; `delete-archived` deletes archived items (500 per call).
@@ -188,7 +191,11 @@ Imported images (the library's **Imported** category) and the generation metadat
 ### `tag_details`
 
 Danbooru facts for 1–20 English tag names (`name` or `names`): whether the tag exists, its canonical name, active
-aliases, deprecation, cumulative post count and wiki text. `detail: "cooccurrence"` with one name returns the tags that
+aliases, deprecation, cumulative post count and the wiki's definition. The default answer gives per tag its category
+and post count, its canonical name and aliases where they differ from the name asked for, anything out of the ordinary
+(not found, deprecated, an unchecked alias, errors) and the wiki text before its first heading, at most 600 characters;
+`wikiMore: true` says the page goes on (examples, related tags), and `detail: "full"` returns all of it with the
+source links. `detail: "cooccurrence"` with one name returns the tags that
 most often appear with it in one rating (`g`, `s`, `q` or `e`; default `g`; `limit` 1–20, default 8). Results are cached
 locally. A network failure is reported as unknown, never as "not found", and is not retried. A Danbooru tag is not
 proof that NovelAI knows it, and NovelAI-only words need not be Danbooru tags.
@@ -348,8 +355,8 @@ spend Anlas, with no further confirmation.**
 - `requestKey` (required) identifies this intent; see [Request keys](#request-keys-and-paid-requests).
 - `items`: `[{recipeId, recipeRevision, inputHash, count?, seeds?}]`. One mode per enqueue. `seeds` give one seed per
   image. Without them a random-seed recipe draws one per image, and a fixed-seed recipe used for several images gives
-  them its seed, seed + 1, seed + 2 … (after 2147483646 back to 0) so they differ; the receipt lists the seeds in
-  `items` and a warning `fixed_seed_incremented`. Repeat a seed in `seeds` for identical images. `upscale` and
+  them its seed, seed + 1, seed + 2 … (after 2147483646 back to 0) so they differ; the receipt lists them in `seeds`
+  with a warning `fixed_seed_incremented`. Repeat a seed in `seeds` for identical images. `upscale` and
   `director` recipes take no seed: each is sent once per enqueue (a `count`, `seeds` or a second entry are dropped,
   warning `postprocess_single_image`), because every image of it would be the same paid request.
 - Optional `intervalSeconds` (0–60) between images, and `historyGroup` / `fileNamePrefix` for your project (see
@@ -358,34 +365,38 @@ spend Anlas, with no further confirmation.**
   sent; the key stays unused.
 - The receipt lists warnings, for example characters that a model does not take or a preset that adds no text.
 - **A lost answer is settled in the same call** (0.1.4): see [Request keys](#request-keys-and-paid-requests). The
-  receipt then says `reconciled: true` and `settled: {lookups, resends, seconds}`.
-
-### `lookup_enqueue`
-
-Looks up the receipt of one of your request keys: `enqueued` (with the batch), `rejected`, `unknown` or `not_found`,
-plus `inFlight` (the app has received an enqueue under this key and is still handling it) and a **settlement** that
-says what you may do next. It never enqueues or resends anything. See [Request keys](#request-keys-and-paid-requests).
+  receipt then says `reconciled: true`.
+- The receipt is `status` (`enqueued`, or `already_enqueued` when this key already holds this plan: nothing is sent),
+  `batchId` and `count`, plus `seeds` where the server chose them and `warnings`. When the answer is not the routine
+  one (already enqueued, confirmed after a lost answer, a cleaned batch) it adds `batchStatus`, `itemCounts` and an
+  `instruction`.
+- **Asking what a key holds**: call `enqueue_recipes` again with the same key and plan. It looks the key up first and
+  never queues twice. (The separate `lookup_enqueue` tool was retired on 2026-11-13.)
 
 ### `list_queue`, `read_queue`, `get_queue_result`
 
-- `list_queue`: the total, counts by status, the first 8 batches (`batchId`, `source`, `status`, `stopReason`, `count`,
-  `activeJobId`, failed and unknown item counts) and, when the app reports it, storage use of the frozen queue and the
-  recipe store against their limits. Batches started with **Generate** in the app are listed too, with
-  `source: {kind: "manual", persistent: false}` (they are kept only while the app runs); agent batches have
-  `source: {kind: "agent", client}`.
-- `read_queue {batchId, wait?}`: status, `stopReason`, request key, plan hash, interval, output (project and
-  prefix), `itemCounts` (`pending`, `running`, `succeeded`, `failed`, `unknown`, `cancelled`, `skipped`), per-item
-  status, job ID, result count, error code and `rateLimitRetries` (how often the image was sent again after HTTP 429),
-  `itemReasons` (an explanation of the queue's own item codes present, see [below](#queue-limits-and-failures)), and
-  `results` — one entry per saved image with `itemIndex`, `index`, `historyId`, `actualSeed` (the seed it was
-  generated with; `null` for upscale and director), `fileName` and `file` (the path relative to the project root, or
-  `null` outside it). It also says where the batch stands in the shared queue:
+These answers leave out what only the app uses (its own request key, plan hash and job ids), zero counts and what
+the call itself wrote.
+
+- `list_queue`: the total, counts by status and the first 8 batches (`batchId`, `status`, `count`; `stopReason`, and
+  `failed` / `unknown` image counts, when there are any). A batch started with **Generate** in the app says
+  `source: "manual"` (it is kept only while the app runs); every other batch was enqueued by an agent. `storage` (use
+  of the frozen queue and the recipe store against their limits) appears only when a store is at least four fifths
+  full.
+- `read_queue {batchId, wait?}`: `status`, `stopReason` when there is one, `count`, `itemCounts` (the statuses that
+  occur, of `pending`, `running`, `succeeded`, `failed`, `unknown`, `cancelled`, `skipped`), and `results` — one entry
+  per saved image with `itemIndex`, `historyId`, `actualSeed` (the seed it was generated with; absent for upscale and
+  director), `fileName` and `file` (the path relative to the project root, absent outside it), plus `index` when an
+  item saved more than one. `items` lists only the images that are running, failed, unknown, cancelled or skipped,
+  with their error code and `rateLimitRetries` (how often the image was sent again after HTTP 429); `itemReasons`
+  explains the queue's own item codes present (see [below](#queue-limits-and-failures)). While the batch has not
+  ended it also says where it stands in the shared queue:
   - `ahead: {images, batches}` — unfinished images, and the batches they belong to, that run before this batch
     (paused batches hold nothing up and are not counted; of a batch being paused only its running image counts);
-  - `etaSeconds` — about how many seconds until this batch ends: the recent median image time (`imageSeconds`) times
-    the images before it and its own, plus its intervals. `null` while no image time is known yet (after a start the
-    app reads them from the batches it stored) or while the batch is paused; `0` once it ended.
-  An app older than this server reports `ahead`, `etaSeconds` and `imageSeconds` as `null`.
+  - `etaSeconds` — about how many seconds until this batch ends: the recent median image time times the images before
+    it and its own, plus its intervals. `null` while no image time is known yet (after a start the app reads them
+    from the batches it stored) or while the batch is paused.
+  An app older than this server reports neither.
 
   **Waiting.** Instead of reading again and again with sleeps, pass `wait: {until, seconds?}` (`seconds` 1–1200,
   default 300). The server reads the batch every second (every two seconds while `etaSeconds` is over a minute) and
@@ -403,38 +414,32 @@ says what you may do next. It never enqueues or resends anything. See [Request k
   does the call fail with that error. A definite refusal (`batch_not_found`, invalid arguments) ends it at once.
   Cancelling the MCP request stops the wait. 1200 seconds is the most one call waits, below the 1560-second tool
   timeout of the MCP configurations the app shows; wait again for longer.
-- `get_queue_result {batchId, itemIndex, index?}`: one saved image at full size, with the same identity fields.
+- `get_queue_result {batchId, itemIndex, index?}`: one saved image at full size, with its `historyId`, `actualSeed`,
+  `fileName` and `file`.
 - `get_queue_result {batchId, offset?}` (without `itemIndex`): the saved results of the whole batch in item order as
-  native thumbnails (at most 384 px on the longer side, WebP), **at most 20 per call**: `total`, `offset`,
-  `returned`, `nextOffset` (`null` on the last page; pass it as `offset` for the next page) and `results`, one entry
-  per saved image with `itemIndex`, `index`, `historyId`, `actualSeed`, `fileName`, `file`, `width`, `height` (of the
-  thumbnail) and `imageAttached`. The images follow the text in the order of the entries with `imageAttached: true`;
-  an image whose preview cannot be made right now is listed with `imageAttached: false` and its error `code`. An app
+  native thumbnails (at most 384 px on the longer side, WebP), **at most 20 per call**: `total`, `nextOffset` (given
+  while there are more; pass it as `offset` for the next page) and `results`, one entry per saved image with
+  `itemIndex`, `historyId`, `actualSeed`, `fileName` and `file`. The images follow the text in that order; an image
+  whose preview cannot be made right now is listed with `imageAttached: false` and its error `code`. An app
   older than this server answers `host_outdated`; use `itemIndex` there.
 
 Copy files only by the `fileName` / `file` these return, never by guessing numbers. A `historyId` from here can be the
-source of a new image-mode recipe (through `asset_library`).
+source of a new image-mode recipe (`asset_library` `read` gives its `assetId`).
 
-### `control_queue`
+### Pausing, resuming and cancelling
 
-`{batchId, action: "pause" | "resume" | "cancel"}`, only for the batch the user names and only when the user asks.
-
-- `pause` stops the batch before its next image; an image already running may still finish and be saved (and
-  charged).
-- `resume` continues a paused batch with its **original** frozen recipes. It does not pick up later edits, re-enqueue
-  anything or retry failed or unknown images.
-- `cancel` skips the images that have not started. It does not guarantee that a running image was stopped upstream
-  or not charged; read the batch until its outcome is known.
-
-The queue page in the app offers the same pause, resume and cancel for every batch, agent and manual.
+A batch is paused, resumed or cancelled on the queue page of the app, for agent and manual batches alike. The MCP
+server has no tool for it (`control_queue` was retired on 2026-11-13): by the time an agent reacts, the images it
+wanted to stop have usually been sent. `read_queue {wait}` returns when a batch is paused or cancelled.
 
 ## Canvas tools
 
-The canvas is the app's manual workbench. The two canvas tools read it; **they never generate and never edit it.**
+The canvas is the app's manual workbench. `read_workspace` reads it; **it never generates and never edits it.**
 The canvas is edited in the app.
 
-- `list_workspaces` gives the `workspaceId`; `read_workspace` returns the creative state with its revision and an asset
-  manifest. Images are attached natively: by default the one the canvas shows, `assetIds` picks up to five from the
+- `read_workspace` returns the creative state with its `workspaceId`, its revision and an asset manifest. The app
+  has one canvas, so `workspaceId` may be left out of the call (`list_workspaces` was folded into it on 2026-11-13).
+  Images are attached natively: by default the one the canvas shows, `assetIds` picks up to five from the
   manifest, `includeImages: false` none.
 - `read_workspace` is compact by default and lists what it left out in `omitted`:
   - an image entry (`currentImage`, `workbenchImage`, `i2iOriginalImage`, `comparisonBeforeImage`) keeps its identity,
@@ -471,18 +476,14 @@ The canvas is edited in the app.
   already holds with that batch. The answer is `enqueued` (with `reconciled: true`) or the definite refusal. The call
   never switches keys.
 - Only when the app stays silent for that long is the answer still `queue_acceptance_unknown`. Then calling
-  `enqueue_recipes` again with the same key and plan, or `lookup_enqueue` with the same key, is safe. `lookup_enqueue`
-  answers at once:
-  - `settling` with `inFlight: true` — the app is still handling it: look again after `retryAfterSeconds` (2), or call
-    `enqueue_recipes` again with the same key and plan, which waits for it;
-  - `clear` — nothing is recorded and nothing is in flight: nothing was queued, enqueue with this key as you like; with
-    `resend: "same_plan_same_key"`, the app holds the key without a batch and the same plan under the same key starts
-    it again (a different plan needs a new key);
-  - `stale` with `newKeyAdvised: true` — only when the app finished with the key without a batch, cannot start it
-    again and has no batch under it: the same plan may be enqueued under a new key (check `list_queue` afterwards).
-  An app older than this server does not report `inFlight`; its unknown receipts are always `settling`, never advised
-  a new key. Before 0.1.4 the agent had to look the key up twice, about 130 seconds apart, before a new key could be
-  advised; that window is gone.
+  `enqueue_recipes` again with the same key and plan is safe, and is also how to ask what the key holds: it looks the
+  key up first. What it finds:
+  - the batch — `already_enqueued`, nothing is sent;
+  - an enqueue of the key the app is still handling — the call waits for it;
+  - nothing recorded, or the key held without a batch — the plan is sent (again) under the same key;
+  - a recorded rejection — `queue_request_rejected`: a new key is needed once the cause is fixed;
+  - a key the app finished with without a batch and cannot start again — `queue_acceptance_unknown` with
+    `newKeyAdvised: true`: the same plan may be enqueued under a new key (check `list_queue` afterwards).
 - An image with an unknown outcome may have been generated and charged. It is never resent automatically;
   `read_queue` tells you to check the library (`asset_library` with `queueBatchId`) before making it again under a
   new key.
@@ -529,7 +530,7 @@ Item error codes the queue sets itself (explained in `read_queue` as `itemReason
 `generation_failed`, `authentication_failed`, `provider_unknown` and the refusals before sending (`invalid_arguments`,
 `invalid_image`, `history_params_invalid`, …).
 
-`read_queue`, `list_queue` and `control_queue` report a batch's `stopReason` as `{code, message}`. The codes the queue
+`read_queue` and `list_queue` report a batch's `stopReason` as `{code, message}`. The codes the queue
 sets on a batch now are `update_pending`, `queue_storage_error`, `cancel_unconfirmed`, `scheduler_closed` (the app was
 closing; the batch continues after the next start) and `scheduler_stopped` (an internal error ended only this batch
 early; its remaining images were skipped). Batches stored by an app version before 0.1.4 may still carry
@@ -553,9 +554,9 @@ and paused batches are never cleaned, and manual batches are not stored at all.
 A small record of every cleaned batch stays, so an old request key keeps answering "accepted, ended, cleaned" and is
 never treated as unused:
 
-- `lookup_enqueue` answers `enqueued` with the cleaned batch; a repeated `enqueue_recipes` with the same key and plan
-  answers `already_enqueued` and sends nothing; a different plan under that key is `request_conflict`.
-- `read_queue` returns the cleaned batch with `results: []`; `control_queue` changes nothing.
+- A repeated `enqueue_recipes` with the same key and plan answers `already_enqueued` (`cleaned: true`) and sends
+  nothing; a different plan under that key is `request_conflict`.
+- `read_queue` returns the cleaned batch without results.
 - A cleaned batch carries `cleaned: true`, `cleanedAt`, `finishedAt`, its final `status`, `stopReason`, `count`,
   `output` and `itemCounts` (`succeeded`, `failed`, `unknown`, `cancelled`, `skipped`); its per-image details are
   gone. A batch rebuilt from the library after its record was lost (see

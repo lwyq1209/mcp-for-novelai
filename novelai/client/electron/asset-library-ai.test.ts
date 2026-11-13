@@ -54,7 +54,7 @@ it('MCP → own HTTP → SQLite: bounded pages, old full, unchanged desktop/data
     const rawPage=await service.asset_library({action:'list',kinds:['history']});
     measurements.push({route:'desktop/internal default',textBytes:Buffer.byteLength(JSON.stringify(rawPage)),returned:rawPage.items.length});
     const bridge=createBridgeClient({runtimeDir:path.join(directory,'bridge')});
-    server=createNovelAiMcpServer({bridgeClient:bridge});client=new Client({name:'http-history-test',version:'1'});
+    server=createNovelAiMcpServer({ wholeResults: true, bridgeClient:bridge});client=new Client({name:'http-history-test',version:'1'});
     const [a,b]=InMemoryTransport.createLinkedPair();await server.connect(b);await client.connect(a);
     const invokeMcp=(args:any)=>client.callTool({name:'asset_library',arguments:args});
     for(const invoke of [invokeMcp]) {

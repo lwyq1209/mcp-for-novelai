@@ -145,23 +145,26 @@ const settleClock = (clock = { t: 0 }) => ({ monotonicNow: () => clock.t, sleep:
 async function connect(t, bridgeClient, options = {}) {
   const { clock: _clock, ...recipeQueueOptions } = options.recipeQueue ?? settleClock();
   const { compact = false, ...serverOptions } = options;
-  const server = serverUnderTest.create({ bridgeClient, rawRecipeReadback: !compact, ...serverOptions, recipeQueue: { sleep: settleClock().sleep, ...recipeQueueOptions } });
+  const server = serverUnderTest.create({ bridgeClient, wholeResults: !compact, ...serverOptions, recipeQueue: { sleep: settleClock().sleep, ...recipeQueueOptions } });
   const client = new Client({ name: 'business-recipes-test', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport); await client.connect(clientTransport);
   t.after(async () => { await client.close(); await server.close(); });
-  return { call: (name, args) => client.callTool({ name, arguments: args }), readRecipe: directRecipes(bridgeClient) };
+  return { call: withLookup(client, bridgeClient, { sleep: settleClock().sleep, ...recipeQueueOptions }), readRecipe: directRecipes(bridgeClient) };
 }
 // read_recipe is no longer an MCP tool. Stored-revision readbacks go through the recipe module's read() on the same
 // bridge double, in the same success/error envelope a core tool returns.
-const directRecipes = bridgeClient => {
-  const recipes = recipeQueue.createRecipeQueue({ bridge: bridgeClient });
+const directRecipes = (bridgeClient, action = 'read', options = {}) => {
+  const recipes = recipeQueue.createRecipeQueue({ bridge: bridgeClient, ...options });
   return async args => {
-    try { return success(await recipes.read(args), [], projectRoots(PROJECT_ROOT)); }
+    try { return success(await recipes[action](args), [], projectRoots(PROJECT_ROOT)); }
     catch (error) { return errorResult(failure(error, { roots: projectRoots(PROJECT_ROOT), trusted: trustedIdentities(args), policy: 'opaque', layer: 'core' })); }
   };
 };
-// The servers of this file answer prepare_recipe with the whole readback (rawRecipeReadback, a test option); connect {compact:true} is the
+// lookup_enqueue is no longer an MCP tool either (retired on 2026-11-13: enqueue_recipes with the same key and plan answers
+// what a key holds). What a key holds is still asserted here through the recipe module's lookup(), under the old name.
+const withLookup = (client, bridgeClient, options) => { const lookup = directRecipes(bridgeClient, 'lookup', options); return (name, args) => name === 'lookup_enqueue' ? lookup(args) : client.callTool({ name, arguments: args }); };
+// The servers of this file answer prepare_recipe with the whole readback (wholeResults, a test option); connect {compact:true} is the
 // server an agent gets, with the compact readback (search "compact readback").
 const errorOf = result => { assert.equal(result.isError, true, JSON.stringify(result.structuredContent ?? result)); return result.structuredContent.error; };
 const ok = result => { assert.ok(!result.isError, JSON.stringify(result.structuredContent ?? result)); return result.structuredContent; };
@@ -197,7 +200,12 @@ test('compact readback of prepare_recipe, the only one the tool returns: nothing
   assert.equal(full.effective.negativePrompt, [args.negativePrompt, compact.effective.ucPreset.text].join(', '));
   t.diagnostic(`t2i readback characters: compact ${text.length}, whole ${JSON.stringify(full).length}`);
   // It enqueues like any recipe.
-  assert.equal(ok(await raw('enqueue_recipes', { requestKey: 'compact-readback', items: [ref(compact)] })).status, 'enqueued');
+  const receipt = ok(await raw('enqueue_recipes', { requestKey: 'compact-readback', items: [ref(compact)] }));
+  assert.deepEqual(Object.keys(receipt), ['status', 'batchId', 'count']); assert.deepEqual([receipt.status, receipt.count], ['enqueued', 1]); assert.match(receipt.batchId, /^[a-f0-9-]{36}$/);
+  // Asking again with the same key and plan is how to ask what the key holds: nothing is sent, and the batch is named.
+  const again = ok(await raw('enqueue_recipes', { requestKey: 'compact-readback', items: [ref(compact)] }));
+  assert.deepEqual([again.status, again.batchId, typeof again.batchStatus, typeof again.instruction], ['already_enqueued', receipt.batchId, 'string', 'string']);
+  assert.equal(h.methods().filter(method => method === 'enqueue_queue_recipes').length, 1, 'one dispatch');
 
   // No presets and a random seed: nothing was appended, decided or changed.
   const bare = ok(await raw('prepare_recipe', t2i({ qualityPreset: 'none', ucPreset: 3, seed: null })));
@@ -1355,11 +1363,9 @@ test('queue retention: a cleaned batch keeps its requestKey accepted through eve
   assert.equal(other.code, 'request_conflict'); assert.equal(other.details.existingBatch.cleaned, true); assert.match(other.message, /ended and was cleaned/);
   assert.equal(h.count('enqueue_queue_recipes'), enqueues, 'no host enqueue for a cleaned key');
 
-  // read_queue, control_queue and get_queue_result.
+  // read_queue and get_queue_result (control_queue was retired on 2026-11-13; the app's queue page pauses and cancels).
   const read = ok(await call('read_queue', { batchId: accepted.batch.batchId }));
   assert.equal(read.cleaned, true); assert.equal(read.status, 'succeeded'); assert.deepEqual(read.results, []); assert.match(read.instruction, /queueBatchId/);
-  for (const action of ['pause', 'cancel']) { const value = ok(await call('control_queue', { action, batchId: accepted.batch.batchId })); assert.equal(value.cleaned, true); assert.equal(value.status, 'succeeded'); }
-  assert.equal(errorOf(await call('control_queue', { action: 'resume', batchId: accepted.batch.batchId })).code, 'batch_not_paused');
   assert.equal(errorOf(await call('get_queue_result', { batchId: accepted.batch.batchId, itemIndex: 0 })).code, 'result_unavailable');
   assert.equal(ok(await call('list_queue', {})).total, 0);
 

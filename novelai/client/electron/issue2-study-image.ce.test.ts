@@ -61,7 +61,7 @@ async function fixture() {
   const { Client } = await load('../../node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js');
   const { InMemoryTransport } = await load('../../node_modules/@modelcontextprotocol/sdk/dist/esm/inMemory.js');
   const bridge = createBridgeClient({ runtimeDir });
-  const server = createNovelAiMcpServer({ bridgeClient: bridge, studyInbox, studyExports });
+  const server = createNovelAiMcpServer({ wholeResults: true,  bridgeClient: bridge, studyInbox, studyExports });
   const client = new Client({ name: 'issue2-ce-i2-3', version: '1' });
   const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(b); await client.connect(a);
   cleanups.push(async () => { await client.close(); await server.close(); });

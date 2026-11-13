@@ -16,7 +16,7 @@ export const bigItem = (id = 'history-1', kind = 'history') => ({
   unknown: 'UNKNOWN_SENTINEL'.repeat(4000),
 });
 export async function mcpClient(t, bridge) {
-  const server = createNovelAiMcpServer({bridgeClient: bridge});
+  const server = createNovelAiMcpServer({ wholeResults: true, bridgeClient: bridge});
   const client = new Client({name:'summary-test',version:'1'});
   const [a,b] = InMemoryTransport.createLinkedPair();
   await server.connect(b); await client.connect(a);

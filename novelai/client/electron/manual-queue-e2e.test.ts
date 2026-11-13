@@ -154,13 +154,13 @@ async function start(options: { enqueueItemLimit?: number } = {}) {
   const wrap = (call: (args: any) => Promise<any>) => async (args: any) => { try { return await call(args); } catch (error) { throw queueBridgeError(error); } };
   const hostMethods: Record<string, (args: any) => Promise<any>> = Object.fromEntries(QUEUE_METHODS.map(method => [method, wrap(args => queue[method](args))]));
   const bridge = await startHttpBridge({ runtimeDir, dispatch: async (method, args) => Object.hasOwn(hostMethods, method) ? hostMethods[method](args) : toRenderer(method, args) }); closers.push(() => bridge.close());
-  const server = createNovelAiMcpServer({ bridgeClient: createBridgeClient({ runtimeDir }), projectRoot, projectRootSource: 'NOVELAI_PROJECT_ROOT' });
+  const server = createNovelAiMcpServer({ wholeResults: true, bridgeClient: createBridgeClient({ runtimeDir }), projectRoot, projectRootSource: 'NOVELAI_PROJECT_ROOT' });
   const client = new Client({ name: 'claude-code', version: '2.1.112' });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(b); await client.connect(a);
   closers.push(async () => { await client.close(); await server.close(); });
   const ok = async (name: string, args: Record<string, unknown> = {}) => { const result: any = await client.callTool({ name, arguments: args }); expect(result.isError, `${name}: ${JSON.stringify(result.structuredContent).slice(0, 1500)}`).not.toBe(true); return result.structuredContent; };
-  const workspaceId = (await ok('list_workspaces')).workspaces[0].workspaceId;
+  const workspaceId = (await ok('read_workspace', { includeImages: false })).workspaceId;
   const revision = async () => (await ok('read_workspace', { workspaceId, includeImages: false })).revision;
   const listed = async () => (await queue.list_queue({})).batches as any[];
   const settled = () => waitUntil(() => { expect({ batches: useAppStore.getState().manualBatches, status: useAppStore.getState().statusText }).toMatchObject({ batches: [] }); expect(useAppStore.getState().manualPreparing).toBe(false); }, { interval: 20 });

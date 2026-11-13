@@ -1,6 +1,6 @@
 /**
- * Canvas layer of the NovelAI MCP server: the two reads of the live client workspace
- * (workspaceId). Nothing here generates or edits: an image from the canvas is
+ * Canvas layer of the NovelAI MCP server: the read of the live client workspace
+ * (read_workspace; list_workspaces was folded into it on 2026-11-13). Nothing here generates or edits: an image from the canvas is
  * prepare_recipe {canvas} (core layer), then enqueue_recipes. The former canvas
  * generation tools (submit_generation, submit_batch and their job and batch reads and
  * controls) were retired on 2026-11-02; the self-check and draft tools
@@ -24,10 +24,9 @@ const DETAILS = ['compact', 'full'];
 
 // [name, description, inputSchema, readOnlyHint, openWorldHint]
 const CANVAS_DEFINITIONS = [
-  ['list_workspaces', 'List the live NovelAI client workspace. Select its workspaceId before reading it.', schema(), true],
-  ['read_workspace', 'Read the current creative state of the canvas and its asset manifest; revision is the expectedRevision of prepare_recipe {canvas}. One native image is attached by default (activeImageAssetId, else currentImage/workbenchImage); assetIds picks up to 5 from the manifest, includeImages:false none. '
+  ['read_workspace', 'Read the current creative state of the app\'s canvas and its asset manifest; workspaceId and revision are what prepare_recipe {canvas} takes (workspaceId may be left out here: the app has one canvas). One native image is attached by default (activeImageAssetId, else currentImage/workbenchImage); assetIds picks up to 5 from the manifest, includeImages:false none. '
     + 'Default detail compact lists what it left out in omitted: an image entry (currentImage, workbenchImage, i2iOriginalImage, comparisonBeforeImage) keeps its identity, seed and size without its own recipe (promptsMatchCanvas says whether its prompts equal the canvas ones), and the inpaint prompt and recipe appear only while the inpaint tab is active. detail:"full" returns everything. Read again after any manual edit or conflict.',
-    schema({ ...workspace, includeImages: { type: 'boolean', default: true }, assetIds: { type: 'array', items: string, uniqueItems: true, maxItems: MAX_IMAGES }, detail: { type: 'string', enum: DETAILS, default: 'compact' } }, ['workspaceId']), true],
+    schema({ ...workspace, includeImages: { type: 'boolean', default: true }, assetIds: { type: 'array', items: string, uniqueItems: true, maxItems: MAX_IMAGES }, detail: { type: 'string', enum: DETAILS, default: 'compact' } }, []), true],
 ];
 
 // ---------------------------------------------------------------- compact view
@@ -82,14 +81,21 @@ const forward = name => async (args, { bridge, signal, roots }) => success(await
 
 const HANDLERS = {
   async read_workspace(args, { bridge, signal, roots }) {
-    const result = await bridge.call('read_workspace', { workspaceId: args.workspaceId }, signal);
-    if (result.workspaceId !== args.workspaceId || !Number.isInteger(result.revision) || !Array.isArray(result.assets)) throw new BridgeError('invalid_response', 'The client returned an invalid workspace snapshot.');
+    // The app has one canvas: without a workspaceId it is looked up first (the former list_workspaces tool, retired on 2026-11-13).
+    let workspaceId = args.workspaceId;
+    if (workspaceId === undefined) {
+      const listed = await bridge.call('list_workspaces', {}, signal);
+      workspaceId = Array.isArray(listed?.workspaces) && listed.workspaces.length === 1 ? listed.workspaces[0]?.workspaceId : undefined;
+      if (typeof workspaceId !== 'string' || !workspaceId) throw new BridgeError('invalid_response', 'The client did not name exactly one workspace.');
+    }
+    const result = await bridge.call('read_workspace', { workspaceId }, signal);
+    if (result.workspaceId !== workspaceId || !Number.isInteger(result.revision) || !Array.isArray(result.assets)) throw new BridgeError('invalid_response', 'The client returned an invalid workspace snapshot.');
     const defaultAsset = result.activeImageAssetId ?? result.assets.find(asset => asset.role === 'currentImage')?.id ?? result.assets.find(asset => asset.role === 'workbenchImage')?.id;
     const selected = args.includeImages === false ? [] : args.assetIds ?? (defaultAsset ? [defaultAsset] : []);
     if (selected.length > MAX_IMAGES) throw new BridgeError('image_limit', 'Select at most five assetIds, or read without images and request them in another read.');
     for (const id of selected) if (!result.assets.some(asset => asset.id === id)) throw new BridgeError('unknown_asset', 'The requested image is not in this workspace snapshot.', { assetId: id });
     const images = [];
-    for (const assetId of selected) images.push(canvasImage(await bridge.call('get_asset', { workspaceId: args.workspaceId, expectedRevision: result.revision, assetId }, signal)));
+    for (const assetId of selected) images.push(canvasImage(await bridge.call('get_asset', { workspaceId, expectedRevision: result.revision, assetId }, signal)));
     const view = args.detail === 'full' ? { ...result, detail: 'full' } : compactWorkspace(result);
     return success({ ...view, imageAttachments: { includedAssetIds: selected, availableAssetIds: result.assets.map(asset => asset.id), limit: MAX_IMAGES } }, images, roots);
   },
@@ -103,9 +109,9 @@ const VALIDATORS = {
 };
 
 // Host methods beyond the tool's own name.
-const EXTRA_HOST_METHODS = { read_workspace: ['get_asset'] };
+const EXTRA_HOST_METHODS = { read_workspace: ['list_workspaces', 'get_asset'] };
 
-/** The 2 canvas tools in tools/list order. Generating from the canvas is prepare_recipe {canvas} + enqueue_recipes. */
+/** The canvas tool. Generating from the canvas is prepare_recipe {canvas} + enqueue_recipes. */
 export const CANVAS_TOOLS = [
   ...CANVAS_DEFINITIONS.map(([name, description, inputSchema, readOnlyHint, openWorldHint = false]) => ({
     name, layer: 'canvas', errors: 'opaque', description, inputSchema,

@@ -154,7 +154,7 @@ const putStorageRefusal = error => storeFullRefusal(error)
 export const HOST_OUTDATED_MESSAGE = 'The NovelAI client is older than this MCP server and does not accept this request. Fully rebuild and restart the client, then try again. Nothing was saved or enqueued, and no requestKey was used.';
 /**
  * Settling an unknown enqueue in the same call (0.1.4, replacing the 130-second settle window the caller had to wait
- * out with lookup_enqueue): after a dispatch whose outcome is unknown, enqueue_recipes looks the key up (the host says
+ * out with a lookup): after a dispatch whose outcome is unknown, enqueue_recipes looks the key up (the host says
  * whether an enqueue of it is still in flight) and sends the same plan under the same key again when the host holds
  * nothing it is working on, for at most SETTLE_BUDGET_MS, polling every SETTLE_POLL_MS (growing to 5 s), with at most
  * SETTLE_RESENDS resends. The whole call stays within ENQUEUE_CALL_BUDGET_MS, below the MCP clients' 1560-second tool
@@ -166,7 +166,7 @@ const SETTLE_POLL_MAX_MS = 5_000;
 export const SETTLE_RESENDS = 3;
 const SETTLE_MAX_STEPS = 200;
 export const ENQUEUE_CALL_BUDGET_MS = 1_440_000;
-/** lookup_enqueue: when to look again while the host is still handling the key (or, for an older host, may be). */
+/** lookup: when to look again while the host is still handling the key (or, for an older host, may be). */
 const IN_FLIGHT_RETRY_SECONDS = 2, OLD_HOST_RETRY_SECONDS = 30;
 /** Host text when a receipt changed under it during a state transition (an enqueue and a lookup of one key colliding). */
 export const RECEIPT_TRANSITION_MESSAGE = 'Queue receipt changed during its state transition.';
@@ -1017,7 +1017,7 @@ function compactPostprocess(effective, written, mode, known) {
  * - next: only where the next step is not the routine one (a blocked recipe, a mask overlay to look at).
  *
  * The whole readback (recipeReadback: authored, the raw request, assets, hashes, the mask spec) states every prompt
- * three to five times; it stays a module API for tests (createToolContext rawRecipeReadback), not a tool option:
+ * three to five times; it stays a module API for tests (createToolContext wholeResults), not a tool option:
  * what an image was really made with is read from the library (asset_library read) and the queue (read_queue).
  */
 export function compactReadback(full, args = {}) {
@@ -1442,7 +1442,7 @@ export function createRecipeQueue({ bridge, monotonicNow = () => performance.now
   };
 
   /**
-   * lookup_enqueue (0.1.4): what the key holds now, and (settlement, kept for older callers) what to do. Since the host
+   * What the key holds now (the former lookup_enqueue tool, retired on 2026-11-13; kept as a module API for tests, like read): and (settlement, kept for older callers) what to do. Since the host
    * says whether an enqueue of the key is still in flight, the answer is immediate: settling only while it is in
    * flight (a few seconds), clear when nothing is recorded or the same plan can be sent again, stale only for a
    * receipt the host can neither confirm nor restart. A host older than this server does not say: settling, never a
@@ -1637,7 +1637,7 @@ export function createRecipeQueue({ bridge, monotonicNow = () => performance.now
     const keyStatus = last?.status === 'lookup_failed' ? 'lookup_failed' : last?.inFlight ? 'in_flight' : last?.status ?? 'lookup_failed';
     if (givenUp) throw new BridgeError('queue_acceptance_unknown', 'The host finished with this requestKey without a batch and cannot start it again, and the queue has no batch under it. If the images are still wanted, enqueue the same plan under a NEW requestKey; check list_queue afterwards in case the old request still appears.', { ...base, status: 'unknown', enqueueSent: true, keyStatus: 'unknown', newKeyAdvised: true, hostCode, ...hostDetailsOf(cause), settled: facts(), ...withWarnings });
     const why = signal?.aborted ? 'The call was cancelled while its outcome was still being settled' : `The outcome is still unknown after about ${seconds(monotonicNow() - from)} seconds (${progress.lookups} lookup(s), ${progress.resends} resend(s) of the same plan${keyStatus === 'in_flight' ? '; the host is still handling it' : keyStatus === 'lookup_failed' ? '; the client did not answer' : keyStatus === 'not_found' ? '; the client answers lookups, but none of the sends reached it' : ''})`;
-    throw new BridgeError('queue_acceptance_unknown', `${why}. Nothing more is sent by itself. Asking again is safe: call enqueue_recipes with the same requestKey and plan (the host answers it from the key's receipt and never makes a second batch), or lookup_enqueue with the same requestKey. Do not switch keys.`, { ...base, status: 'unknown', enqueueSent: true, keyStatus, newKeyAdvised: false, hostCode, ...hostDetailsOf(cause), settled: facts(), ...withWarnings });
+    throw new BridgeError('queue_acceptance_unknown', `${why}. Nothing more is sent by itself. Asking again is safe: call enqueue_recipes with the same requestKey and plan (the host answers it from the key's receipt and never makes a second batch), which is also how to ask what this requestKey holds. Do not switch keys.`, { ...base, status: 'unknown', enqueueSent: true, keyStatus, newKeyAdvised: false, hostCode, ...hostDetailsOf(cause), settled: facts(), ...withWarnings });
   }
 
   /**
@@ -1651,7 +1651,7 @@ export function createRecipeQueue({ bridge, monotonicNow = () => performance.now
     try { after = await lookupHost(hostRequestKey, signal); } catch { after = null; }
     const details = { ...base, enqueueSent: true, hostCode, ...hostDetailsOf(error), ...(settled ? { settled } : {}), ...withWarnings };
     // Only a confirmed answer (no receipt, or a recorded rejection) makes this a definite rejection; otherwise the
-    // outcome is not known and lookup_enqueue says what the key holds.
+    // outcome is not known and the same call again (its lookup comes first) says what the key holds.
     if (after?.status === 'enqueued') {
       const batch = compactQueuedBatch(after.batch);
       if (acceptanceMatches(after.batch, hostArgs)) return enqueuedReceipt({ base, hostArgs, withWarnings }, after.batch, 'The host reported an error, but the confirming lookup shows this exact plan accepted under this requestKey. Track it with read_queue; do not enqueue it again.', { reconciled: true, hostCode, ...(settled ? { settled } : {}) });
@@ -1662,14 +1662,14 @@ export function createRecipeQueue({ bridge, monotonicNow = () => performance.now
     const transition = receiptTransition(error);
     // An older host: a lookup landed after it published this key's receipt but before it recorded the plan, and it
     // abandoned this dispatch. (A host of 0.1.4 or later never lets a lookup rewrite a running enqueue's receipt.)
-    if (transition && after?.status === 'unknown') throw new BridgeError(hostCode, `The host abandoned this dispatch (${error.message}): a lookup of this requestKey landed before the host recorded the plan, so nothing was queued and this key's receipt is unknown. Call lookup_enqueue with the same requestKey: it says whether the same plan can be sent again under it or a new requestKey is needed.`, { ...details, status: 'unknown', keyStatus: 'unknown', abandoned: true });
+    if (transition && after?.status === 'unknown') throw new BridgeError(hostCode, `The host abandoned this dispatch (${error.message}): a lookup of this requestKey landed before the host recorded the plan, so nothing was queued and this key's receipt is unknown. Call enqueue_recipes again with the same requestKey and plan: it looks the key up first, sends the plan only if the host can take it under this key, and says so if a new requestKey is needed.`, { ...details, status: 'unknown', keyStatus: 'unknown', abandoned: true });
     const storage = hostCode === 'queue_storage_failed' && !transition && storeFullRefusal(error) ? ` ${STORE_FULL} and needs explicit archiving.` : '';
     if (hostCode === 'queue_storage_error') {
       const keyFacts = {
         not_found: [' Nothing was queued and this requestKey was not used: once the client is healthy again, resend the same plan with the same requestKey.', 'not_found'],
         rejected: [' Nothing was queued; this requestKey already has a recorded rejection, so a new requestKey is needed once the client is healthy again.', 'rejected'],
-        unknown: [' The receipt for this requestKey is now unknown: call lookup_enqueue with the same requestKey before anything else.', 'unknown'],
-      }[after?.status] ?? [' The confirming lookup failed, so the state of this requestKey is not known: look it up with lookup_enqueue before anything else.', 'lookup_failed'];
+        unknown: [' The receipt for this requestKey is now unknown: once the client is healthy again, call enqueue_recipes with the same requestKey and plan (it looks the key up first and never queues twice).', 'unknown'],
+      }[after?.status] ?? [' The confirming lookup failed, so the state of this requestKey is not known: once the client is healthy again, call enqueue_recipes with the same requestKey and plan (it looks the key up first and never queues twice).', 'lookup_failed'];
       const confirmed = after?.status === 'not_found' || after?.status === 'rejected';
       throw new BridgeError(hostCode, `${FROZEN_STORE_FAILED_MESSAGE} (${error.message})${keyFacts[0]}`, { ...details, status: confirmed ? 'rejected' : 'unknown', keyStatus: keyFacts[1], ...(after?.status === 'rejected' ? { hostError: after.error } : {}) });
     }
@@ -1681,8 +1681,8 @@ export function createRecipeQueue({ bridge, monotonicNow = () => performance.now
         : ' No receipt yet: after fixing the cause, enqueue again with the same requestKey.';
     if (after?.status === 'not_found') throw new BridgeError(hostCode, `The host refused this enqueue (${error.message}) before recording the requestKey; nothing was queued.${storage}${next}`, { ...details, status: 'rejected', keyStatus: 'not_found' });
     if (after?.status === 'rejected') throw new BridgeError(hostCode, `The host refused this enqueue (${error.message}) and recorded the rejection; nothing was queued under this requestKey.${storage} After fixing the cause, use a new requestKey.`, { ...details, status: 'rejected', keyStatus: 'rejected', hostError: after.error });
-    if (after?.status === 'unknown') throw new BridgeError(hostCode, `The host refused this enqueue (${error.message}), but its receipt for this requestKey is unknown${after.inFlight ? ' and another enqueue of it is still being handled' : ''}.${storage} Call lookup_enqueue with the same requestKey: it says whether the same plan can be sent again under it.`, { ...details, status: 'unknown', keyStatus: 'unknown' });
-    throw new BridgeError(hostCode, `The host refused this enqueue (${error.message}); the confirming lookup failed, so the outcome is not known.${storage} Call lookup_enqueue with the same requestKey before anything else; do not switch keys.`, { ...details, status: 'unknown', keyStatus: 'lookup_failed' });
+    if (after?.status === 'unknown') throw new BridgeError(hostCode, `The host refused this enqueue (${error.message}), but its receipt for this requestKey is unknown${after.inFlight ? ' and another enqueue of it is still being handled' : ''}.${storage} Call enqueue_recipes again with the same requestKey and plan: it looks the key up first and sends the plan only if the host can take it under this key.`, { ...details, status: 'unknown', keyStatus: 'unknown' });
+    throw new BridgeError(hostCode, `The host refused this enqueue (${error.message}); the confirming lookup failed, so the outcome is not known.${storage} Call enqueue_recipes again with the same requestKey and plan (it looks the key up first and never queues twice); do not switch keys.`, { ...details, status: 'unknown', keyStatus: 'lookup_failed' });
   }
 
   return { prepare, read, enqueue, lookup };

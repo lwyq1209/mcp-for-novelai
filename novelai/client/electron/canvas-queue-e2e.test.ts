@@ -60,7 +60,7 @@ import { waitUntil } from '../src/test-support/wait-until';
 
 const DAY = 24 * 60 * 60 * 1000;
 const RETIRED = ['submit_generation', 'submit_batch', 'list_generation_jobs', 'read_generation_job', 'get_generation_result', 'list_batches', 'read_batch', 'control_generation',
-  'read_prompt_review', 'get_asset', 'draft_edit', 'apply_edit', 'undo_edit'];
+  'read_prompt_review', 'get_asset', 'draft_edit', 'apply_edit', 'undo_edit', 'lookup_enqueue', 'control_queue', 'list_workspaces'];
 const png = (width: number, height: number, value: number) => { const image = new PNG({ width, height }); for (let i = 0; i < image.data.length; i += 4) image.data.set([value, (i / 4) % 255, 120, 255], i); return PNG.sync.write(image); };
 const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; };
 async function zipReply(width = 64, height = 64) { const zip = new JSZip(); zip.file('image_0.png', png(width, height, 200)); return { data: await zip.generateAsync({ type: 'nodebuffer' }) }; }
@@ -124,12 +124,12 @@ async function start(options: { batch?: Partial<Parameters<typeof createBatchSer
   const dispatched: string[] = [];
   const dispatch = async (method: string, args: Record<string, unknown>) => { dispatched.push(method); return Object.hasOwn(hostMethods, method) ? hostMethods[method](args) : toRenderer(method, args); };
   const bridge = await startHttpBridge({ runtimeDir, dispatch }); closers.push(() => bridge.close());
-  const server = createNovelAiMcpServer({ rawRecipeReadback: true, bridgeClient: createBridgeClient({ runtimeDir }), projectRoot, projectRootSource: 'NOVELAI_PROJECT_ROOT' });
+  const server = createNovelAiMcpServer({ wholeResults: true, bridgeClient: createBridgeClient({ runtimeDir }), projectRoot, projectRootSource: 'NOVELAI_PROJECT_ROOT' });
   const client = new Client({ name: 'canvas-queue-e2e', version: '1' });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(b); await client.connect(a);
   closers.push(async () => { await client.close(); await server.close(); });
-  // rawRecipeReadback (a test option of the server): these tests read the whole readback; the compact one agents get is tested in novelai/tests.
+  // wholeResults (a test option of the server): these tests read the whole readback; the compact one agents get is tested in novelai/tests.
   const call = async (name: string, args: Record<string, unknown> = {}) => { const result: any = await client.callTool({ name, arguments: args }); return { ok: !result.isError, value: result.structuredContent, content: result.content }; };
   // The draft methods are the window's own (the MCP draft tools were retired on 2026-11-12): called on the renderer as the window does.
   const host = (method: string, args: Record<string, unknown>) => toRenderer(method, args);
@@ -137,7 +137,7 @@ async function start(options: { batch?: Partial<Parameters<typeof createBatchSer
   const refused = async (name: string, args: Record<string, unknown>) => { const result = await call(name, args); expect(result.ok, `${name} should fail`).toBe(false); return result.value.error; };
   // Until the batch ends (the test timeout bounds it).
   const settle = (batchId: string) => waitUntil(async () => { const read = await ok('read_queue', { batchId }); expect(['succeeded', 'partial', 'blocked', 'cancelled'], `batch ${read.status}`).toContain(read.status); return read; }, { interval: 25 });
-  const workspaceId = (await ok('list_workspaces')).workspaces[0].workspaceId;
+  const workspaceId = (await ok('read_workspace', { includeImages: false })).workspaceId;
   const revision = async () => (await ok('read_workspace', { workspaceId, includeImages: false })).revision;
   return { queue, repository, clock, projectRoot, call, ok, host, refused, settle, workspace, workspaceId, revision, dispatched };
 }
@@ -212,9 +212,8 @@ describe('canvas → prepare_recipe {canvas} → enqueue_recipes → read_queue/
     h.clock.now = Date.now() + 8 * DAY;
     const round = await h.queue.reclaimRecipes();
     expect(round.reclaimed).toBe(1);
-    expect(await h.ok('lookup_enqueue', { requestKey: 'e2e-canvas-t2i' })).toMatchObject({ status: 'enqueued', batch: { batchId: receipt.batch.batchId, status: 'succeeded' } });
     expect((await h.ok('read_queue', { batchId: receipt.batch.batchId })).results.map((result: any) => result.actualSeed)).toEqual([11, 12]);
-    expect(await h.ok('enqueue_recipes', { requestKey: 'e2e-canvas-t2i', historyGroup: 'e2e', items: [{ ...ref(recipe), count: 2, seeds: [11, 12] }] })).toMatchObject({ status: 'already_enqueued', enqueueSent: false });
+    expect(await h.ok('enqueue_recipes', { requestKey: 'e2e-canvas-t2i', historyGroup: 'e2e', items: [{ ...ref(recipe), count: 2, seeds: [11, 12] }] })).toMatchObject({ status: 'already_enqueued', enqueueSent: false, batch: { batchId: receipt.batch.batchId, status: 'succeeded' } });
     expect((await h.ok('get_queue_result', { batchId: receipt.batch.batchId, itemIndex: 0 })).actualSeed).toBe(11);
     expect(fixture.post).toHaveBeenCalledTimes(2);
     expect(await h.refused('enqueue_recipes', { requestKey: 'e2e-canvas-t2i-more', items: [{ ...ref(recipe), seeds: [13] }] })).toMatchObject({ code: 'recipe_not_found' });

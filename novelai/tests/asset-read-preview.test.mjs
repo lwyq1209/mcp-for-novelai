@@ -8,7 +8,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 async function mcpClient(t, bridge) {
-  const server = createNovelAiMcpServer({ bridgeClient: bridge });
+  const server = createNovelAiMcpServer({ wholeResults: true,  bridgeClient: bridge });
   const client = new Client({ name: 'read-preview-test', version: '1' });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(b); await client.connect(a);

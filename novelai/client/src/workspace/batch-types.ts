@@ -85,7 +85,7 @@ export interface BatchJob {
   /** reason/params (step 4a): only on a frozen-queue storage stop naming an entry, for the window's own text. */
   error: { code: string; message: string; reason?: string; params?: Record<string, string | number> } | null;
   cancelRequested: boolean;
-  /** "user": paused by an explicit pause (the window or control_queue); such a batch stays paused across a restart.
+  /** "user": paused by an explicit pause in the window (or, before 2026-11-13, the control_queue tool); such a batch stays paused across a restart.
    * Absent for every other state, including a pause the queue made itself (it continues after a restart). */
   pausedBy?: "user";
   items: BatchItem[];

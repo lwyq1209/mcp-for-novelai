@@ -55,6 +55,23 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
   appears only where the next step is not the routine one. A routine t2i readback is about 200 characters (about 500
   with a UC preset) where it was over 20,000 for a long prompt. A canvas recipe, whose inputs the caller never wrote,
   lists every value and states its texts once (`authoredPrompts`, `effective.characters`).
+- The other tools answer in the same way: what only the app uses (its own request key, plan hash, job ids, cache
+  keys), zero counts, defaults and what the call itself wrote are left out.
+  - `asset_library` `read` of a history image returns what it was made with, once (`params` with the prompts,
+    `characters`, `actualSeed`, `mode`, `filePath`, `assetId`, the queue batch), about a third of the former full
+    record; `detail: "full"` is still the raw record. `list` rows carry the identity, name, model, size, a prompt
+    excerpt and the `assetId`.
+  - `read_queue`: `status`, `count`, the `itemCounts` that occur, `results` (`itemIndex`, `historyId`, `actualSeed`,
+    `fileName`, `file`) and `items` only for images that are running, failed, unknown, cancelled or skipped; its place
+    in the queue only while it has not ended. `list_queue`: `batchId`, `status` and `count` per batch, `storage` only
+    when a store is nearly full. `get_queue_result`: `historyId`, `actualSeed`, `fileName`, `file`.
+  - `enqueue_recipes`: `status`, `batchId`, `count` (`seeds` where the server chose them, `warnings`).
+  - `tag_details`: per tag its category, post count, canonical name and aliases where they differ, and the wiki's
+    definition (the text before its first heading, at most 600 characters; `wikiMore` when the page goes on).
+- **10 tools instead of 13.** Retired: `lookup_enqueue` (call `enqueue_recipes` again with the same key and plan: it
+  looks the key up first, answers `already_enqueued` with the batch and never queues twice), `control_queue` (pause,
+  resume and cancel a batch on the queue page of the app) and `list_workspaces` (`read_workspace` finds the one canvas
+  itself; `workspaceId` is optional). They answer `unknown_tool`.
 - `read_workspace` is compact by default too: image entries no longer carry their own recipe (`promptsMatchCanvas`
   says whether it matches the canvas), and the inpaint prompt and recipe appear only on the inpaint tab; `omitted`
   lists what was left out and `detail: "full"` returns everything.

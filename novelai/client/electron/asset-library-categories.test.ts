@@ -51,7 +51,7 @@ async function setup() {
   const host = await startHttpBridge({ runtimeDir: path.join(directory, 'fixture-bridge'), dispatch });
   cleanups.push(() => host.close());
   const bridge = createBridgeClient({ runtimeDir: path.join(directory, 'fixture-bridge') });
-  const server = createNovelAiMcpServer({ bridgeClient: bridge });
+  const server = createNovelAiMcpServer({ wholeResults: true,  bridgeClient: bridge });
   const client = new Client({ name: 'category-sqlite-fixture', version: '1' });
   cleanups.push(() => server.close(), () => client.close()); // reversed: the client closes first
   const [a, b] = InMemoryTransport.createLinkedPair();

@@ -98,14 +98,14 @@ async function realHost(t) {
   return { service, canvas, bridge, calls, faults, jobs, records };
 }
 async function connect(t, bridgeClient, { compact = false } = {}) {
-  const server = merged.createNovelAiMcpServer({ bridgeClient, rawRecipeReadback: !compact });
+  const server = merged.createNovelAiMcpServer({ bridgeClient, wholeResults: !compact });
   const client = new Client({ name: 'recipes-canvas-test', version: '1' });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(b); await client.connect(a);
   t.after(async () => { await client.close(); await server.close(); });
   return (name, args) => client.callTool({ name, arguments: args });
 }
-// The servers of this file answer prepare_recipe with the whole readback (rawRecipeReadback, a test option); connect {compact:true} is the
+// The servers of this file answer prepare_recipe with the whole readback (wholeResults, a test option); connect {compact:true} is the
 // server an agent gets, with the compact readback (search "compact readback").
 const ok = result => { assert.ok(!result.isError, JSON.stringify(result.structuredContent ?? result).slice(0, 3000)); return result.structuredContent; };
 const errorOf = result => { assert.equal(result.isError, true, JSON.stringify(result.structuredContent ?? result).slice(0, 3000)); return result.structuredContent.error; };

@@ -85,9 +85,12 @@ it('names the calling client in recent calls, on the queued batch and on the Rec
   const recipe = await agent.call('prepare_recipe', T2I);
   const enqueued = await agent.call('enqueue_recipes', { requestKey: 'agent-identity-e2e', items: [{ recipeId: recipe.recipeId, recipeRevision: recipe.recipeRevision, inputHash: recipe.inputHash }] });
   expect(enqueued.status).toBe('enqueued');
-  const batchId = enqueued.batch.batchId;
-  expect((await agent.call('read_queue', { batchId })).source).toEqual({ kind: 'agent', client: { name: 'claude-code', version: '2.1.112' } });
-  expect((await agent.call('list_queue')).batches[0].source).toEqual({ kind: 'agent', client: { name: 'claude-code', version: '2.1.112' } });
+  const batchId = enqueued.batchId;
+  // The host keeps who enqueued the batch (the queue page shows it); an agent's own compact reads name a source only for a manual batch.
+  expect((await h.queue.read_queue({ batchId })).source).toEqual({ kind: 'agent', client: { name: 'claude-code', version: '2.1.112' } });
+  expect((await h.queue.list_queue({})).batches[0].source).toEqual({ kind: 'agent', client: { name: 'claude-code', version: '2.1.112' } });
+  expect((await agent.call('read_queue', { batchId })).source).toBeUndefined();
+  expect((await agent.call('list_queue')).batches[0]).toMatchObject({ batchId });
   const deleted = await agent.call('asset_library', { action: 'mutate', command: 'delete', items: [{ kind: 'history', id: 'garden', expectedRevision: garden.revision }] });
   expect(deleted.deleted).toHaveLength(1);
   const listed = await agent.call('asset_library', { action: 'recently-deleted' });

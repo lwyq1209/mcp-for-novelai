@@ -49,7 +49,7 @@ it('actual MCP uses own HTTP → SQLite → safe file reader; exact old original
     const before=await fileHashes();
     host=await startHttpBridge({runtimeDir:path.join(f.directory,'bridge'),dispatch:async(method,args)=>{calls.push({method,args});expect(method).toBe('asset_library');return f.service.asset_library(args);}});
     const bridge=createBridgeClient({runtimeDir:path.join(f.directory,'bridge')});
-    server=createNovelAiMcpServer({bridgeClient:bridge});client=new Client({name:'native-history-test',version:'1'});
+    server=createNovelAiMcpServer({ wholeResults: true, bridgeClient:bridge});client=new Client({name:'native-history-test',version:'1'});
     const [a,b]=InMemoryTransport.createLinkedPair();await server.connect(b);await client.connect(a);
     const execute=[(args:any)=>client.callTool({name:'asset_library',arguments:args})];
     const measurements:any[]=[];

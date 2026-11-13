@@ -33,16 +33,16 @@
 
 （截图为英文界面，使用合成示例数据。）
 
-### 13 个 MCP 工具
+### 10 个 MCP 工具
 
 | 分组 | 工具 |
 | --- | --- |
 | 素材库 | `asset_library`、`material_library`、`material_studies`、`tag_details` |
-| 配方与队列 | `prepare_recipe`、`enqueue_recipes`、`lookup_enqueue`、`list_queue`、`read_queue`、`get_queue_result`、`control_queue` |
-| 画布 | `list_workspaces`、`read_workspace` |
+| 配方与队列 | `prepare_recipe`、`enqueue_recipes`、`list_queue`、`read_queue`、`get_queue_result` |
+| 画布 | `read_workspace` |
 
-只有 `enqueue_recipes` 会开始出图（`control_queue` 继续一个已暂停的批次时，也会接着出图）。画布工具只读取画布，
-不出图也不改画布。详见 [MCP 工具参考](docs/mcp-tools.md)（英文）。
+只有 `enqueue_recipes` 会开始出图。`read_workspace` 只读取画布，不出图也不改画布；批次的暂停、继续和取消在应用的
+队列页里操作。详见 [MCP 工具参考](docs/mcp-tools.md)（英文）。
 
 ## 开始之前
 

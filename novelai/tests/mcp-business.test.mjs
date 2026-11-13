@@ -35,12 +35,12 @@ const pngBytes = Buffer.from(png, 'base64');
 const ENTRY = '12345678-1234-1234-1234-123456789abc';
 const BATCH = 'abcdef01-2345-6789-abcd-ef0123456789';
 // The core layer of the novelai server, in tools/list order (the former business tools plus asset_library).
-const CORE_TOOLS = ['material_library', 'tag_details', 'material_studies', 'asset_library', 'prepare_recipe', 'enqueue_recipes', 'lookup_enqueue', 'list_queue', 'read_queue', 'get_queue_result', 'control_queue'];
+const CORE_TOOLS = ['material_library', 'tag_details', 'material_studies', 'asset_library', 'prepare_recipe', 'enqueue_recipes', 'list_queue', 'read_queue', 'get_queue_result'];
 // Phase two adds the four raw recipe/queue host methods behind prepare/read/enqueue/lookup (exercised in
-// mcp-business-recipes.test.mjs; lookup_enqueue also reads list_queue for a stuck unknown receipt), and
+// mcp-business-recipes.test.mjs; a lookup also reads list_queue for a stuck unknown receipt), and
 // set_cover_from_history reads asset_library {action:image} (mcp-business-history-cover.test.mjs).
 const RECIPE_HOST_METHOD_NAMES = ['put_queue_recipe', 'read_queue_recipe', 'preview_queue_recipe', 'lookup_queue_request', 'enqueue_queue_recipes', 'capture_canvas_recipe'];
-const ALLOWED_HOST_METHODS = new Set(['material_library', 'material_tags', 'material_samples', 'material_studies', 'list_queue', 'read_queue', 'pause_queue', 'resume_queue', 'cancel_queue', 'get_queue_result', ...RECIPE_HOST_METHOD_NAMES, 'asset_library']);
+const ALLOWED_HOST_METHODS = new Set(['material_library', 'material_tags', 'material_samples', 'material_studies', 'list_queue', 'read_queue', 'get_queue_result', ...RECIPE_HOST_METHOD_NAMES, 'asset_library']);
 const observedHostMethods = new Set();
 const noHost = () => { throw new Error('No host request expected'); };
 
@@ -52,7 +52,8 @@ async function connect(t, handler = noHost, options = {}) {
     assert.ok(signal instanceof AbortSignal, 'the MCP request signal reaches the host call');
     return handler(method, args, signal);
   } };
-  const server = createNovelAiMcpServer({ bridgeClient, ...options });
+  // wholeResults (a test option of the server): this file reads the whole results of the modules; the compact ones agents get are in compact-results.test.mjs.
+  const server = createNovelAiMcpServer({ wholeResults: true, bridgeClient, ...options });
   const client = new Client({ name: 'business-test', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
@@ -73,17 +74,16 @@ async function directories(t) {
 const errorOf = result => { assert.equal(result.isError, true, JSON.stringify(result)); return result.structuredContent.error; };
 const ok = result => { assert.ok(!result.isError, JSON.stringify(result.structuredContent ?? result)); return result.structuredContent; };
 
-test('surface: the core layer lists the 11 core tools first, with flat object schemas, fixed annotations and no workspace', async t => {
+test('surface: the core layer lists the 9 core tools first, with flat object schemas, fixed annotations and no workspace', async t => {
   const { client } = await connect(t);
   const { tools: listed } = await client.listTools();
-  assert.equal(listed.length, 13);
+  assert.equal(listed.length, 10);
   assert.deepEqual(listed, TOOL_DEFINITIONS);
   assert.deepEqual(CORE_TOOL_NAMES, CORE_TOOLS);
   const tools = listed.slice(0, CORE_TOOLS.length);
   assert.deepEqual(tools.map(tool => tool.name), CORE_TOOLS, 'core layer first');
-  // lookup_enqueue is deliberately not read-only/idempotent: the host reconciles its receipt during the lookup.
   const readOnly = new Set(['tag_details', 'list_queue', 'read_queue', 'get_queue_result']);
-  const openWorld = new Set(['material_library', 'tag_details', 'control_queue', 'enqueue_recipes']);
+  const openWorld = new Set(['material_library', 'tag_details', 'enqueue_recipes']);
   for (const tool of tools) {
     assert.deepEqual(tool.annotations, { readOnlyHint: readOnly.has(tool.name), destructiveHint: false, idempotentHint: readOnly.has(tool.name), openWorldHint: openWorld.has(tool.name) }, tool.name);
     assert.equal(tool.inputSchema.type, 'object');
@@ -109,12 +109,10 @@ test('surface: the core layer lists the 11 core tools first, with flat object sc
   for (const tool of tools) assert.doesNotMatch(tool.description, /review: not_run|review policy|Not reviewed/, tool.name);
   for (const phrase of ['Generation happens only through an explicit enqueue_recipes', 'never a new key while an outcome is still settling', 'Credentials are local']) assert.ok(instructions.includes(phrase), phrase);
   assert.match(tools.find(tool => tool.name === 'enqueue_recipes').description, /GENERATES these images/);
-  assert.match(tools.find(tool => tool.name === 'lookup_enqueue').description, /not read-only/);
-  assert.match(tools.find(tool => tool.name === 'lookup_enqueue').description, /NEW requestKey/);
-  assert.match(tools.find(tool => tool.name === 'lookup_enqueue').description, /inFlight/);
-  assert.doesNotMatch(tools.find(tool => tool.name === 'lookup_enqueue').description, /settle window|130/);
   assert.match(tools.find(tool => tool.name === 'enqueue_recipes').description, /settled in the same call/);
-  assert.doesNotMatch(tools.find(tool => tool.name === 'lookup_enqueue').description, /permanent|never clears/i);
+  assert.match(tools.find(tool => tool.name === 'enqueue_recipes').description, /that call is also how to ask what a key holds \(already_enqueued with its batch, and nothing is sent\)/);
+  for (const tool of listed) assert.doesNotMatch(tool.description, /lookup_enqueue|control_queue|list_workspaces/, `${tool.name} names a retired tool`);
+  assert.doesNotMatch(instructions, /lookup_enqueue|control_queue|list_workspaces/);
   assert.match(tools.find(tool => tool.name === 'prepare_recipe').inputSchema.properties.ucPreset.description, /depends on the model/);
   assert.deepEqual(tools.find(tool => tool.name === 'prepare_recipe').inputSchema.properties.mode.enum, ['t2i', 'i2i', 'inpaint', 'enhance', 'upscale', 'director']);
   assert.deepEqual(tools.find(tool => tool.name === 'prepare_recipe').inputSchema.required, ['mode'], 'per-mode required fields are checked server-side');
@@ -442,7 +440,7 @@ test('queue outputs say why a batch is paused or blocked (stopReason), and how m
   assert.deepEqual(read.stopReason, { code: 'child_stopped', message: BATCH_REASONS.child_stopped });
   // Item errors stay codes; no host message, window reason or params reaches the model.
   assert.deepEqual(read.items.map(item => [item.status, item.error]), [['failed', 'provider_error'], ['unknown', 'submission_unconfirmed'], ['skipped', null]]);
-  const text = JSON.stringify([listed, read, ok(await call('read_queue', { batchId: halted.batchId })), ok(await call('control_queue', { batchId: odd.batchId, action: 'resume' }))]);
+  const text = JSON.stringify([listed, read, ok(await call('read_queue', { batchId: halted.batchId })), ok(await call('read_queue', { batchId: odd.batchId }))]);
   for (const hidden of ['secret prompt text', 'host text that is not passed on', 'queue.window_only', '"params"', '"reason"']) assert.ok(!text.includes(hidden), hidden);
   // Every code the host queue stops a batch with has an explanation (electron/batch-service.ts).
   for (const code of ['queue_halted', 'child_stopped', 'child_rejected', 'submission_unconfirmed', 'restart_unconfirmed', 'restart_blocked', 'recovered_paused', 'child_lookup_failed', 'child_status_unavailable', 'cancel_unconfirmed', 'queue_storage_error', 'scheduler_stopped', 'scheduler_closed', 'update_pending']) assert.ok(BATCH_REASONS[code], code);
@@ -455,14 +453,13 @@ test('queue tools map one-to-one to fixed host methods with a compact output', a
   const { call, calls } = await connect(t, (method, args) => {
     if (method === 'list_queue') return { batches };
     if (method === 'get_queue_result') return { jobId: 'job-1', index: args.index, mimeType: 'image/png', data: png, ...(args.index === 2 ? { actualSeed: 77 } : {}) };
-    return queuedBatch({ status: { read_queue: 'running', pause_queue: 'paused', resume_queue: 'running', cancel_queue: 'cancelled' }[method] });
+    return queuedBatch({ status: 'running' });
   });
   const listed = ok(await call('list_queue', {}));
   assert.deepEqual(calls.at(-1), { method: 'list_queue', args: {} });
   assert.deepEqual(listed, { total: 10, byStatus: { queued: 3, succeeded: 7 }, batches: batches.slice(0, 8).map(batch => ({ batchId: batch.batchId, source: { kind: 'agent', client: null }, status: batch.status, stopReason: null, count: 1, activeJobId: batch.activeJobId ?? null, itemsFailed: 0, itemsUnknown: 0 })), omitted: 2, instruction: 'Use read with a batchId for its item progress.' });
-  // control_queue maps each action to its own host method (pause_queue, resume_queue, cancel_queue) with only the batch identity.
-  for (const [tool, args, method, status] of [['read_queue', { batchId: BATCH }, 'read_queue', 'running'], ['control_queue', { batchId: BATCH, action: 'pause' }, 'pause_queue', 'paused'],
-    ['control_queue', { batchId: BATCH, action: 'resume' }, 'resume_queue', 'running'], ['control_queue', { batchId: BATCH, action: 'cancel' }, 'cancel_queue', 'cancelled']]) {
+  // Pausing, resuming and cancelling left this server with control_queue (2026-11-13): read_queue is the only batch call.
+  for (const [tool, args, method, status] of [['read_queue', { batchId: BATCH }, 'read_queue', 'running']]) {
     const result = ok(await call(tool, args));
     assert.deepEqual(calls.at(-1), { method, args: { batchId: BATCH } });
     // read_queue adds the saved images' history identities (phase two) and the seed each was generated with.
@@ -477,14 +474,15 @@ test('queue tools map one-to-one to fixed host methods with a compact output', a
   const seeded = await call('get_queue_result', { batchId: BATCH, itemIndex: 0, index: 2 });
   assert.deepEqual(calls.at(-1), { method: 'get_queue_result', args: { batchId: BATCH, itemIndex: 0, index: 2 } });
   assert.equal(seeded.structuredContent.actualSeed, 77, 'get_queue_result carries the actual seed of that image');
-  assert.deepEqual(Object.values(QUEUE_HOST_METHODS).sort(), ['cancel_queue', 'get_queue_result', 'list_queue', 'pause_queue', 'read_queue', 'resume_queue']);
+  assert.deepEqual(Object.values(QUEUE_HOST_METHODS).sort(), ['get_queue_result', 'list_queue', 'read_queue']);
+  for (const retired of ['control_queue', 'lookup_enqueue']) assert.equal(errorOf(await call(retired, { batchId: BATCH, action: 'cancel', requestKey: 'k' })).code, 'unknown_tool', retired);
 });
 
 test('queue tools reject invalid identities before the host and reject mismatched host replies', async t => {
   const { call, calls } = await connect(t);
   for (const [tool, args] of [['list_queue', { batchId: BATCH }], ['list_queue', { action: 'enqueue' }], ['read_queue', {}], ['read_queue', { batchId: 'b-1' }], ['read_queue', { batchId: BATCH.toUpperCase() }],
-    ['read_queue', { batchId: BATCH, itemIndex: 0 }], ['read_queue', { batchId: BATCH, action: 'enqueue' }], ['control_queue', { batchId: BATCH, action: 'pause', requestKey: 'x' }], ['control_queue', { action: 'resume' }], ['control_queue', { batchId: '../x', action: 'cancel' }],
-    ['control_queue', { batchId: BATCH }], ['control_queue', { batchId: BATCH, action: 'read' }], ['control_queue', { batchId: BATCH, action: 'list' }], ['control_queue', { batchId: BATCH, action: 'result', itemIndex: 0 }], ['control_queue', { batchId: BATCH, action: 'enqueue' }], ['control_queue', { batchId: BATCH, action: 'PAUSE' }], ['control_queue', { batchId: BATCH, action: 'cancel', workspaceId: 'w' }],
+    ['read_queue', { batchId: BATCH, itemIndex: 0 }], ['read_queue', { batchId: BATCH, action: 'enqueue' }],
+   
     ['get_queue_result', { batchId: BATCH, index: 1 }], ['get_queue_result', { batchId: BATCH, itemIndex: 0, offset: 2 }], ['get_queue_result', { batchId: BATCH, offset: -1 }],
     ['read_queue', { batchId: BATCH, wait: { until: 'later', seconds: 5 } }], ['read_queue', { batchId: BATCH, wait: { until: 'done', seconds: 1201 } }], ['read_queue', { batchId: BATCH, wait: { until: 'done', seconds: 0 } }],
     ['read_queue', { batchId: BATCH, wait: { seconds: 5 } }], ['read_queue', { batchId: BATCH, wait: { until: 'done', every: 1 } }], ['read_queue', { batchId: BATCH, wait: 'done' }], ['get_queue_result', { batchId: BATCH, itemIndex: 200 }], ['get_queue_result', { batchId: BATCH, itemIndex: -1 }], ['get_queue_result', { batchId: BATCH, itemIndex: 0, index: -1 }],
@@ -495,7 +493,6 @@ test('queue tools reject invalid identities before the host and reject mismatche
   const replies = [
     ['list_queue', {}, { batches: 'none' }, 'invalid_response'], ['list_queue', {}, { ok: true }, 'invalid_response'], ['list_queue', {}, { batches: [null] }, 'invalid_response'],
     ['read_queue', { batchId: BATCH }, queuedBatch({ batchId: '00000000-0000-0000-0000-000000000000' }), 'invalid_response'], ['read_queue', { batchId: BATCH }, queuedBatch({ execution: 'serial' }), 'invalid_response'],
-    ['control_queue', { batchId: BATCH, action: 'cancel' }, null, 'invalid_response'], ['control_queue', { batchId: BATCH, action: 'pause' }, queuedBatch({ batchId: '00000000-0000-0000-0000-000000000000' }), 'invalid_response'],
     ['get_queue_result', { batchId: BATCH, itemIndex: 0 }, { mimeType: 'image/png', data: png, index: 1 }, 'invalid_response'], ['get_queue_result', { batchId: BATCH, itemIndex: 0 }, { mimeType: 'text/html', data: png }, 'invalid_response'],
     ['get_queue_result', { batchId: BATCH, itemIndex: 0 }, { mimeType: 'image/png', data: '' }, 'invalid_response'], ['get_queue_result', { batchId: BATCH, itemIndex: 0 }, { mimeType: 'image/png', data: 'not base64!' }, 'invalid_image'],
   ];
@@ -504,7 +501,7 @@ test('queue tools reject invalid identities before the host and reject mismatche
     assert.equal(errorOf(await client.call(tool, args)).code, code, `${tool} ${JSON.stringify(reply)}`);
   }
   const busy = await connect(t, () => { throw new BridgeError('workspace_busy', 'The host is busy.', { token: 'hidden', batchId: BATCH }); });
-  assert.deepEqual(errorOf(await busy.call('control_queue', { batchId: BATCH, action: 'resume' })), { code: 'workspace_busy', message: 'The host is busy.', details: { batchId: BATCH } });
+  assert.deepEqual(errorOf(await busy.call('read_queue', { batchId: BATCH })), { code: 'workspace_busy', message: 'The host is busy.', details: { batchId: BATCH } });
   const crash = await connect(t, () => { throw new TypeError('/private/path/secret.js exploded'); });
   assert.deepEqual(errorOf(await crash.call('read_queue', { batchId: BATCH })), { code: 'internal_error', message: 'The business tool failed. Read current state before continuing.' });
   const programming = await connect(t, () => { throw Object.assign(new TypeError('/private/path/secret.js bad arg'), { code: 'ERR_INVALID_ARG_TYPE' }); });
@@ -523,7 +520,7 @@ test('success and error envelopes are the same for canvas and core tools: same r
   await workspace.connect(a); await workspaceClient.connect(b);
   t.after(async () => { await workspaceClient.close(); await workspace.close(); });
   const { call } = await connect(t, () => structuredClone(hostValue));
-  const expected = (await workspaceClient.callTool({ name: 'list_workspaces', arguments: {} })).structuredContent;
+  const expected = (await workspaceClient.callTool({ name: 'asset_library', arguments: { action: 'collections' } })).structuredContent;
   assert.deepEqual(expected, { projects: [{ id: 'p', name: 'n', nested: { keep: 'yes' } }] });
   assert.deepEqual(ok(await call('material_library', { action: 'list' })), expected);
   const workspaceError = await workspaceClient.callTool({ name: 'enqueue_queue_recipes', arguments: {} });
@@ -551,7 +548,7 @@ test('source stays a whitelist: one guarded bridge, fixed host methods per tool,
   // Core tools reach the host only through the cores, plus asset_library by its literal name.
   assert.deepEqual([...coreTools.matchAll(/bridge\.call\(([^,]+),/g)].map(match => match[1]), ["'asset_library'"]);
   // Canvas tools call their own registered name or a fixed literal follow-up read.
-  assert.deepEqual([...new Set([...canvasTools.matchAll(/bridge\.call\(([^,]+),/g)].map(match => match[1]))].sort(), ["'get_asset'", "'read_workspace'", 'name'].sort());
+  assert.deepEqual([...new Set([...canvasTools.matchAll(/bridge\.call\(([^,]+),/g)].map(match => match[1]))].sort(), ["'get_asset'", "'list_workspaces'", "'read_workspace'", 'name'].sort());
   for (const source of server) {
     assert.ok(!/enqueue_queue_recipes|put_queue_recipe|read_queue_recipe|derive_queue_recipe|lookup_queue_request|style_trial|style_experiment|style_sweep/.test(source), 'no server module names a raw recipe or a removed style host method');
     assert.deepEqual(importsOf(source).filter(item => writeOrReview.test(item) && !['./recipe-queue.mjs', './recipe-tool-schemas.mjs'].includes(item)), []);
@@ -599,7 +596,7 @@ test('source stays a whitelist: one guarded bridge, fixed host methods per tool,
 
 // The module graph of the entry point.
 const SERVER_MODULES = ['client/shared/runtime/data-paths.cjs', 'contracts/generated/library-contracts.json', 'contracts/validate.mjs',
-  'src/app-autostart.mjs', 'src/app-launch.mjs', 'src/win32-process.mjs', 'src/asset-library-categories.mjs', 'src/asset-library-response.mjs', 'src/bridge-client.mjs', 'src/business-guards.mjs', 'src/recipe-queue.mjs', 'src/data-paths.mjs', 'src/history-cover.mjs', 'src/history-export.mjs', 'src/image-censor.mjs', 'src/material-tools.mjs',
+  'src/app-autostart.mjs', 'src/app-launch.mjs', 'src/win32-process.mjs', 'src/asset-library-categories.mjs', 'src/asset-library-response.mjs', 'src/bridge-client.mjs', 'src/business-guards.mjs', 'src/compact-results.mjs', 'src/recipe-queue.mjs', 'src/data-paths.mjs', 'src/history-cover.mjs', 'src/history-export.mjs', 'src/image-censor.mjs', 'src/material-tools.mjs',
   'src/mcp-canvas-tools.mjs', 'src/mcp-core-tools.mjs', 'src/mcp-registry.mjs', 'src/mcp.mjs', 'src/platform-fs.mjs', 'src/queue-control.mjs', 'src/recipe-masks.mjs', 'src/recipe-sources.mjs', 'src/recipe-tool-schemas.mjs',
   'src/study-tools.mjs', 'src/tag-cooccurrence.mjs', 'src/tag-details.mjs', 'src/tag-query-coordinator.mjs', 'src/version.mjs'];
 for (const [entry, expected] of [['src/mcp.mjs', SERVER_MODULES]]) {
@@ -633,7 +630,7 @@ for (const [entry, name] of [['src/mcp.mjs', 'novelai']]) {
     assert.deepEqual(client.getServerVersion(), { name, version: SERVER_VERSION });
     assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), TOOL_DEFINITIONS.map(tool => tool.name));
     assert.equal(errorOf(await client.callTool({ name: 'list_queue', arguments: {} })).code, 'unavailable');
-    assert.equal(errorOf(await client.callTool({ name: 'lookup_enqueue', arguments: { requestKey: 'k' } })).code, 'unavailable', 'lookup needs the host; nothing else happens');
+    assert.equal(errorOf(await client.callTool({ name: 'enqueue_recipes', arguments: { requestKey: 'k', items: [{ recipeId: '00000000-0000-4000-8000-000000000000', recipeRevision: 1, inputHash: 'a'.repeat(64) }] } })).code, 'unavailable', 'the key lookup needs the host; nothing else happens');
     assert.equal(errorOf(await client.callTool({ name: 'enqueue_recipes', arguments: { requestKey: 'k', items: [] } })).code, 'invalid_arguments');
     for (const method of RECIPE_HOST_METHOD_NAMES) assert.equal(errorOf(await client.callTool({ name: method, arguments: {} })).code, 'unknown_tool', method);
     assert.equal(errorOf(await client.callTool({ name: 'search_tags', arguments: { workspaceId: 'w', query: 'x' } })).code, 'unknown_tool');
@@ -646,6 +643,7 @@ test('the former novelai-business alias entry point is gone', async () => {
 });
 
 test('every host method observed across this file is on the whitelist', () => {
-  assert.ok(observedHostMethods.size >= 8);
+  // The three batch-control methods left with control_queue (2026-11-13).
+  assert.ok(observedHostMethods.size >= 5, [...observedHostMethods].join(', '));
   assert.deepEqual([...observedHostMethods].filter(method => !ALLOWED_HOST_METHODS.has(method)), []);
 });

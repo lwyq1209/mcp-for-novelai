@@ -98,12 +98,15 @@ async function startHost({ resolveHistoryGroup = mainResolver, olderClient = fal
     try { return json(await queue[method](json(args))); }
     catch (error) { const bridged: any = queueBridgeError(error); throw new BridgeError(bridged.code, bridged.message, bridged.details); }
   } };
-  const server = createNovelAiMcpServer({ bridgeClient, projectRoot: base });
+  // wholeResults (a test option of the server): these tests read the whole receipts and batches; the compact ones agents get are tested in novelai/tests.
+  const server = createNovelAiMcpServer({ wholeResults: true, bridgeClient, projectRoot: base });
+  // lookup_enqueue left the MCP surface on 2026-11-13; what a key holds is asserted through the recipe module's lookup.
+  const lookup = mcpQueue.createRecipeQueue({ bridge: bridgeClient }).lookup;
   const client = new Client({ name: 'queue-output-host-test', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport); await client.connect(clientTransport);
   closers.push(async () => { await client.close(); await server.close(); });
-  const call = async (name: string, args: Record<string, unknown>) => { const result: any = await client.callTool({ name, arguments: args }); return { ok: !result.isError, value: result.structuredContent }; };
+  const call = async (name: string, args: Record<string, unknown>) => { if (name === 'lookup_enqueue') return { ok: true, value: json(await lookup(args)) }; const result: any = await client.callTool({ name, arguments: args }); return { ok: !result.isError, value: result.structuredContent }; };
   const ok = async (name: string, args: Record<string, unknown>) => { const result = await call(name, args); expect(result.ok, `${name}: ${JSON.stringify(result.value)}`).toBe(true); return result.value; };
   return { queue, resolver, call, ok, holdNext: () => { hold = true; }, release: async () => { for (const deliver of held.splice(0)) await deliver(); } };
 }
@@ -264,7 +267,7 @@ describe('enqueue output at the host boundary (issue #1)', () => {
     expect(fixture.post).toHaveBeenCalledTimes(1);
   });
 
-  it('host_outdated from a client without the output fields leaves the key unused, and lookup_enqueue says so at once (0.1.4)', async () => {
+  it('host_outdated from a client without the output fields leaves the key unused, and a lookup says so at once (0.1.4)', async () => {
     const host = await startHost({ olderClient: true });
     const recipe = await host.ok('prepare_recipe', t2i);
     expect((await host.call('enqueue_recipes', { requestKey: 'k-s1c', items: [ref(recipe)], fileNamePrefix: 'p' })).value.error.code).toBe('host_outdated');

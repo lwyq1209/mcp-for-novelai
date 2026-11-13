@@ -113,7 +113,7 @@ test('a read that fails during a wait is tried again at the next poll; a definit
 async function connect(t, handler) {
   const calls = [];
   const bridgeClient = { async call(method, args) { calls.push({ method, args: structuredClone(args) }); return handler(method, args); } };
-  const server = createNovelAiMcpServer({ bridgeClient });
+  const server = createNovelAiMcpServer({ wholeResults: true,  bridgeClient });
   const client = new Client({ name: 'queue-wait-test', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport); await client.connect(clientTransport);

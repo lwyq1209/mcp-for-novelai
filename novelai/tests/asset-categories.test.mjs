@@ -40,7 +40,7 @@ function fixtureBridge() {
   } };
 }
 async function mcp(t, bridge) {
-  const server = createNovelAiMcpServer({ bridgeClient: bridge });
+  const server = createNovelAiMcpServer({ wholeResults: true,  bridgeClient: bridge });
   const client = new Client({ name: 'asset-category-fixture', version: '1' });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(b); await client.connect(a);

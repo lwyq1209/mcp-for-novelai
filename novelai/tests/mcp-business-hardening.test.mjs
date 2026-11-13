@@ -305,14 +305,14 @@ test('P3-5: production tag_details path (no NODE_TEST_CONTEXT) writes only the r
     const client = new Client({ name: 'p35', version: '1' }); const [a, b] = InMemoryTransport.createLinkedPair();
     await server.connect(a); await client.connect(b);
     const first = await client.callTool({ name: 'tag_details', arguments: { name: 'collared_shirt' } });
-    const second = await client.callTool({ name: 'tag_details', arguments: { name: 'collared_shirt' } });
+    const second = await client.callTool({ name: 'tag_details', arguments: { name: 'collared_shirt', detail: 'full' } });
     console.log(JSON.stringify({ testContext: process.env.NODE_TEST_CONTEXT ?? null, first: first.structuredContent, second: second.structuredContent, fetched }));
     process.exit(0);`;
   const result = await child(code, childEnv({ NOVELAI_TAG_QUERY_CACHE_DIR: cache, NOVELAI_DATA_DIR: join(base, 'data') }), 15000);
   assert.equal(result.hung, false, result.stderr);
   const output = JSON.parse(result.stdout.trim().split('\n').at(-1));
   assert.equal(output.testContext, null);
-  assert.equal(output.first.items[0].resolution, 'canonical');
+  assert.deepEqual([output.first.items[0].name, output.first.items[0].resolution], ['collared_shirt', undefined], 'found under its own name: the canonical resolution is not restated');
   // tag and alias requests run concurrently, so compare as a set; three fetches in total means the second lookup came from the cache.
   assert.deepEqual([...output.fetched].sort(), ['https://danbooru.donmai.us/tag_aliases.json', 'https://danbooru.donmai.us/tags.json', 'https://danbooru.donmai.us/wiki_pages.json'], 'second lookup is served from the cache');
   assert.equal(output.second.items[0].evidence?.retrieval, 'cache', JSON.stringify(output.second));

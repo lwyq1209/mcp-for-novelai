@@ -144,7 +144,7 @@ async function start() {
     asset_library: async args => { try { return await assets.asset_library(args); } catch (error: any) { throw new BridgeError(error?.code ?? 'material_failed', error?.message ?? 'failed'); } } };
   const dispatch = async (method: string, args: Record<string, unknown>) => Object.hasOwn(hostMethods, method) ? hostMethods[method](args) : toRenderer(method, args);
   const bridge = await startHttpBridge({ runtimeDir, dispatch }); closers.push(() => bridge.close());
-  const server = createNovelAiMcpServer({ bridgeClient: createBridgeClient({ runtimeDir }), projectRoot, projectRootSource: 'NOVELAI_PROJECT_ROOT' });
+  const server = createNovelAiMcpServer({ wholeResults: true, bridgeClient: createBridgeClient({ runtimeDir }), projectRoot, projectRootSource: 'NOVELAI_PROJECT_ROOT' });
   const client = new Client({ name: 'queue-history', version: '1' });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(b); await client.connect(a);
@@ -152,7 +152,7 @@ async function start() {
   const call = async (name: string, args: Record<string, unknown> = {}) => { const result: any = await client.callTool({ name, arguments: args }); return { ok: !result.isError, value: result.structuredContent, content: result.content }; };
   const ok = async (name: string, args: Record<string, unknown> = {}) => { const result = await call(name, args); expect(result.ok, `${name}: ${JSON.stringify(result.value).slice(0, 1500)}`).toBe(true); return result.value; };
   const settle = (batchId: string) => waitUntil(async () => { const read = await ok('read_queue', { batchId }); expect(['succeeded', 'partial', 'blocked', 'cancelled'], `batch ${read.status}`).toContain(read.status); return read; }, { interval: 25 });
-  const workspaceId = (await ok('list_workspaces')).workspaces[0].workspaceId;
+  const workspaceId = (await ok('read_workspace', { includeImages: false })).workspaceId;
   const revision = async () => (await ok('read_workspace', { workspaceId, includeImages: false })).revision;
   /** A batch whose every result is a saved history record the MCP tools can reach. */
   const kept = async (label: string, batchId: string, count: number) => {

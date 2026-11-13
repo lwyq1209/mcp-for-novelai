@@ -53,21 +53,21 @@ const errorOf = result => { assert.equal(result.isError, true, JSON.stringify(re
 const size = value => JSON.stringify(value).length;
 
 // --------------------------------------------------------------------------- N1
-const NO_ARGUMENT_TOOLS = ['list_queue', 'list_workspaces'];
+const NO_ARGUMENT_TOOLS = ['list_queue'];
 // Some MCP clients keep only these three keys of a tool's input schema when they pass it to a model (for example a
 // non-strict Anthropic messages conversion); every tool must still have its parameters after that projection.
 const minimalProjection = schema => ({ type: 'object', properties: schema.properties ?? {}, required: schema.required ?? [] });
 
-test('N1 surface: 13 tools, core layer first, flat closed schemas that survive a minimal client projection', async t => {
+test('N1 surface: 10 tools, core layer first, flat closed schemas that survive a minimal client projection', async t => {
   const { client } = await connect(t);
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 13);
+  assert.equal(tools.length, 10);
   assert.deepEqual(tools, TOOL_DEFINITIONS);
   assert.deepEqual(tools.map(tool => tool.name), [...CORE_TOOL_NAMES, ...CANVAS_TOOL_NAMES]);
-  assert.equal(CORE_TOOL_NAMES.length, 11); assert.deepEqual(CANVAS_TOOL_NAMES, ['list_workspaces', 'read_workspace'], 'the canvas generation tools were retired on 2026-11-02, the self-check and draft tools on 2026-11-12');
+  assert.equal(CORE_TOOL_NAMES.length, 9); assert.deepEqual(CANVAS_TOOL_NAMES, ['read_workspace'], 'the canvas generation tools were retired on 2026-11-02, the self-check and draft tools on 2026-11-12, list_workspaces on 2026-11-13');
   assert.ok(!tools.some(tool => tool.name === 'style_sweep'), 'the style sweep tool was removed');
   assert.ok(!tools.some(tool => tool.name === 'search_tags'));
-  assert.deepEqual(new Set(tools.map(tool => tool.name)).size, 13, 'no duplicate names');
+  assert.deepEqual(new Set(tools.map(tool => tool.name)).size, 10, 'no duplicate names');
   for (const tool of TOOL_REGISTRY) assert.ok(['core', 'canvas'].includes(tool.layer), tool.name);
   assert.deepEqual(TOOL_REGISTRY.filter(tool => tool.layer === 'core').map(tool => tool.name), CORE_TOOL_NAMES);
   for (const tool of tools) {
@@ -180,8 +180,10 @@ test('N4 size budget: tools/list totals stay under the agreed ceilings', async t
   // 43.3k; the whole server still fits in 50k. Compact reads (asked for by the user 2026-11-12): the five canvas
   // self-check and draft tools are retired and prepare_recipe describes its compact readback inside the same core
   // ceiling, so the whole server goes down to 45.5k (about 44.9k used).
-  assert.ok(total <= 45_500, `whole server ${total}`);
-  assert.ok(core <= 43_300, `core layer ${core}`);
+  // Fewer tools and compact results (asked for by the user 2026-11-13): lookup_enqueue, control_queue and
+  // list_workspaces are retired, so the whole server goes down to 42.6k and core to 41.2k (about 42.1k and 40.8k used).
+  assert.ok(total <= 42_600, `whole server ${total}`);
+  assert.ok(core <= 41_200, `core layer ${core}`);
   assert.ok(asset <= 6_900, `asset_library ${asset}`);
 });
 
@@ -190,7 +192,8 @@ test('N5 one idempotency namespace: one requestKey maps to one host key on separ
   const first = await connect(t, () => ({}));
   const second = await connect(t, () => ({}));
   const requestKey = 'n5 same intent /Users/x token: y';
-  for (const server of [first, second]) await server.call('lookup_enqueue', { requestKey });
+  // enqueue_recipes looks its key up first (the lookup_enqueue tool was retired on 2026-11-13); the empty host reply ends the call there.
+  for (const server of [first, second]) await server.call('enqueue_recipes', { requestKey, items: [{ recipeId: UUID, recipeRevision: 1, inputHash: 'a'.repeat(64) }] });
   const keys = [...first.calls, ...second.calls].filter(item => item.method === RECIPE_HOST_METHODS.lookup).map(item => item.args.requestKey);
   assert.equal(keys.length, 2);
   assert.equal(keys[0], keys[1]);
@@ -229,7 +232,7 @@ test('N9 one error envelope: canvas tools hide unrecognized failures, scrub path
     return result.structuredContent.error;
   };
   thrower = () => { throw new TypeError("/Users/someone/private/secret.js exploded; token=abc123"); };
-  for (const [name, args] of [['list_workspaces', {}], ['read_workspace', { workspaceId: 'w' }]]) {
+  for (const [name, args] of [['read_workspace', {}], ['read_workspace', { workspaceId: 'w' }]]) {
     const result = await call(name, args);
     assert.deepEqual(envelope(result), { code: 'internal_error', message: INTERNAL_MESSAGES.canvas }, name);
   }
@@ -268,9 +271,9 @@ const EXERCISE = {
   tag_details: [{ name: 'garden' }], material_studies: [{ action: 'list' }], asset_library: [{ action: 'list' }, { action: 'image', ...STRICT_HISTORY }, { action: 'export', ...STRICT_HISTORY },
     { action: 'censor', ...STRICT_HISTORY, mask: { units: 'px', layers: [{ op: 'add', shape: { type: 'rect', x: 0, y: 0, width: 1, height: 1 } }] }, preview: true }],
   prepare_recipe: [T2I, { ...T2I, recipeId: UUID, expectedRevision: 1 }, UPSCALE, { ...UPSCALE, preview: true }, { mode: 't2i', canvas: { workspaceId: 'w', expectedRevision: 1 } }],
-  enqueue_recipes: [{ requestKey: 'n10', items: [{ recipeId: UUID, recipeRevision: 1, inputHash: 'a'.repeat(64) }] }], lookup_enqueue: [{ requestKey: 'n10' }],
-  list_queue: [{}], read_queue: [{ batchId: UUID }], get_queue_result: [{ batchId: UUID, itemIndex: 0 }], control_queue: ['pause', 'resume', 'cancel'].map(action => ({ batchId: UUID, action })),
-  list_workspaces: [{}], read_workspace: [w],
+  enqueue_recipes: [{ requestKey: 'n10', items: [{ recipeId: UUID, recipeRevision: 1, inputHash: 'a'.repeat(64) }] }],
+  list_queue: [{}], read_queue: [{ batchId: UUID }], get_queue_result: [{ batchId: UUID, itemIndex: 0 }],
+  read_workspace: [w, {}],
 };
 // Replies just complete enough to reach each tool's follow-up host calls.
 const pngBytes = Buffer.from(png, 'base64'), pngSha = createHash('sha256').update(pngBytes).digest('hex');
@@ -279,6 +282,7 @@ const replies = (method, args) => {
   if (method === 'asset_library' && args.action === 'image') return { kind: 'history', id: args.id, revision: args.revision, assetId: args.assetId, role: 'original', variant: args.variant ?? 'thumbnail',
     mimeType: 'image/png', width: 1, height: 1, byteLength: pngBytes.length, sha256: pngSha, sourceMimeType: 'image/png', sourceWidth: 1, sourceHeight: 1, sourceByteLength: pngBytes.length, sourceSha256: pngSha, contentBinding: 'recorded-sha256', data: png };
   if (method === 'read_workspace') return { workspaceId: 'w', revision: 1, assets: [{ id: 'current', role: 'currentImage', mimeType: 'image/png' }] };
+  if (method === 'list_workspaces') return { workspaces: [{ workspaceId: 'w' }] };
   if (method === 'get_asset') return { mimeType: 'image/png', data: png };
   if (method === 'lookup_queue_request') return {};
   return {};
@@ -325,8 +329,8 @@ test('N10 host methods: every declared method is a real bridge method, and every
   t.diagnostic(`reached ${reached.size} tool:method pairs`);
   // Follow-up methods that only a multi-step success path reaches are exercised here, not just declared.
   for (const pair of ['read_workspace:get_asset', 'material_library:material_tags', 'material_library:material_samples', 'material_library:asset_library',
-    'prepare_recipe:put_queue_recipe', 'prepare_recipe:read_queue_recipe', 'prepare_recipe:asset_library', 'prepare_recipe:preview_queue_recipe', 'prepare_recipe:capture_canvas_recipe', 'enqueue_recipes:lookup_queue_request', 'control_queue:pause_queue', 'control_queue:resume_queue', 'control_queue:cancel_queue',
-    'asset_library:asset_library', 'lookup_enqueue:lookup_queue_request']) assert.ok(reached.has(pair), pair);
+    'prepare_recipe:put_queue_recipe', 'prepare_recipe:read_queue_recipe', 'prepare_recipe:asset_library', 'prepare_recipe:preview_queue_recipe', 'prepare_recipe:capture_canvas_recipe', 'enqueue_recipes:lookup_queue_request', 'read_workspace:list_workspaces',
+    'asset_library:asset_library']) assert.ok(reached.has(pair), pair);
 });
 
 test('N10 every host call observed across this file was made by a tool that declares that method', () => {
@@ -396,18 +400,18 @@ test('hostCallScope denies by default: in the production wiring a host call outs
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(b); await client.connect(a);
   t.after(async () => { await client.close(); await server.close(); });
-  assert.equal((await client.callTool({ name: 'lookup_enqueue', arguments: { requestKey: 'inside' } })).isError, undefined);
+  assert.equal((await client.callTool({ name: 'asset_library', arguments: { action: 'collections' } })).isError, undefined);
   assert.equal((await client.callTool({ name: 'list_queue', arguments: {} })).isError, undefined);
-  assert.deepEqual(sent, ['lookup_queue_request', 'list_queue']);
+  assert.deepEqual(sent, ['asset_library', 'list_queue']);
 });
 
-test('P3-5 the instructions say which canvas tools take no workspaceId', async t => {
+test('P3-5 the one canvas tool finds the workspace itself: workspaceId is optional, and the instructions say what it gives', async t => {
   const { client } = await connect(t);
   const instructions = client.getInstructions() ?? '';
-  assert.doesNotMatch(instructions, /canvas tools take a workspaceId/i);
-  const without = TOOL_REGISTRY.filter(tool => tool.layer === 'canvas' && !tool.inputSchema.properties?.workspaceId).map(tool => tool.name);
-  assert.deepEqual(without, ['list_workspaces']);
-  for (const name of without) assert.ok(new RegExp(`\\b${name}\\b \\(no arguments\\)`).test(instructions), `${name} is named as taking none: ${instructions}`);
+  assert.doesNotMatch(instructions, /canvas tools take a workspaceId|list_workspaces/i);
+  const canvas = TOOL_REGISTRY.filter(tool => tool.layer === 'canvas');
+  assert.deepEqual(canvas.map(tool => [tool.name, tool.inputSchema.required, Object.hasOwn(tool.inputSchema.properties, 'workspaceId'), tool.hostMethods]), [['read_workspace', [], true, ['read_workspace', 'list_workspaces', 'get_asset']]]);
+  assert.match(instructions, /read_workspace reads the live canvas of the app \(it gives the workspaceId and revision that prepare_recipe \{canvas\} takes\)/);
 });
 
 test('host_call_outside_tool is mapped like host_method_not_allowed when a tool loses its call context', async t => {

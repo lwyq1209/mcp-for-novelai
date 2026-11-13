@@ -55,8 +55,8 @@ Also:
   install, a test folder, a build from source with `--data-dir`) looks for (and starts) a different app.
 - After `unavailable` in the middle of a write (an enqueue, a save), read the current state before doing anything
   again: the write may or may not have happened. An enqueue is the exception that needs no care: `enqueue_recipes`
-  with the same request key and plan is always safe (the app answers a repeat from the key's receipt), and
-  `lookup_enqueue` says what the key holds.
+  with the same request key and plan is always safe (the app answers a repeat from the key's receipt), and is also
+  how to ask what the key holds.
 - `invalid_connection` means `bridge.json` exists but is not a valid local connection file. Restart the app; it writes a
   new one.
 - The app started by an agent keeps its window out of the way: on macOS only its Dock icon appears (click it to show
@@ -93,11 +93,10 @@ One `enqueue_recipes` call can take minutes. Allow about 26 minutes (1560 second
   up, waits while the app is still handling it and sends the same plan under the same key again when the app holds
   nothing (never a second batch), for up to about 150 seconds, then answers `enqueued` (`reconciled: true`) or the
   refusal. Only if the app stays silent is the answer still `queue_acceptance_unknown` — call `enqueue_recipes` again
-  with the same key and plan once the app answers, or `lookup_enqueue`; never switch keys while it says `settling`
+  with the same key and plan once the app answers; never switch keys while an outcome is still unknown
   (see [Request keys](mcp-tools.md#request-keys-and-paid-requests)).
 - When the agent's own client times out, the server may still have finished the enqueue. Look at the queue page, or
-  call `enqueue_recipes` again with the same request key and plan (it answers `already_enqueued` if it was), or
-  `lookup_enqueue`.
+  call `enqueue_recipes` again with the same request key and plan (it answers `already_enqueued` if it was).
 
 ## Corrected values in a recipe
 

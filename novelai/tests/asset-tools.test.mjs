@@ -5,7 +5,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createNovelAiMcpServer } from '../src/mcp.mjs';
 
 async function mcp(t,bridge){
-  const server=createNovelAiMcpServer({bridgeClient:bridge}),client=new Client({name:'asset-tools-test',version:'1'});
+  const server=createNovelAiMcpServer({ wholeResults: true, bridgeClient:bridge}),client=new Client({name:'asset-tools-test',version:'1'});
   const [a,b]=InMemoryTransport.createLinkedPair();await server.connect(b);await client.connect(a);
   t.after(async()=>{await client.close();await server.close();});
   const call=args=>client.callTool({name:'asset_library',arguments:args});
