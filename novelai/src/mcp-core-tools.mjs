@@ -277,7 +277,7 @@ const recipeTool = name => {
     async handle(args, { recipes, signal, roots, rawRecipeReadback }) {
       const answer = await recipes[RECIPE_TOOL_ACTIONS[name]](args, { signal });
       // prepare_recipe answers with the compact readback only; the whole one is a test option of the server, never a tool argument.
-      const result = name === 'prepare_recipe' && !rawRecipeReadback ? compactReadback(answer) : answer;
+      const result = name === 'prepare_recipe' && !rawRecipeReadback ? compactReadback(answer, args) : answer;
       // A preview's overlay goes out as one native image; its bytes never enter the JSON readback.
       if (typeof result?.previewImage?.data !== 'string') return success(result, [], roots);
       const { data, ...previewImage } = result.previewImage;

@@ -177,7 +177,7 @@ const policyFile = async (t, required) => {
   return file;
 };
 
-test('compact readback of prepare_recipe, the only one the tool returns: nothing the caller wrote is echoed, what the host appended is kept, and there is no detail option', async t => {
+test('compact readback of prepare_recipe, the only one the tool returns: nothing the caller wrote comes back, only what the host decided, changed or appended; there is no detail option', async t => {
   const h = await realHost(t);
   const { call } = await connect(t, h.bridge), { call: raw } = await connect(t, h.bridge, { compact: true });
   const args = t2i({ stylePrompt: 'watercolor, soft light', positivePrompt: '1girl, garden, wide shot from across the pond', negativePrompt: 'blurry, extra fingers',
@@ -185,49 +185,66 @@ test('compact readback of prepare_recipe, the only one the tool returns: nothing
   const full = ok(await call('prepare_recipe', args));
   const compact = ok(await raw('prepare_recipe', args));
   assert.deepEqual(h.methods(), ['put_queue_recipe', 'put_queue_recipe'], 'the compact readback is a view: the host call is the same');
-  assert.deepEqual([compact.inputHash, compact.ready, compact.lineage, compact.saved, compact.generationSubmitted], [full.inputHash, true, 'plain', true, false]);
-  assert.match(compact.recipeId, /^[a-f0-9-]{36}$/); assert.equal(compact.recipeRevision, 1); assert.match(compact.next, /Check warnings and effective/);
-  for (const key of ['authored', 'effectiveRequest', 'unusedInputs', 'assets', 'readiness', 'authoredPrompts', 'detail', 'omitted']) assert.equal(Object.hasOwn(compact, key), false, key);
+  // A saved recipe: its identity, the verdict, and the two texts the host appended. Every sampling value is as written, so none is listed.
+  assert.deepEqual(Object.keys(compact), ['recipeId', 'recipeRevision', 'inputHash', 'ready', 'warnings', 'effective']);
+  assert.match(compact.recipeId, /^[a-f0-9-]{36}$/); assert.equal(compact.recipeRevision, 1); assert.equal(compact.inputHash, full.inputHash);
+  assert.deepEqual([compact.ready, compact.warnings], [true, []]);
+  assert.deepEqual(compact.effective, { automaticQuality: { appendedText: 'very aesthetic, masterpiece, no text' }, ucPreset: { text: V5_HUMAN } });
   const text = JSON.stringify(compact);
-  for (const written of [args.stylePrompt, args.positivePrompt, args.negativePrompt, 'girl, red dress', 'boy, blue coat', '"hat"']) assert.equal(text.includes(written), false, `${written} is not echoed`);
-  assert.deepEqual(compact.effective, {
-    model: 'nai-diffusion-5-full', width: 832, height: 1216, steps: 28, cfgScale: 5, cfgRescale: 0, sampler: 'k_euler_ancestral', noiseSchedule: 'karras', seed: 1234, seedPolicy: 'fixed', useCoords: true,
-    automaticQuality: { preset: 'standard', appendedText: 'very aesthetic, masterpiece, no text' }, ucPreset: { preset: 2, text: V5_HUMAN },
-    characters: [{ index: 0, center: { x: 0.3, y: 0.5 } }, { index: 1, center: { x: 0.7, y: 0.5 } }] });
-  // The parts the compact readback names rebuild the final prompts of the full one.
+  for (const written of [args.stylePrompt, args.positivePrompt, args.negativePrompt, 'girl, red dress', 'boy, blue coat', '"hat"', 'k_euler_ancestral', 'karras', '1234', '"model"']) assert.equal(text.includes(written), false, `${written} is not echoed`);
+  // The parts the compact readback names rebuild the final prompts of the whole one.
   assert.equal(full.effective.positivePrompt, [args.stylePrompt, args.positivePrompt, compact.effective.automaticQuality.appendedText].join(', '));
   assert.equal(full.effective.negativePrompt, [args.negativePrompt, compact.effective.ucPreset.text].join(', '));
-  assert.ok(text.length < JSON.stringify(full).length / 3, `compact ${text.length} of full ${JSON.stringify(full).length}`);
-  t.diagnostic(`t2i readback characters: compact ${text.length}, full ${JSON.stringify(full).length}`);
+  t.diagnostic(`t2i readback characters: compact ${text.length}, whole ${JSON.stringify(full).length}`);
+  // It enqueues like any recipe.
+  assert.equal(ok(await raw('enqueue_recipes', { requestKey: 'compact-readback', items: [ref(compact)] })).status, 'enqueued');
 
-  for (const detail of ['full', 'compact', 'raw']) assert.equal(errorOf(await raw('prepare_recipe', { ...args, detail })).code, 'invalid_arguments', `detail ${detail} is not an option`);
-  assert.equal(h.methods().length, 2, 'a refused detail reaches no host');
+  // No presets and a random seed: nothing was appended, decided or changed.
+  const bare = ok(await raw('prepare_recipe', t2i({ qualityPreset: 'none', ucPreset: 3, seed: null })));
+  assert.deepEqual([bare.ready, bare.warnings, bare.effective], [true, [], {}]);
+  assert.ok(JSON.stringify(bare).length < 220, JSON.stringify(bare));
 
-  // Medium: the values it replaces are warnings (the stored recipe already holds what runs), and its fixed UC is named once.
+  // What the host changed is listed with its value, whether or not a warning names it; the rest is still not echoed.
+  const corrected = ok(await raw('prepare_recipe', t2i({ qualityPreset: 'none', ucPreset: 3, width: 850, height: 1200, steps: 99 })));
+  assert.deepEqual(corrected.effective, { width: 832, height: 1216, steps: 50 });
+  assert.deepEqual(corrected.warnings.map(warning => warning.field).sort(), ['steps', 'width×height']);
+  // A value the call wrote is never listed, whichever it is: a cfgRescale, characters with and without coordinates.
+  const offCentre = ok(await raw('prepare_recipe', t2i({ qualityPreset: 'none', ucPreset: 3, cfgRescale: 0.3, characters: [{ prompt: 'a', useCoords: false }, { prompt: 'b', useCoords: true, x: 0.9, y: 0.1 }] })));
+  assert.deepEqual(offCentre.effective, {});
+  // Medium: the model id sent, the fixed values that differ from the call, its UC once, and the character negative it does not send.
   const medium = ok(await raw('prepare_recipe', t2i({ effort: 'medium' })));
-  assert.deepEqual(medium.effective.characters, [{ index: 0, center: { x: 0.3, y: 0.5 } }]);
-  assert.equal(medium.effective.effort.level, 'medium'); assert.equal(Object.hasOwn(medium.effective.effort.fixed, 'undesiredContent'), false);
-  assert.equal(medium.effective.ucPreset.fixedByEffort, true);
+  assert.deepEqual(Object.keys(medium.effective).sort(), ['automaticQuality', 'characters', 'model', 'steps', 'ucPreset']);
+  assert.deepEqual([medium.effective.model, medium.effective.steps, medium.effective.ucPreset.preset, medium.effective.ucPreset.fixedByEffort], ['nai-diffusion-5-full-medium', 14, 0, true]);
+  assert.deepEqual(medium.effective.characters, [{ index: 0, negativePrompt: '' }]);
   assert.equal(JSON.stringify(medium).split(medium.effective.ucPreset.text).length - 1, 1, 'the fixed UC is stated once');
   assert.ok(medium.warnings.length > 0, 'the replaced fields are named');
-  const transparent = ok(await raw('prepare_recipe', t2i({ transparentBackground: true })));
-  assert.equal(transparent.effective.transparentBackground.enabled, true);
+  // Medium with its fixed fields left out: they are the host's decision, so they are listed.
+  const { steps: _steps, sampler: _sampler, ucPreset: _uc, negativePrompt: _negative, ...unfixed } = t2i({ effort: 'medium', characters: [] });
+  const filled = ok(await raw('prepare_recipe', unfixed));
+  assert.deepEqual([filled.effective.steps, filled.effective.sampler, filled.effective.ucPreset.preset], [14, 'k_euler_ancestral', 0]);
+  const transparent = ok(await raw('prepare_recipe', t2i({ transparentBackground: true, qualityPreset: 'none', ucPreset: 3 })));
+  assert.deepEqual(transparent.effective, { transparentBackground: { appendedText: 'transparent background' } });
+
+  const before = h.methods().length;
+  for (const detail of ['full', 'compact', 'raw']) assert.equal(errorOf(await raw('prepare_recipe', { ...args, detail })).code, 'invalid_arguments', `detail ${detail} is not an option`);
+  assert.equal(h.methods().length, before, 'a refused detail reaches no host');
 });
 
-test('compactReadback: final prompts stay when the appended text cannot be separated; a blocked recipe keeps its readiness; other values pass through', () => {
+test('compactReadback: final prompts stay when the appended text cannot be separated; a blocked recipe keeps its readiness and its next step; other values pass through', () => {
   const { compactReadback } = recipeQueue;
   const effective = { model: 'm', width: 64, height: 64, steps: 1, cfgScale: 1, cfgRescale: 0, sampler: 's', noiseSchedule: 'n', seed: 1, seedPolicy: 'fixed', nSamples: 1, positivePrompt: 'legacy final', negativePrompt: 'legacy negative',
     automaticQuality: { preset: 'standard', appendedText: null, derivedFromBuilderOutput: false }, ucPreset: { preset: 0, text: null, derivedFromBuilderOutput: false }, effort: { level: 'high', requestModel: 'm' },
     transparentBackground: { enabled: false, straightAlpha: false, appendedText: null }, useCoords: false, characters: [] };
+  const written = { mode: 't2i', model: 'm', width: 64, height: 64, steps: 1, cfgScale: 1, sampler: 's', noiseSchedule: 'n', seed: 1, qualityPreset: 'standard', ucPreset: 0, stylePrompt: '', positivePrompt: 'p', negativePrompt: '' };
   const full = { recipeId: 'r', recipeRevision: 1, inputHash: 'h', mode: 't2i', lineage: 'plain', ready: true, readiness: { status: 'ready', issues: [] }, warnings: [{ code: 'readback_not_derived', message: 'm' }],
     authored: { stylePrompt: '', positivePrompt: 'p', negativePrompt: '', characters: [] }, effective, effectiveRequest: { input: 'legacy final' }, unusedInputs: ['mask'], assets: [], saved: true, generationSubmitted: false, next: 'n' };
-  const compact = compactReadback(full);
-  assert.deepEqual([compact.effective.positivePrompt, compact.effective.negativePrompt], ['legacy final', 'legacy negative']);
-  assert.deepEqual(compact.effective.automaticQuality, effective.automaticQuality);
-  assert.equal(Object.hasOwn(compact.effective, 'effort'), false); assert.equal(Object.hasOwn(compact.effective, 'transparentBackground'), false); assert.equal(Object.hasOwn(compact.effective, 'nSamples'), false);
-  assert.deepEqual([compact.saved, compact.generationSubmitted, compact.next, compact.warnings], [true, false, 'n', full.warnings]);
-  const blocked = compactReadback({ ...full, ready: false, readiness: { status: 'blocked', issues: [{ code: 'x' }] }, effective: null });
-  assert.deepEqual([blocked.ready, blocked.readiness, blocked.effective], [false, { status: 'blocked', issues: [{ code: 'x' }] }, null]);
+  const compact = compactReadback(full, written);
+  assert.deepEqual(compact, { recipeId: 'r', recipeRevision: 1, inputHash: 'h', ready: true, warnings: full.warnings,
+    effective: { positivePrompt: 'legacy final', negativePrompt: 'legacy negative', automaticQuality: effective.automaticQuality, ucPreset: effective.ucPreset } });
+  // Without the call's arguments nothing counts as written: every value is listed.
+  assert.deepEqual(Object.keys(compactReadback(full).effective).slice(0, 8), ['model', 'width', 'height', 'steps', 'cfgScale', 'sampler', 'noiseSchedule', 'seed']);
+  const blocked = compactReadback({ ...full, ready: false, readiness: { status: 'blocked', issues: [{ code: 'x' }] }, effective: null }, written);
+  assert.deepEqual([blocked.ready, blocked.readiness, blocked.effective, blocked.next], [false, { status: 'blocked', issues: [{ code: 'x' }] }, null, 'n']);
   for (const other of [null, undefined, { status: 'enqueued' }, 'text']) assert.equal(compactReadback(other), other);
 });
 

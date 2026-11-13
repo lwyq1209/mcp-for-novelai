@@ -140,23 +140,26 @@ test('t2i: the canvas becomes a new recipe with canvas lineage; only the images 
   assert.equal(h.jobs[0].args.mode, 't2i'); assert.deepEqual(h.jobs[0].args.seeds, [5, 6]);
 });
 
-test('compact readback of a canvas recipe: its texts are stated once (authoredPrompts, characters); image modes keep the source and mask without hashes or spec', async t => {
+test('compact readback of a canvas recipe: the caller wrote none of it, so every effective value is listed and its texts are stated once', async t => {
   const h = await realHost(t), call = await connect(t, h.bridge), agent = await connect(t, h.bridge, { compact: true });
   h.canvas.state = canvasState({ params: { stylePrompt: 'ink wash, muted palette', positivePrompt: 'a lighthouse on a cliff at dusk', negativePrompt: 'blurry, text' },
     charCaptions: [{ prompt: 'keeper, long coat', negativePrompt: 'hat', useCoords: true, x: 0.4, y: 0.6 }, { prompt: 'black cat', negativePrompt: '', useCoords: true, x: 0.7, y: 0.8 }] });
   const full = ok(await call('prepare_recipe', { mode: 't2i', canvas: at(), preview: true }));
   const compact = ok(await agent('prepare_recipe', { mode: 't2i', canvas: at(), preview: true }));
-  assert.deepEqual([compact.lineage, compact.inputHash, compact.preview], ['canvas', full.inputHash, true]);
+  assert.deepEqual(Object.keys(compact), ['preview', 'ready', 'warnings', 'effective', 'authoredPrompts'], 'a preview has no identity; a canvas capture adds its texts');
   assert.equal(errorOf(await agent('prepare_recipe', { mode: 't2i', canvas: at(), preview: true, detail: 'full' })).code, 'invalid_arguments', 'there is no detail option');
-  assert.deepEqual(compact.canvas, full.canvas);
   assert.deepEqual(compact.authoredPrompts, { stylePrompt: 'ink wash, muted palette', positivePrompt: 'a lighthouse on a cliff at dusk', negativePrompt: 'blurry, text' });
-  assert.deepEqual(compact.effective.characters, [{ index: 0, center: { x: 0.4, y: 0.6 }, prompt: 'keeper, long coat', negativePrompt: 'hat' }, { index: 1, center: { x: 0.7, y: 0.8 }, prompt: 'black cat' }]);
-  assert.equal(full.effective.positivePrompt, ['ink wash, muted palette', 'a lighthouse on a cliff at dusk', compact.effective.automaticQuality.appendedText].join(', '));
-  assert.equal(full.effective.negativePrompt, ['blurry, text', compact.effective.ucPreset.text].join(', '));
+  const { automaticQuality, ucPreset, characters, ...sampling } = compact.effective;
+  assert.deepEqual(sampling, { model: 'nai-diffusion-4-5-full', width: 832, height: 1216, steps: 28, cfgScale: 5, cfgRescale: full.effective.cfgRescale, sampler: 'k_euler_ancestral', noiseSchedule: 'karras', seed: 4321, seedPolicy: 'fixed', useCoords: true });
+  assert.deepEqual(characters, [{ index: 0, center: { x: 0.4, y: 0.6 }, prompt: 'keeper, long coat', negativePrompt: 'hat' }, { index: 1, center: { x: 0.7, y: 0.8 }, prompt: 'black cat' }]);
+  assert.equal(full.effective.positivePrompt, ['ink wash, muted palette', 'a lighthouse on a cliff at dusk', automaticQuality.appendedText].join(', '));
+  assert.equal(full.effective.negativePrompt, ['blurry, text', ucPreset.text].join(', '));
   const text = JSON.stringify(compact);
-  for (const once of ['ink wash, muted palette', 'a lighthouse on a cliff at dusk', 'blurry, text', 'keeper, long coat', 'black cat', compact.effective.ucPreset.text]) assert.equal(text.split(once).length - 1, 1, once);
-  for (const key of ['authored', 'effectiveRequest', 'unusedInputs', 'assets', 'detail', 'omitted']) assert.equal(Object.hasOwn(compact, key), false, key);
-  t.diagnostic(`canvas t2i readback characters: compact ${text.length}, full ${JSON.stringify(full).length}`);
+  for (const once of ['ink wash, muted palette', 'a lighthouse on a cliff at dusk', 'blurry, text', 'keeper, long coat', 'black cat', ucPreset.text]) assert.equal(text.split(once).length - 1, 1, once);
+  t.diagnostic(`canvas t2i readback characters: compact ${text.length}, whole ${JSON.stringify(full).length}`);
+  // Saved: the identity instead of preview.
+  const saved = ok(await agent('prepare_recipe', { mode: 't2i', canvas: at() }));
+  assert.deepEqual(Object.keys(saved).slice(0, 3), ['recipeId', 'recipeRevision', 'inputHash']); assert.equal(saved.inputHash, full.inputHash); assert.equal(Object.hasOwn(saved, 'preview'), false);
 
   const source = gradient(512, 768);
   h.canvas.state = canvasState({ params: { width: 512, height: 768 }, inpaintPositivePrompt: 'a red umbrella' });
@@ -164,14 +167,17 @@ test('compact readback of a canvas recipe: its texts are stated once (authoredPr
   const preview = await agent('prepare_recipe', { mode: 'inpaint', canvas: at(), preview: true });
   const inpaint = ok(preview);
   assert.equal(preview.content.filter(item => item.type === 'image').length, 1, 'the mask overlay is still attached');
-  assert.equal(inpaint.previewImage.imageAttached, true); assert.equal(Object.hasOwn(inpaint.previewImage, 'data'), false);
+  assert.deepEqual(Object.keys(inpaint.previewImage).sort(), ['height', 'imageAttached', 'mimeType', 'width']);
+  assert.match(inpaint.next, /Look at the attached preview/, 'the next step is given where it is not the routine one');
   assert.deepEqual(inpaint.source, { kind: 'embedded', width: 512, height: 768 });
-  assert.deepEqual(Object.keys(inpaint.mask), ['width', 'height', 'selectedCells', 'totalCells', 'bboxCells', 'layers']);
-  assert.deepEqual(inpaint.effective.requestSource, { width: 512, height: 768 }); assert.deepEqual(Object.keys(inpaint.effective.requestMask), ['width', 'height']);
+  assert.deepEqual(Object.keys(inpaint.mask), ['selectedCells', 'totalCells'], 'a canvas mask has no layers: its count is the overlay\'s'); assert.ok(inpaint.mask.selectedCells > 0 && inpaint.mask.totalCells === 64 * 96);
+  assert.deepEqual([inpaint.effective.width, inpaint.effective.height, inpaint.effective.strength], [512, 768, 0.8]);
+  assert.equal(Object.hasOwn(inpaint.effective, 'requestSource'), false, 'the request source has the request size: not repeated');
   assert.equal(inpaint.authoredPrompts.positivePrompt, 'a red umbrella');
   const upscale = ok(await agent('prepare_recipe', { mode: 'upscale', canvas: at(), preview: true }));
-  assert.deepEqual(upscale.effective, ok(await call('prepare_recipe', { mode: 'upscale', canvas: at(), preview: true })).effective, 'a post-processing view is small and stays whole');
-  assert.equal(Object.hasOwn(upscale, 'authoredPrompts'), false);
+  const whole = ok(await call('prepare_recipe', { mode: 'upscale', canvas: at(), preview: true })).effective;
+  assert.deepEqual(upscale.effective, { scale: whole.scale, input: whole.input, output: whole.output });
+  assert.equal(Object.hasOwn(upscale, 'authoredPrompts'), false); assert.equal(Object.hasOwn(upscale, 'source'), false, 'the input above is the source size');
 });
 
 test('a V5 Full canvas on Medium effort is captured as the Medium request; the readback names what Medium replaced', async t => {

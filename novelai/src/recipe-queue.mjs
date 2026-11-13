@@ -930,61 +930,117 @@ export function recipeReadback(result, { built = null } = {}) {
   };
 }
 
-/** The effective view of a generation mode without the texts the caller already has; every text appears at most once. */
-function compactEffective(effective, authored, known) {
-  const { positivePrompt, negativePrompt, nSamples: _samples, automaticQuality, ucPreset, effort, transparentBackground, characters, requestSource, requestMask, sourceResized, ...rest } = effective;
+const same = (a, b) => a === b || (record(a) && record(b) && Object.keys(a).length === Object.keys(b).length && Object.keys(a).every(key => same(a[key], b[key])));
+/** `value` under `key`, unless it is what the caller wrote (`written`): an entry the readback does not need. */
+const unlessWritten = (key, value, written) => value === undefined || same(value, written) ? {} : { [key]: value };
+/** A seed as written: a whole number from 0 is fixed, anything else (null, negative, absent, 0 for extra noise) is random at enqueue. */
+const seedAsWritten = (seed, policy, written, { zeroIsRandom = false } = {}) => {
+  const fixed = Number.isSafeInteger(written) && (zeroIsRandom ? written > 0 : written >= 0);
+  return fixed ? seed === written && policy === 'fixed' : policy === 'random_on_submit' && (seed === null || seed === undefined);
+};
+
+/**
+ * The effective view of a generation mode, reduced to what the caller did not write: a value the host decided (no
+ * such field in the call: the request size of enhance and inpaint, the inpainting model id, a derived strength) and a
+ * value that differs from the field of the call (a corrected size, Medium's steps). `written` is the call's own
+ * arguments ({} and known:false for a canvas capture, whose inputs the caller never wrote, so that defaults are
+ * listed too). The comparison is with the arguments
+ * themselves, not with the warnings, so a difference is listed even where no warning names it.
+ */
+function compactEffective(effective, written, mode, known) {
+  const { positivePrompt, negativePrompt, automaticQuality, ucPreset, transparentBackground, characters, requestSource, requestMask, sourceResized, i2i, enhance, processing } = effective;
   // Not separable (legacy assembly or a mode prefix): the final texts are the only statement of what is sent.
   const derived = automaticQuality?.appendedText !== null && ucPreset?.text !== null;
-  const sent = Array.isArray(authored?.characters) ? authored.characters : [];
+  const sent = Array.isArray(written.characters) ? written.characters : null;
+  const size = { width: effective.width, height: effective.height };
+  const listed = (characters ?? []).map(({ index, prompt, negativePrompt: negative, center }) => {
+    const own = sent?.[index];
+    if (!record(own)) return { index, center, prompt, ...(negative === '' ? {} : { negativePrompt: negative }) };
+    const expected = own.useCoords === true ? { x: own.x ?? 0.5, y: own.y ?? 0.5 } : { x: 0.5, y: 0.5 };
+    return { index, ...unlessWritten('center', center, expected), ...unlessWritten('prompt', prompt, own.prompt), ...unlessWritten('negativePrompt', negative, own.negativePrompt ?? '') };
+  }).filter(character => Object.keys(character).length > 1);
+  const expectsCoords = known ? (sent ?? []).some(character => character?.useCoords === true) : undefined;
+  // enhance has no strength of its own: the one derived from magnitude is enhance.derivedStrength.
+  const i2iView = record(i2i) ? { ...(mode === 'enhance' ? {} : unlessWritten('strength', i2i.strength, written.strength)), ...(i2i.noise ? { noise: i2i.noise } : {}),
+    ...(known && seedAsWritten(i2i.extraNoiseSeed, i2i.extraNoiseSeedPolicy, written.extraNoiseSeed, { zeroIsRandom: true }) ? {} : { extraNoiseSeed: i2i.extraNoiseSeed, extraNoiseSeedPolicy: i2i.extraNoiseSeedPolicy }) } : {};
+  const enhanceView = record(enhance) ? { ...unlessWritten('magnitude', enhance.magnitude, written.magnitude), ...unlessWritten('scale', enhance.scale, written.scale),
+    derivedStrength: enhance.derivedStrength, ...(enhance.expectedOutput ? { expectedOutput: enhance.expectedOutput } : {}) } : {};
   return {
-    ...rest,
+    ...unlessWritten('model', effective.model, written.model),
+    ...(same(size, { width: written.width, height: written.height }) ? {} : size),
+    ...unlessWritten('steps', effective.steps, written.steps), ...unlessWritten('cfgScale', effective.cfgScale, written.cfgScale), ...unlessWritten('cfgRescale', effective.cfgRescale, known ? written.cfgRescale ?? 0 : undefined),
+    ...unlessWritten('sampler', effective.sampler, written.sampler), ...unlessWritten('noiseSchedule', effective.noiseSchedule, written.noiseSchedule),
+    ...(known && seedAsWritten(effective.seed, effective.seedPolicy, written.seed) ? {} : { seed: effective.seed, seedPolicy: effective.seedPolicy }),
+    ...unlessWritten('useCoords', effective.useCoords, expectsCoords),
     ...(derived ? {} : { positivePrompt, negativePrompt }),
-    automaticQuality: derived ? { preset: automaticQuality.preset, appendedText: automaticQuality.appendedText } : automaticQuality,
-    ucPreset: derived ? { preset: ucPreset.preset, text: ucPreset.text, ...(ucPreset.fixedByEffort ? { fixedByEffort: true } : {}) } : ucPreset,
-    // Medium: its fixed UC is ucPreset.text. High runs the model named above.
-    ...(effort?.level === 'medium' ? { effort: { ...effort, fixed: Object.fromEntries(Object.entries(effort.fixed ?? {}).filter(([key]) => key !== 'undesiredContent')) } } : {}),
-    ...(transparentBackground?.enabled ? { transparentBackground } : {}),
-    characters: (characters ?? []).map(({ index, prompt, negativePrompt: negative, center }) => {
-      const own = known ? sent[index] : undefined;
-      return { index, center,
-        ...(own && own.prompt === prompt ? {} : { prompt }),
-        ...(own ? ((own.negativePrompt ?? '') === negative ? {} : { negativePrompt: negative }) : negative === '' ? {} : { negativePrompt: negative }) };
+    // The text the host appended: left out when there is none (preset none), which a preset that should add some says in a warning.
+    ...(!derived ? { automaticQuality, ucPreset } : {
+      ...(automaticQuality.appendedText === '' && same(automaticQuality.preset, written.qualityPreset) ? {} : { automaticQuality: { ...unlessWritten('preset', automaticQuality.preset, written.qualityPreset), appendedText: automaticQuality.appendedText } }),
+      ...(ucPreset.text === '' && same(ucPreset.preset, written.ucPreset) ? {} : { ucPreset: { ...unlessWritten('preset', ucPreset.preset, written.ucPreset), text: ucPreset.text, ...(ucPreset.fixedByEffort ? { fixedByEffort: true } : {}) } }),
     }),
-    ...(requestSource ? { requestSource: { width: requestSource.width, height: requestSource.height } } : {}),
+    ...(transparentBackground?.enabled ? { transparentBackground: { ...(written.transparentBackground === true ? {} : { enabled: true }), appendedText: transparentBackground.appendedText } }
+      : written.transparentBackground === true ? { transparentBackground: { enabled: false } } : {}),
+    ...(listed.length ? { characters: listed } : {}),
+    ...(sent && (characters ?? []).length !== sent.length ? { charactersSent: (characters ?? []).length } : {}),
+    ...(effective.charactersNotSent ? { charactersNotSent: effective.charactersNotSent } : {}),
+    ...(Object.keys(i2iView).length ? { i2i: i2iView } : {}),
+    // The processing sizes only where they say more than the request size above (a resized or flattened input, a larger result).
+    ...(mode === 'enhance' ? { enhance: enhanceView, ...(record(processing) && (processing.resizedInput || processing.alphaFlattened || processing.upscaledEnhance || processing.outputWidth !== size.width || processing.outputHeight !== size.height) ? { processing } : {}) } : {}),
+    ...(mode === 'inpaint' ? unlessWritten('strength', effective.inpaint?.strength, written.strength) : {}),
+    ...(requestSource && !same({ width: requestSource.width, height: requestSource.height }, size) ? { requestSource: { width: requestSource.width, height: requestSource.height } } : {}),
     ...(sourceResized ? { sourceResized } : {}),
-    ...(requestMask ? { requestMask: { width: requestMask.width, height: requestMask.height } } : {}),
+    ...(requestMask && !same({ width: requestMask.width, height: requestMask.height }, size) ? { requestMask: { width: requestMask.width, height: requestMask.height } } : {}),
   };
 }
 
+/** The post-processing view (upscale, director) without what the call wrote and without its constants (no seed, one image). */
+function compactPostprocess(effective, written, mode, known) {
+  const { seedPolicy: _seed, sampleCount: _count, tool, options, scale, model: _model, ...sizes } = effective;
+  const defaults = known ? { defry: 0, colorizePrompt: '', emotionLevel: 0 } : {};
+  const changed = Object.fromEntries(Object.entries(options ?? {}).filter(([key, value]) => !same(value, written[key] ?? defaults[key])));
+  return { ...(mode === 'upscale' ? unlessWritten('scale', scale, known ? written.scale ?? 2 : undefined) : { ...unlessWritten('tool', tool, written.tool), ...(Object.keys(changed).length ? { options: changed } : {}) }), ...sizes };
+}
+
 /**
- * The prepare_recipe readback: what the host made of the recipe, without repeating what the caller wrote. It is the
- * only readback the tool returns. The whole one (recipeReadback) states every prompt three to five times (authored,
- * effective, and the raw request, which carries it in input and v4_prompt, and the negative in uc, negative_prompt
- * and v4_negative_prompt); it stays a module API for tests (createToolContext rawRecipeReadback), not a tool option:
- * what an image was really made with is read from the library (asset_library read) and the queue (read_queue).
+ * The prepare_recipe readback, the only one the tool returns: what the caller does not already know. `args` are the
+ * call's arguments.
  *
- * - A plain recipe's stored inputs were compared with the request field by field (authoredDifferences; a difference
- *   is recipe_input_mismatch, not a readback), so its prompts and character texts are not echoed: the readback
- *   keeps the effective sampling, the text the host appended (automaticQuality.appendedText, ucPreset.text) and
- *   any character text that differs from what was sent. The final positive prompt is stylePrompt, positivePrompt
- *   and that quality text joined with ", "; the final negative is negativePrompt and the UC text.
- * - A canvas recipe's inputs were never sent by the caller: authoredPrompts and the character texts state them once.
- * - When the appended text could not be separated (warning readback_not_derived), the final prompts stay.
- * - Post-processing modes keep their effective view; source and mask keep identity, size and cell counts.
+ * - Always: recipeId, recipeRevision and inputHash of a saved recipe (a preview has none and says preview:true),
+ *   ready (with readiness when it is not) and warnings.
+ * - effective: only what the host decided or changed (compactEffective). A field that is not listed runs exactly as
+ *   the call wrote it; for a routine t2i call with no quality or UC preset it is empty. The prompts and character
+ *   texts of a plain recipe are never echoed. The final positive prompt is stylePrompt, positivePrompt and
+ *   automaticQuality.appendedText joined with ", "; the final negative is negativePrompt and ucPreset.text.
+ * - A canvas capture wrote none of its inputs, so effective lists them all and authoredPrompts states the texts once.
+ * - When the appended text could not be separated (warning readback_not_derived), the final prompts are given.
+ * - source and mask: what the call did not state (the source size; the cells the mask selects, per layer).
+ * - next: only where the next step is not the routine one (a blocked recipe, a mask overlay to look at).
+ *
+ * The whole readback (recipeReadback: authored, the raw request, assets, hashes, the mask spec) states every prompt
+ * three to five times; it stays a module API for tests (createToolContext rawRecipeReadback), not a tool option:
+ * what an image was really made with is read from the library (asset_library read) and the queue (read_queue).
  */
-export function compactReadback(full) {
+export function compactReadback(full, args = {}) {
   if (!record(full) || !MODES.includes(full.mode)) return full;
-  const { authored, effective, effectiveRequest: _request, unusedInputs: _unused, assets: _assets, readiness, source, mask, previewImage, recipeId, recipeRevision, inputHash, mode, lineage, ready, warnings, ...rest } = full;
-  const known = lineage === 'plain', generation = seeded(mode) && record(effective) && record(effective.automaticQuality);
+  const { authored, effective, readiness, source, mask, previewImage, recipeId, recipeRevision, inputHash, mode, lineage, ready, warnings, preview, next, saved } = full;
+  const canvas = lineage !== 'plain', written = canvas || !record(args) ? {} : args;
+  const view = !record(effective) ? null : seeded(mode) ? (record(effective.automaticQuality) ? compactEffective(effective, written, mode, !canvas) : effective) : compactPostprocess(effective, written, mode, !canvas);
+  const overlay = record(previewImage);
+  // The cells the mask selects, per layer; a canvas mask has no layers, and its count is the overlay's.
+  const counted = mask ? Object.fromEntries(Object.entries({ selectedCells: mask.selectedCells, totalCells: mask.totalCells, bboxCells: mask.bboxCells, layers: mask.layers }).filter(([, value]) => value !== null && value !== undefined)) : {};
+  const cells = mask && !Object.keys(counted).length && record(previewImage?.cells) ? { selectedCells: previewImage.cells.selected, totalCells: previewImage.cells.total } : counted;
   return {
-    recipeId, recipeRevision, inputHash, mode, lineage, ready, ...(ready ? {} : { readiness }), warnings,
-    effective: generation ? compactEffective(effective, authored, known) : effective ?? null,
-    ...(seeded(mode) && !known && record(authored) ? { authoredPrompts: { stylePrompt: authored.stylePrompt ?? '', positivePrompt: authored.positivePrompt ?? '', negativePrompt: authored.negativePrompt ?? '' } } : {}),
-    ...(source ? { source: Object.fromEntries(Object.entries(source).filter(([key]) => !['sha256', 'mimeType', 'byteLength'].includes(key))) } : {}),
-    ...(mask ? { mask: { width: mask.width, height: mask.height, selectedCells: mask.selectedCells, totalCells: mask.totalCells, bboxCells: mask.bboxCells, layers: mask.layers } } : {}),
-    ...rest,
+    ...(preview === true ? { preview: true } : { recipeId, recipeRevision, inputHash, ...(saved === true ? {} : { saved: saved ?? false }) }),
+    ready, ...(ready ? {} : { readiness }), warnings,
+    effective: view,
+    ...(seeded(mode) && canvas && record(authored) ? { authoredPrompts: { stylePrompt: authored.stylePrompt ?? '', positivePrompt: authored.positivePrompt ?? '', negativePrompt: authored.negativePrompt ?? '' } } : {}),
+    // The source size, unless the post-processing input above already is that size.
+    ...(source && !(record(view?.input) && view.input.width === source.width && view.input.height === source.height)
+      ? { source: { ...(canvas || !record(written.source) ? { kind: source.kind } : {}), width: source.width, height: source.height } } : {}),
+    ...(Object.keys(cells).length ? { mask: cells } : {}),
     // The overlay itself is attached as an image; its bytes (data) leave the JSON in the tool handler.
-    ...(record(previewImage) ? { previewImage: Object.fromEntries(Object.entries(previewImage).filter(([key]) => !['sha256', 'byteLength', 'basis'].includes(key))) } : {}),
+    ...(overlay ? { previewImage: { width: previewImage.width, height: previewImage.height, ...(typeof previewImage.data === 'string' ? { mimeType: previewImage.mimeType, data: previewImage.data } : {}) } } : {}),
+    ...(!ready || overlay ? { next } : {}),
   };
 }
 

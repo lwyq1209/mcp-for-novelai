@@ -200,24 +200,32 @@ that input, one NovelAI request per image, in order.
 
 ### `prepare_recipe`
 
-Freezes one recipe revision and returns `recipeId`, `recipeRevision`, `inputHash` and a **readback** of the effective
-input the app would send. Check the readback before enqueueing.
+Freezes one recipe revision and returns a **readback**: only what the caller does not already know. There is one
+readback; it has no detail option.
 
-The readback says what the app made of the recipe without repeating what the caller wrote. There is one readback; it
-has no detail option.
+- `recipeId`, `recipeRevision` and `inputHash` of the saved recipe (`enqueue_recipes` takes exactly these). A preview
+  has none and says `preview: true` instead.
+- `ready` (with `readiness` when it is `false`) and `warnings`.
+- `effective`: only what the app decided, changed or appended. A value that is not listed runs exactly as the call
+  wrote it: the server compares the effective input with the arguments of the call one by one, so a difference is
+  listed whether or not a warning names it. Listed are
+  - corrected values (a size snapped to multiples of 64, a clamped strength, Medium's fixed steps);
+  - values the call left to the app (the request size of enhance and inpaint or of an i2i call without one, the model
+    id sent when it is not the one written, such as `…-inpainting` or `…-medium`, the strength enhance derives from
+    its magnitude);
+  - the text appended to the prompts: `automaticQuality.appendedText` and `ucPreset.text`, absent when the preset adds
+    none. The final positive prompt is `stylePrompt`, `positivePrompt` and the quality text joined with `, `; the
+    final negative is `negativePrompt` and the UC text;
+  - a character only where its position or text differs from the call.
 
-- A recipe prepared from inline fields does not echo its prompts or character texts. The server compares the stored
-  fields with the request one by one, and a difference is the error `recipe_input_mismatch`, not a readback. What it
-  returns: the model id sent, sampling, mode parameters, `warnings`, the text the app appended
-  (`effective.automaticQuality.appendedText`, `effective.ucPreset.text`), characters by `index` and `center` (with a
-  text only where it differs from the request), the source (identity and size) and the mask (size, cells, layers). The
-  final positive prompt is `stylePrompt`, `positivePrompt` and the quality text joined with `, `; the final negative is
-  `negativePrompt` and the UC text.
-- A canvas recipe's texts were never sent by the caller, so they are stated once: `authoredPrompts` (`stylePrompt`,
-  `positivePrompt`, `negativePrompt`) and the character texts in `effective.characters`.
+  For a routine t2i call with no quality or UC preset `effective` is `{}`. The prompts and character texts of the call
+  are never returned (a stored difference is the error `recipe_input_mismatch`).
+- `source` (the source size) and `mask` (the cells selected, per layer) in image modes.
+- A canvas recipe's inputs were never written by the caller, so `effective` lists every value and `authoredPrompts`
+  (`stylePrompt`, `positivePrompt`, `negativePrompt`) and `effective.characters` state its texts once.
 - When the appended text cannot be separated from the builder output (warning `readback_not_derived`), the final
   `effective.positivePrompt` and `effective.negativePrompt` are returned instead.
-- `readiness` appears only for a blocked recipe (`ready: false`).
+- `next` only where the next step is not the routine one: a blocked recipe, or a mask overlay to look at.
 
 What an image was really made with is read afterwards from the library (`asset_library` `read` gives its prompts,
 parameters and seed) and from the queue (`read_queue` gives each image's status, error and seed).
@@ -308,8 +316,8 @@ Medium request sends was read from NovelAI's own web client (build of 2026-11-06
 - Medium on any other model (V5 Curated has no Medium) or in enhance, upscale or director runs on High, with the
   warning `effort_not_applied` (before 0.1.4 this was refused). `effort: "high"` is accepted everywhere and changes
   nothing.
-- The readback shows the model id sent (`effective.model`) and, for Medium, `effective.effort` (`level` and the fixed
-  values; the fixed UC text is `effective.ucPreset.text`).
+- The readback lists the model id sent (`effective.model`), the fixed values that differ from the call and the fixed
+  UC text (`effective.ucPreset.text`).
 - On the canvas the effort is the parameter `params.effort` (`"medium"`, or absent for High; also
   `inpaintRecipe.effort`). It applies where the model that runs is V5 Full: the txt2img/img2img model, or the inpaint
   model for inpaint; it is set in the app. A canvas capture of a Medium canvas

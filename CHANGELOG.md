@@ -44,14 +44,17 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
 
 ### Changed
 
-- **Compact reads** (less of an agent's context per call). The `prepare_recipe` readback no longer repeats the prompts
-  and character texts the caller just wrote (the server compares the stored fields with the request and refuses a
-  difference as `recipe_input_mismatch`); it keeps the model id, sampling, mode parameters, warnings and the text the
-  app appended (`automaticQuality.appendedText`, `ucPreset.text`). A canvas recipe states its texts once
-  (`authoredPrompts`, `effective.characters`). `authored`, the raw request (`effectiveRequest`), `unusedInputs`,
-  `assets`, the hashes and the mask spec are gone from the readback, with no option to bring them back: what an image
-  was made with is read from the library and the queue. The readback is about 0.8–1.7k characters and no longer grows
-  with the prompt (replaying real recipes of about 4.7k characters: about 850, where it was over 20k).
+- **Compact reads** (less of an agent's context per call). The `prepare_recipe` readback returns only what the caller
+  does not already know: the recipe's identity (`recipeId`, `recipeRevision`, `inputHash`; a preview says
+  `preview: true`), `ready`, `warnings`, and in `effective` only what the app decided, changed or appended. A value
+  that is not listed runs exactly as the call wrote it; the server compares the effective input with the call's
+  arguments, so a corrected value is listed whether or not a warning names it. The prompts, character texts and
+  unchanged sampling values of the call are not echoed; `authored`, the raw request (`effectiveRequest`),
+  `unusedInputs`, `assets`, `mode`, `lineage`, `saved`, `generationSubmitted`, the hashes and the mask spec are gone,
+  with no option to bring them back (what an image was made with is read from the library and the queue), and `next`
+  appears only where the next step is not the routine one. A routine t2i readback is about 200 characters (about 500
+  with a UC preset) where it was over 20,000 for a long prompt. A canvas recipe, whose inputs the caller never wrote,
+  lists every value and states its texts once (`authoredPrompts`, `effective.characters`).
 - `read_workspace` is compact by default too: image entries no longer carry their own recipe (`promptsMatchCanvas`
   says whether it matches the canvas), and the inpaint prompt and recipe appear only on the inpaint tab; `omitted`
   lists what was left out and `detail: "full"` returns everything.
