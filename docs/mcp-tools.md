@@ -128,10 +128,10 @@ The library as the app shows it, without the canvas. Items are identified by `ki
   history tags, archived items, sorting. `queueRequestKey` (an `enqueue_recipes` key) or `queueBatchId` lists the images
   that batch saved. A project is the collection `history:<historyGroupId>`.
 - `read` loads one item. A history image is returned as what it was made with, each once: its prompts and
-  parameters (`params`), `characters`, `actualSeed`, `mode`, the saved file (`filePath`), its `assetId` and the queue
-  batch it came from. Left out are the prompt split into tags, second copies of the character prompts and of the
-  file, and the host's own identifiers. Other kinds are returned in full. `detail: "full"` is the raw record and
-  `"summary"` a short excerpt; both are rarely needed.
+  parameters (`params`), `characters`, `actualSeed`, `mode`, the saved file (`filePath`), its `assetId`, the queue
+  batch it came from, and where the user filed it (`groupId`, `userTags`, `collections`). Left out are the prompt
+  split into tags, second copies of the character prompts and of the file, and the host's own identifiers. Other
+  kinds are returned in full. There is one answer per kind: `read` has no `detail` option.
 - `image` returns one history image (a thumbnail of at most 384 px unless `variant: "original"` is asked for). The
   image's `assetId` (from `list` or `read`) is what `prepare_recipe` and covers use.
 - `collections`, `create-collection`, and `mutate` with `archive`, `update` (only the fields each kind allows),

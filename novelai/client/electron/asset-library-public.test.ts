@@ -59,8 +59,10 @@ it('public contract → MCP asset_library → real HTTP → SQLite creates and r
     expect(listed.total).toBe(2);
     expect(listed.items.map((item: any) => item.kind).sort()).toEqual(['history', 'note']);
     for (const selected of items) {
-      const result = await call({ action: 'read', kind: selected.kind, id: selected.id, detail: 'full' });
-      expect(result.memberships).toContainEqual(expect.objectContaining({ namespace: 'user', collectionId: created.collection.id.slice('user:'.length) }));
+      // One answer per kind: a history image as what it was made with (its collections among it), any other kind in full.
+      const result = await call({ action: 'read', kind: selected.kind, id: selected.id });
+      if (selected.kind === 'history') expect(result.collections).toEqual([created.collection.id]);
+      else expect(result.memberships).toContainEqual(expect.objectContaining({ namespace: 'user', collectionId: created.collection.id.slice('user:'.length) }));
     }
     expect(repo.get('history', history.id)?.payload).toEqual(history);
     expect(repo.get('note', note.id)?.payload).toEqual(note);

@@ -20,7 +20,7 @@ async function connect(t, handler, options = {}) {
   t.after(async () => { await client.close(); await server.close(); });
   const call = (name, args = {}) => client.callTool({ name, arguments: args });
   const ok = async (name, args) => { const result = await call(name, args); assert.ok(!result.isError, JSON.stringify(result.structuredContent)); return result.structuredContent; };
-  return { calls, call, ok };
+  return { calls, call, ok, listTools: async () => (await client.listTools()).tools };
 }
 
 const hostBatch = (extra = {}) => ({
@@ -120,27 +120,28 @@ const historyRecord = () => ({
       params: { model: 'nai-diffusion-5-full', promptAssemblyVersion: 1, stylePrompt: '', positivePrompt: PROMPT, negativePrompt: 'blurry', width: 832, height: 1216, steps: 28, cfgScale: 5, cfgRescale: 0, sampler: 'k_euler_ancestral', noiseSchedule: 'karras', seed: 11, seedMode: 'fixed', ucPreset: 3, qualityPreset: 'none', qualityToggle: true, transparentBackground: false, smea: false, smeaDyn: false, variety: false, fileNamePrefix: '' },
       characterSnapshot: { version: 1, captions: [{ prompt: 'girl, red dress', negativePrompt: 'hat', useCoords: true, x: 0.3, y: 0.5 }, { prompt: 'boy, blue coat', negativePrompt: '', useCoords: false, x: 0.5, y: 0.5 }] }, characterPrompts: ['girl, red dress', 'boy, blue coat'],
       queueOrigin: { batchId: BATCH, requestKey: HOST_KEY, itemIndex: 0 }, generationOrigin: { jobId: 'job-0', mode: 't2i', originWorkspaceId: 'recipe-queue', submittedRevision: 0, actualSeed: 11 }, i2iStrength: 0.5 } },
-  tags: PROMPT.split(', ').map(tag => ({ tag, source: 'positive' })), assets: [{ filePath: '/pictures/out/proj_01.png', fileUrl: 'nai-local://file/x', id: 'path:abc', role: 'original' }],
-  links: [{ kind: 'history', id: 'h0', targetId: 'job-0' }], memberships: [{ namespace: 'history', collectionId: 'g-1' }], tagCoverage: { positive: true },
+  tags: [...PROMPT.split(', ').map(tag => ({ tag, source: 'positive' })), { tag: 'keeper', source: 'user' }], assets: [{ filePath: '/pictures/out/proj_01.png', fileUrl: 'nai-local://file/x', id: 'path:abc', role: 'original' }],
+  links: [{ kind: 'history', id: 'h0', targetId: 'job-0' }], memberships: [{ namespace: 'history', collectionId: 'g-1', kind: 'history', id: 'h0' }, { namespace: 'user', collectionId: 'favourites', kind: 'history', id: 'h0' }], tagCoverage: { positive: true },
 });
 
-test('asset_library read of a history image: what it was made with, once; summary and full stay as they were', async t => {
-  const { ok } = await connect(t, () => historyRecord());
+test('asset_library read of a history image: what it was made with, once, and where the user filed it; there is no detail option', async t => {
+  const { ok, call, listTools } = await connect(t, (_method, args) => args.kind === 'note' ? { item: { kind: 'note', id: 'n1', revision: 3, name: 'a note', payload: { notes: 'text' } } } : historyRecord());
   const read = await ok('asset_library', { action: 'read', kind: 'history', id: 'h0' });
   assert.deepEqual(read, {
     kind: 'history', id: 'h0', revision: 1, name: 'proj_01.png', createdAt: '2026-11-13T00:00:00.000Z', assetId: 'path:abc', model: 'nai-diffusion-5-full', width: 832, height: 1216, mode: 't2i', actualSeed: 11,
     params: { stylePrompt: '', positivePrompt: PROMPT, negativePrompt: 'blurry', steps: 28, cfgScale: 5, cfgRescale: 0, sampler: 'k_euler_ancestral', noiseSchedule: 'karras', seedMode: 'fixed', ucPreset: 3, qualityPreset: 'none' },
     characters: [{ prompt: 'girl, red dress', negativePrompt: 'hat', x: 0.3, y: 0.5 }, { prompt: 'boy, blue coat' }],
-    filePath: '/pictures/out/proj_01.png', queue: { batchId: BATCH, itemIndex: 0 }, i2iStrength: 0.5,
+    filePath: '/pictures/out/proj_01.png', queue: { batchId: BATCH, itemIndex: 0 }, groupId: 'g-1', userTags: ['keeper'], collections: ['user:favourites'], i2iStrength: 0.5,
   });
   const text = JSON.stringify(read);
   for (const once of [PROMPT, 'girl, red dress', '/pictures/out/proj_01.png']) assert.equal(text.split(once).length - 1, 1, once);
   for (const hidden of [HOST_KEY, 'nai-local', 'cacheKey', '"tags"', '"links"', 'job-0']) assert.equal(text.includes(hidden), false, hidden);
-  const full = await ok('asset_library', { action: 'read', kind: 'history', id: 'h0', detail: 'full' });
-  assert.equal(full.tags.length, 5); assert.equal(full.responseInfo.detail, 'full'); assert.equal(full.item.payload.fileUrl, 'nai-local://file/x');
-  assert.ok(text.length < JSON.stringify(full).length / 2, `${text.length} of ${JSON.stringify(full).length}`);
-  const summary = await ok('asset_library', { action: 'read', kind: 'history', id: 'h0', detail: 'summary' });
-  assert.equal(summary.detail, 'summary'); assert.equal(summary.item.promptExcerpt, PROMPT);
+  assert.ok(text.length < JSON.stringify(historyRecord()).length / 2, `${text.length} of ${JSON.stringify(historyRecord()).length}`);
+  // One answer: a detail is not an argument of the tool (the response module's summary and full are for its own tests).
+  for (const detail of ['full', 'summary']) assert.equal((await call('asset_library', { action: 'read', kind: 'history', id: 'h0', detail })).structuredContent.error.code, 'invalid_arguments', detail);
+  assert.equal(Object.hasOwn((await listTools()).find(tool => tool.name === 'asset_library').inputSchema.properties, 'detail'), false);
+  // Another kind is returned in full, as before.
+  assert.deepEqual(Object.keys(await ok('asset_library', { action: 'read', kind: 'note', id: 'n1' })).sort(), ['item', 'responseInfo']);
   // An image without a character snapshot (older records) lists its character prompts; one without a recipe is still an identity.
   const older = historyRecord(); delete older.item.payload.characterSnapshot;
   assert.deepEqual(historyRecipeView(older).characters, [{ prompt: 'girl, red dress' }, { prompt: 'boy, blue coat' }]);

@@ -9,7 +9,7 @@ const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const target={action:'image',kind:'history',id:'manual-1',revision:1,assetId:'path:'+'a'.repeat(64)};
 const image=()=>({kind:'history',id:'manual-1',revision:1,assetId:target.assetId,role:'original',variant:'thumbnail',mimeType:'image/png',width:1,height:1,sourceWidth:1,sourceHeight:1,sourceMimeType:'image/png',byteLength:png.length,sourceByteLength:png.length,sha256:sha(png),sourceSha256:sha(png),contentBinding:'read-time-sha256',data:png.toString('base64')});
 async function mcp(t,raw){
- const server=createNovelAiMcpServer({bridgeClient:{call:async()=>typeof raw==='function'?raw():raw}}),client=new Client({name:'images-test',version:'1'});
+ const server=createNovelAiMcpServer({wholeResults:true,bridgeClient:{call:async()=>typeof raw==='function'?raw():raw}}),client=new Client({name:'images-test',version:'1'});
  const [a,b]=InMemoryTransport.createLinkedPair();await server.connect(b);await client.connect(a);
  t.after(async()=>{await client.close();await server.close();});return args=>client.callTool({name:'asset_library',arguments:args});
 }

@@ -101,7 +101,9 @@ export function errorResult(error) {
   return { isError: true, content: [{ type: 'text', text: JSON.stringify({ error: safe }) }], structuredContent: { error: safe } };
 }
 
-const ENTRY_KEYS = new Set(['name', 'layer', 'description', 'inputSchema', 'annotations', 'hostMethods', 'errors', 'precheck', 'validate', 'handle']);
+// wholeInputSchema: the arguments the module behind a tool takes beyond the public ones; only a server built with the
+// test option wholeResults validates against it. tools/list always shows inputSchema.
+const ENTRY_KEYS = new Set(['name', 'layer', 'description', 'inputSchema', 'wholeInputSchema', 'annotations', 'hostMethods', 'errors', 'precheck', 'validate', 'handle']);
 /** Checks and freezes the registry; names are unique and every entry is complete. */
 export function defineRegistry(entries) {
   const seen = new Set();
@@ -150,7 +152,7 @@ export function createRegistryServer({ serverInfo, instructions, registry, expos
     try {
       if (!tool) throw new BridgeError('unknown_tool', UNKNOWN_TOOL);
       tool.precheck?.(args);
-      validateArguments(args, tool.inputSchema);
+      validateArguments(args, context?.wholeResults && tool.wholeInputSchema ? tool.wholeInputSchema : tool.inputSchema);
       tool.validate?.(args);
       const result = await hostCallScope.run(scope, () => tool.handle(args, { ...context, signal: extra.signal }));
       return scope.denied.length ? errorResult(hostMethodNotAllowed(tool.name, scope.denied)) : withProjectRootSource(result, context.projectRootSource);

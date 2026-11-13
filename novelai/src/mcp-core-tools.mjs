@@ -227,8 +227,13 @@ const materialStudies = core({
   },
 });
 
+const { detail: _detail, ...assetLibraryPublicProperties } = assetLibraryFlatSchema.properties;
+const assetLibraryPublicSchema = { ...assetLibraryFlatSchema, properties: assetLibraryPublicProperties };
+
 const assetLibrary = core({
-  name: 'asset_library', description: ASSET_LIBRARY_DESCRIPTION, inputSchema: assetLibraryFlatSchema, annotations: annotations(false), hostMethods: ['asset_library', CENSOR_HOST_METHODS.render],
+  // An agent's read has one answer per kind, so the public schema has no detail; the summary and full projections of
+  // the response module stay reachable for its tests (wholeInputSchema).
+  name: 'asset_library', description: ASSET_LIBRARY_DESCRIPTION, inputSchema: assetLibraryPublicSchema, wholeInputSchema: assetLibraryFlatSchema, annotations: annotations(false), hostMethods: ['asset_library', CENSOR_HOST_METHODS.render],
   async handle(args, { bridge, signal, dirs, roots, wholeResults }) {
     // censor: the image's size, the rasterized mask, one host render, then a new JPEG in novelai/library-exports
     // (or, with preview, the picture as one native image and nothing written).
@@ -257,9 +262,9 @@ const assetLibrary = core({
         throw new BridgeError('host_outdated', 'The NovelAI client is older than this MCP server and cannot read imported-image (study) originals here. Fully rebuild and restart the client; until then view imported images with material_studies {action:"image", id}. Nothing was changed.', { hostCode: error.code });
       throw error;
     }
-    // An agent's default read of a history image is everything it was made with, once (historyRecipeView), and its
-    // lists are the compact rows; the summary and full projections of the response module are unchanged.
-    const recipeView = !wholeResults && args.action === 'read' && args.kind === 'history' && args.detail === undefined;
+    // An agent's read of a history image is everything it was made with, once (historyRecipeView), and its lists are
+    // the compact rows; the summary and full projections of the response module are unchanged.
+    const recipeView = !wholeResults && args.action === 'read' && args.kind === 'history';
     const projected = assetLibraryResponse(recipeView ? { ...normalized, detail: 'full' } : normalized, reply);
     const result = wholeResults ? projected : recipeView ? historyRecipeView(projected) : args.action === 'list' ? compactAssetList(projected) : projected;
     if (args.action === 'image') {

@@ -58,8 +58,9 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
 - The other tools answer in the same way: what only the app uses (its own request key, plan hash, job ids, cache
   keys), zero counts, defaults and what the call itself wrote are left out.
   - `asset_library` `read` of a history image returns what it was made with, once (`params` with the prompts,
-    `characters`, `actualSeed`, `mode`, `filePath`, `assetId`, the queue batch), about a third of the former full
-    record; `detail: "full"` is still the raw record. `list` rows carry the identity, name, model, size, a prompt
+    `characters`, `actualSeed`, `mode`, `filePath`, `assetId`, the queue batch, `groupId`, `userTags`,
+    `collections`), about a third of the former full record. It is the only answer: `read` no longer takes `detail`
+    (`invalid_arguments`), so a call that still asks for `detail: "full"` must drop it. `list` rows carry the identity, name, model, size, a prompt
     excerpt and the `assetId`.
   - `read_queue`: `status`, `count`, the `itemCounts` that occur, `results` (`itemIndex`, `historyId`, `actualSeed`,
     `fileName`, `file`) and `items` only for images that are running, failed, unknown, cancelled or skipped; its place

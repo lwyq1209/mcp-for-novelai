@@ -91,7 +91,7 @@ const accepts = (schema, value) => { try { validateContract(value, schema); retu
 const ASSET_VALID = [
   { action: 'list' }, { action: 'list', category: 'presets' }, { action: 'list', kinds: ['combo'] }, { action: 'list', kinds: ['history', 'style_preset'], query: 'watercolor', limit: 20, offset: 0, sortBy: 'name', sortDirection: 'asc', includeArchived: true },
   { action: 'list', category: 'history', historyTags: ['rain'], historyTagMatch: 'any', historyTagSources: ['positive'] }, { action: 'list', collectionId: 'user:fixture' },
-  { action: 'read', kind: 'reference_preset', id: 'reference-1' }, { action: 'read', kind: 'combo', id: 'combo:fixture', revision: 7, detail: 'full' },
+  { action: 'read', kind: 'reference_preset', id: 'reference-1' }, { action: 'read', kind: 'combo', id: 'combo:fixture', revision: 7 },
   { action: 'image', kind: 'history', id: 'h1', revision: 2, assetId: 'a1', variant: 'original' }, { action: 'image', kind: 'history', id: 'h1', revision: 2, assetId: 'a1' },
   { action: 'collections' }, { action: 'create-collection', name: '雨窗书店' },
   { action: 'mutate', command: 'archive', items: [{ kind: 'note', id: 'note-1', expectedRevision: 1 }] },

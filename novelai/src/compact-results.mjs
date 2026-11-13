@@ -104,16 +104,21 @@ export function compactAssetList(page) {
 
 const PARAM_DEFAULTS = { smea: false, smeaDyn: false, variety: false, transparentBackground: false, fileNamePrefix: '', qualityToggle: true };
 /**
- * asset_library read of a history image, the default: everything the image was made with, once. The prompts and
- * parameters, the characters, the seed, the saved file, and the identities a later call needs (id, revision, assetId
- * for a recipe source or an image read, the queue batch). Left out: the prompt split into its tags (the prompts are
- * above), the second copy of the character prompts and of the file, links and memberships. `whole` is the complete
- * record (detail "full").
+ * asset_library read of a history image, the only answer the tool gives: everything the image was made with, once.
+ * The prompts and parameters, the characters, the seed, the saved file, the identities a later call needs (id,
+ * revision, assetId for a recipe source or an image read, the queue batch), and where the user filed it (its history
+ * group, the tags the user added, its other collections). Left out: the prompt split into its tags (the prompts are
+ * above), the second copy of the character prompts and of the file, and the host's own links. `whole` is the complete
+ * record of the response module.
  */
 export function historyRecipeView(whole) {
   const item = whole?.item, payload = record(item?.payload) ? item.payload : {};
   if (!record(item)) return whole;
-  const { params, characterSnapshot, characterPrompts, filePath, fileUrl: _url, queueOrigin, generationOrigin, actualSeed, model, width, height, id: _id, createdAt: _created, date: _date, groupId: _group, ...other } = payload;
+  const { params, characterSnapshot, characterPrompts, filePath, fileUrl: _url, queueOrigin, generationOrigin, actualSeed, model, width, height, id: _id, createdAt: _created, date: _date, groupId, ...other } = payload;
+  const userTags = list(whole.tags).filter(tag => tag?.source === 'user' && typeof tag.tag === 'string').map(tag => tag.tag);
+  // The history group is groupId; any other membership is a collection, named by the id list and mutate take ("user:<id>").
+  const collections = list(whole.memberships).filter(membership => record(membership) && typeof membership.namespace === 'string' && typeof membership.collectionId === 'string' && !(membership.namespace === 'history' && membership.collectionId === groupId))
+    .map(membership => `${membership.namespace}:${membership.collectionId}`);
   const captions = Array.isArray(characterSnapshot?.captions) ? characterSnapshot.captions : Array.isArray(characterPrompts) ? characterPrompts.map(prompt => ({ prompt })) : [];
   const recipe = record(params) ? Object.fromEntries(Object.entries(params).filter(([key, value]) => value !== null && value !== undefined && !(key in PARAM_DEFAULTS && value === PARAM_DEFAULTS[key])
     && !['model', 'width', 'height', 'promptAssemblyVersion'].includes(key) && !(key === 'seed' && value === actualSeed)
@@ -126,6 +131,7 @@ export function historyRecipeView(whole) {
     ...(captions.length ? { characters: captions.map(caption => present({ prompt: caption.prompt, ...(caption.negativePrompt ? { negativePrompt: caption.negativePrompt } : {}), ...(caption.useCoords ? { x: caption.x, y: caption.y } : {}) })) } : {}),
     filePath,
     ...(record(queueOrigin) ? { queue: present({ batchId: queueOrigin.batchId, itemIndex: queueOrigin.itemIndex }) } : {}),
+    groupId, ...(userTags.length ? { userTags } : {}), ...(collections.length ? { collections } : {}),
     ...other,
   });
 }
