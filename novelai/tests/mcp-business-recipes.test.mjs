@@ -144,12 +144,13 @@ const retamper = (reply, mutate) => {
 const settleClock = (clock = { t: 0 }) => ({ monotonicNow: () => clock.t, sleep: async ms => { clock.t += ms; }, clock });
 async function connect(t, bridgeClient, options = {}) {
   const { clock: _clock, ...recipeQueueOptions } = options.recipeQueue ?? settleClock();
-  const server = serverUnderTest.create({ bridgeClient, ...options, recipeQueue: { sleep: settleClock().sleep, ...recipeQueueOptions } });
+  const { compact = false, ...serverOptions } = options;
+  const server = serverUnderTest.create({ bridgeClient, rawRecipeReadback: !compact, ...serverOptions, recipeQueue: { sleep: settleClock().sleep, ...recipeQueueOptions } });
   const client = new Client({ name: 'business-recipes-test', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport); await client.connect(clientTransport);
   t.after(async () => { await client.close(); await server.close(); });
-  return { call: (name, args) => client.callTool({ name, arguments: fullDetail(name, args) }), raw: (name, args) => client.callTool({ name, arguments: args }), readRecipe: directRecipes(bridgeClient) };
+  return { call: (name, args) => client.callTool({ name, arguments: args }), readRecipe: directRecipes(bridgeClient) };
 }
 // read_recipe is no longer an MCP tool. Stored-revision readbacks go through the recipe module's read() on the same
 // bridge double, in the same success/error envelope a core tool returns.
@@ -160,8 +161,8 @@ const directRecipes = bridgeClient => {
     catch (error) { return errorResult(failure(error, { roots: projectRoots(PROJECT_ROOT), trusted: trustedIdentities(args), policy: 'opaque', layer: 'core' })); }
   };
 };
-// The assertions of this file read the full readback; the compact default has its own tests (search "compact readback").
-const fullDetail = (name, args) => name === 'prepare_recipe' && args !== null && typeof args === 'object' && !Array.isArray(args) && args.detail === undefined ? { ...args, detail: 'full' } : args;
+// The servers of this file answer prepare_recipe with the whole readback (rawRecipeReadback, a test option); connect {compact:true} is the
+// server an agent gets, with the compact readback (search "compact readback").
 const errorOf = result => { assert.equal(result.isError, true, JSON.stringify(result.structuredContent ?? result)); return result.structuredContent.error; };
 const ok = result => { assert.ok(!result.isError, JSON.stringify(result.structuredContent ?? result)); return result.structuredContent; };
 const t2i = (patch = {}) => ({ mode: 't2i', model: 'nai-diffusion-5-full', width: 832, height: 1216, steps: 28, cfgScale: 5, sampler: 'k_euler_ancestral', noiseSchedule: 'karras',
@@ -176,19 +177,17 @@ const policyFile = async (t, required) => {
   return file;
 };
 
-test('prepare_recipe readback is compact by default: nothing the caller wrote is echoed, what the host appended is kept, and detail:"full" is the same recipe', async t => {
+test('compact readback of prepare_recipe, the only one the tool returns: nothing the caller wrote is echoed, what the host appended is kept, and there is no detail option', async t => {
   const h = await realHost(t);
-  const { call, raw } = await connect(t, h.bridge);
+  const { call } = await connect(t, h.bridge), { call: raw } = await connect(t, h.bridge, { compact: true });
   const args = t2i({ stylePrompt: 'watercolor, soft light', positivePrompt: '1girl, garden, wide shot from across the pond', negativePrompt: 'blurry, extra fingers',
     characters: [{ prompt: 'girl, red dress', negativePrompt: 'hat', useCoords: true, x: 0.3, y: 0.5 }, { prompt: 'boy, blue coat', useCoords: true, x: 0.7, y: 0.5 }] });
-  const full = ok(await call('prepare_recipe', { ...args, detail: 'full' }));
+  const full = ok(await call('prepare_recipe', args));
   const compact = ok(await raw('prepare_recipe', args));
-  assert.deepEqual(h.methods(), ['put_queue_recipe', 'put_queue_recipe'], 'detail is a view: the host call is the same and detail never reaches it');
-  assert.equal(JSON.stringify(h.calls).includes('"detail"'), false);
+  assert.deepEqual(h.methods(), ['put_queue_recipe', 'put_queue_recipe'], 'the compact readback is a view: the host call is the same');
   assert.deepEqual([compact.inputHash, compact.ready, compact.lineage, compact.saved, compact.generationSubmitted], [full.inputHash, true, 'plain', true, false]);
   assert.match(compact.recipeId, /^[a-f0-9-]{36}$/); assert.equal(compact.recipeRevision, 1); assert.match(compact.next, /Check warnings and effective/);
-  assert.equal(compact.detail, 'compact'); assert.deepEqual(compact.omitted, ['authored', 'effectiveRequest', 'unusedInputs', 'assets']);
-  for (const key of ['authored', 'effectiveRequest', 'unusedInputs', 'assets', 'readiness', 'authoredPrompts']) assert.equal(Object.hasOwn(compact, key), false, key);
+  for (const key of ['authored', 'effectiveRequest', 'unusedInputs', 'assets', 'readiness', 'authoredPrompts', 'detail', 'omitted']) assert.equal(Object.hasOwn(compact, key), false, key);
   const text = JSON.stringify(compact);
   for (const written of [args.stylePrompt, args.positivePrompt, args.negativePrompt, 'girl, red dress', 'boy, blue coat', '"hat"']) assert.equal(text.includes(written), false, `${written} is not echoed`);
   assert.deepEqual(compact.effective, {
@@ -201,8 +200,8 @@ test('prepare_recipe readback is compact by default: nothing the caller wrote is
   assert.ok(text.length < JSON.stringify(full).length / 3, `compact ${text.length} of full ${JSON.stringify(full).length}`);
   t.diagnostic(`t2i readback characters: compact ${text.length}, full ${JSON.stringify(full).length}`);
 
-  assert.deepEqual(ok(await raw('prepare_recipe', { ...args, detail: 'compact' })).effective, compact.effective, 'compact is the default');
-  assert.equal(errorOf(await call('prepare_recipe', { ...args, detail: 'everything' })).code, 'invalid_arguments');
+  for (const detail of ['full', 'compact', 'raw']) assert.equal(errorOf(await raw('prepare_recipe', { ...args, detail })).code, 'invalid_arguments', `detail ${detail} is not an option`);
+  assert.equal(h.methods().length, 2, 'a refused detail reaches no host');
 
   // Medium: the values it replaces are warnings (the stored recipe already holds what runs), and its fixed UC is named once.
   const medium = ok(await raw('prepare_recipe', t2i({ effort: 'medium' })));

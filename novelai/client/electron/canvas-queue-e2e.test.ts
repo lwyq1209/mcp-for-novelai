@@ -124,13 +124,13 @@ async function start(options: { batch?: Partial<Parameters<typeof createBatchSer
   const dispatched: string[] = [];
   const dispatch = async (method: string, args: Record<string, unknown>) => { dispatched.push(method); return Object.hasOwn(hostMethods, method) ? hostMethods[method](args) : toRenderer(method, args); };
   const bridge = await startHttpBridge({ runtimeDir, dispatch }); closers.push(() => bridge.close());
-  const server = createNovelAiMcpServer({ bridgeClient: createBridgeClient({ runtimeDir }), projectRoot, projectRootSource: 'NOVELAI_PROJECT_ROOT' });
+  const server = createNovelAiMcpServer({ rawRecipeReadback: true, bridgeClient: createBridgeClient({ runtimeDir }), projectRoot, projectRootSource: 'NOVELAI_PROJECT_ROOT' });
   const client = new Client({ name: 'canvas-queue-e2e', version: '1' });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(b); await client.connect(a);
   closers.push(async () => { await client.close(); await server.close(); });
-  // These tests read the full readback (authored, the final prompts); the compact default is tested in novelai/tests.
-  const call = async (name: string, args: Record<string, unknown> = {}) => { const result: any = await client.callTool({ name, arguments: name === 'prepare_recipe' && args.detail === undefined ? { ...args, detail: 'full' } : args }); return { ok: !result.isError, value: result.structuredContent, content: result.content }; };
+  // rawRecipeReadback (a test option of the server): these tests read the whole readback; the compact one agents get is tested in novelai/tests.
+  const call = async (name: string, args: Record<string, unknown> = {}) => { const result: any = await client.callTool({ name, arguments: args }); return { ok: !result.isError, value: result.structuredContent, content: result.content }; };
   // The draft methods are the window's own (the MCP draft tools were retired on 2026-11-12): called on the renderer as the window does.
   const host = (method: string, args: Record<string, unknown>) => toRenderer(method, args);
   const ok = async (name: string, args: Record<string, unknown> = {}) => { const result = await call(name, args); expect(result.ok, `${name}: ${JSON.stringify(result.value).slice(0, 1500)}`).toBe(true); return result.value; };

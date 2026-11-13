@@ -203,8 +203,8 @@ that input, one NovelAI request per image, in order.
 Freezes one recipe revision and returns `recipeId`, `recipeRevision`, `inputHash` and a **readback** of the effective
 input the app would send. Check the readback before enqueueing.
 
-The readback is compact by default (`detail: "compact"`): it says what the app made of the recipe without repeating
-what the caller wrote.
+The readback says what the app made of the recipe without repeating what the caller wrote. There is one readback; it
+has no detail option.
 
 - A recipe prepared from inline fields does not echo its prompts or character texts. The server compares the stored
   fields with the request one by one, and a difference is the error `recipe_input_mismatch`, not a readback. What it
@@ -217,11 +217,10 @@ what the caller wrote.
   `positivePrompt`, `negativePrompt`) and the character texts in `effective.characters`.
 - When the appended text cannot be separated from the builder output (warning `readback_not_derived`), the final
   `effective.positivePrompt` and `effective.negativePrompt` are returned instead.
-- `readiness` appears only for a blocked recipe (`ready: false`). `omitted` lists what was left out.
+- `readiness` appears only for a blocked recipe (`ready: false`).
 
-`detail: "full"` adds `authored` (the recipe's fields as stored), the final prompts, `effectiveRequest` (the raw
-NovelAI request), `unusedInputs`, `assets`, the hashes of the source and the mask, and the mask spec. It is several
-times larger, because the raw request alone carries each prompt two or three times; ask for it only to debug.
+What an image was really made with is read afterwards from the library (`asset_library` `read` gives its prompts,
+parameters and seed) and from the queue (`read_queue` gives each image's status, error and seed).
 
 - Six modes: `t2i`, `i2i`, `enhance`, `inpaint`, `upscale`, `director`. A field that does not belong to the mode is
   refused rather than ignored.
@@ -310,7 +309,7 @@ Medium request sends was read from NovelAI's own web client (build of 2026-11-06
   warning `effort_not_applied` (before 0.1.4 this was refused). `effort: "high"` is accepted everywhere and changes
   nothing.
 - The readback shows the model id sent (`effective.model`) and, for Medium, `effective.effort` (`level` and the fixed
-  values; the fixed UC text is `effective.ucPreset.text`). `detail: "full"` adds `authored.effort`.
+  values; the fixed UC text is `effective.ucPreset.text`).
 - On the canvas the effort is the parameter `params.effort` (`"medium"`, or absent for High; also
   `inpaintRecipe.effort`). It applies where the model that runs is V5 Full: the txt2img/img2img model, or the inpaint
   model for inpaint; it is set in the app. A canvas capture of a Medium canvas

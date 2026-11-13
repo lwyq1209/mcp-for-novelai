@@ -109,12 +109,12 @@ async function fixture() {
   const { createNovelAiMcpServer, createBridgeClient } = await load('../../src/mcp.mjs');
   const { Client } = await load('../../node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js');
   const { InMemoryTransport } = await load('../../node_modules/@modelcontextprotocol/sdk/dist/esm/inMemory.js');
-  const server = createNovelAiMcpServer({ bridgeClient: createBridgeClient({ runtimeDir }), studyInbox, studyExports });
+  const server = createNovelAiMcpServer({ rawRecipeReadback: true, bridgeClient: createBridgeClient({ runtimeDir }), studyInbox, studyExports });
   const client = new Client({ name: 'issue2-ce-i2-1', version: '1' });
   const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(b); await client.connect(a);
   cleanups.push(async () => { await client.close(); await server.close(); });
-  // 这里的断言读完整回读（source 的 sha256 等）；默认的精简回读在 novelai/tests 里测。
-  const call = (name: string, args: Record<string, unknown>) => client.callTool({ name, arguments: name === 'prepare_recipe' && args.detail === undefined ? { ...args, detail: 'full' } : args }) as Promise<any>;
+  // 上面的 rawRecipeReadback 是服务端的测试选项：这里的断言读完整回读（source 的 sha256 等）；agent 拿到的精简回读在 novelai/tests 里测。
+  const call = (name: string, args: Record<string, unknown>) => client.callTool({ name, arguments: args }) as Promise<any>;
   // read_recipe 工具已删除：存储回读走配方模块的 read()，经同一条真实 HTTP bridge，回复包装与核心工具相同。
   const { createRecipeQueue } = await load('../../src/recipe-queue.mjs');
   const { success } = await load('../../src/mcp-registry.mjs');

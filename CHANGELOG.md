@@ -44,13 +44,14 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
 
 ### Changed
 
-- **Compact reads** (less of an agent's context per call). `prepare_recipe` returns a compact readback by default: it no
-  longer repeats the prompts and character texts the caller just wrote (the server compares the stored fields with the
-  request and refuses a difference as `recipe_input_mismatch`), and keeps the model id, sampling, mode parameters,
-  warnings and the text the app appended (`automaticQuality.appendedText`, `ucPreset.text`). A canvas recipe states its
-  texts once (`authoredPrompts`, `effective.characters`). `detail: "full"` returns the former readback (`authored`, the
-  final prompts, the raw request `effectiveRequest`, `unusedInputs`, `assets`, hashes, the mask spec). A typical t2i
-  readback goes from about 5,200 to about 1,300 characters and no longer grows with the prompt.
+- **Compact reads** (less of an agent's context per call). The `prepare_recipe` readback no longer repeats the prompts
+  and character texts the caller just wrote (the server compares the stored fields with the request and refuses a
+  difference as `recipe_input_mismatch`); it keeps the model id, sampling, mode parameters, warnings and the text the
+  app appended (`automaticQuality.appendedText`, `ucPreset.text`). A canvas recipe states its texts once
+  (`authoredPrompts`, `effective.characters`). `authored`, the raw request (`effectiveRequest`), `unusedInputs`,
+  `assets`, the hashes and the mask spec are gone from the readback, with no option to bring them back: what an image
+  was made with is read from the library and the queue. The readback is about 0.8–1.7k characters and no longer grows
+  with the prompt (replaying real recipes of about 4.7k characters: about 850, where it was over 20k).
 - `read_workspace` is compact by default too: image entries no longer carry their own recipe (`promptsMatchCanvas`
   says whether it matches the canvas), and the inpaint prompt and recipe appear only on the inpaint tab; `omitted`
   lists what was left out and `detail: "full"` returns everything.

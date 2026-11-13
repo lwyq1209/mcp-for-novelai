@@ -930,10 +930,6 @@ export function recipeReadback(result, { built = null } = {}) {
   };
 }
 
-/** What the compact readback leaves out of the full one (reported as `omitted`). */
-export const COMPACT_READBACK_OMITTED = Object.freeze(['authored', 'effectiveRequest', 'unusedInputs', 'assets']);
-export const READBACK_DETAILS = Object.freeze(['compact', 'full']);
-
 /** The effective view of a generation mode without the texts the caller already has; every text appears at most once. */
 function compactEffective(effective, authored, known) {
   const { positivePrompt, negativePrompt, nSamples: _samples, automaticQuality, ucPreset, effort, transparentBackground, characters, requestSource, requestMask, sourceResized, ...rest } = effective;
@@ -961,9 +957,11 @@ function compactEffective(effective, authored, known) {
 }
 
 /**
- * The default prepare_recipe readback: what the host made of the recipe, without repeating what the caller wrote.
- * The full readback states every prompt three to five times (authored, effective, and the raw request, which
- * carries it in input and v4_prompt, and the negative in uc, negative_prompt and v4_negative_prompt).
+ * The prepare_recipe readback: what the host made of the recipe, without repeating what the caller wrote. It is the
+ * only readback the tool returns. The whole one (recipeReadback) states every prompt three to five times (authored,
+ * effective, and the raw request, which carries it in input and v4_prompt, and the negative in uc, negative_prompt
+ * and v4_negative_prompt); it stays a module API for tests (createToolContext rawRecipeReadback), not a tool option:
+ * what an image was really made with is read from the library (asset_library read) and the queue (read_queue).
  *
  * - A plain recipe's stored inputs were compared with the request field by field (authoredDifferences; a difference
  *   is recipe_input_mismatch, not a readback), so its prompts and character texts are not echoed: the readback
@@ -980,7 +978,6 @@ export function compactReadback(full) {
   const known = lineage === 'plain', generation = seeded(mode) && record(effective) && record(effective.automaticQuality);
   return {
     recipeId, recipeRevision, inputHash, mode, lineage, ready, ...(ready ? {} : { readiness }), warnings,
-    detail: 'compact', omitted: COMPACT_READBACK_OMITTED,
     effective: generation ? compactEffective(effective, authored, known) : effective ?? null,
     ...(seeded(mode) && !known && record(authored) ? { authoredPrompts: { stylePrompt: authored.stylePrompt ?? '', positivePrompt: authored.positivePrompt ?? '', negativePrompt: authored.negativePrompt ?? '' } } : {}),
     ...(source ? { source: Object.fromEntries(Object.entries(source).filter(([key]) => !['sha256', 'mimeType', 'byteLength'].includes(key))) } : {}),
