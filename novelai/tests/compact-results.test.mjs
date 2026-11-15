@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createNovelAiMcpServer } from '../src/mcp.mjs';
-import { compactBatch, compactEnqueue, compactQueueList, compactTags, historyRecipeView, wikiDefinition } from '../src/compact-results.mjs';
+import { compactAssetMutation, compactBatch, compactCollections, compactEnqueue, compactMaterialList, compactQueueList, compactTags, historyRecipeView, wikiDefinition } from '../src/compact-results.mjs';
 
 // What an agent gets from the queue, library and tag tools: the server as it runs (no wholeResults), over a host double.
 // The whole results these are projections of are tested with the modules themselves (wholeResults: true in their files).
@@ -42,6 +42,8 @@ test('read_queue: status, the counts that occur, every saved image and every ima
   const read = await ok('read_queue', { batchId: BATCH });
   assert.deepEqual(read, {
     batchId: BATCH, status: 'running', count: 5, itemCounts: { pending: 1, running: 1, succeeded: 2, failed: 1 },
+    // Saved outside the project root: the folder once, each image by its name.
+    dir: '/pictures/out',
     results: [{ itemIndex: 0, historyId: 'h0', actualSeed: 11, fileName: 'proj_01.png' }, { itemIndex: 1, historyId: 'h1', actualSeed: 12, fileName: 'proj_02.png' }, { itemIndex: 1, index: 1, historyId: 'h1b', actualSeed: 12, fileName: 'proj_02b.png' }],
     items: [{ itemIndex: 2, status: 'failed', error: 'provider_error' }, { itemIndex: 3, status: 'running' }],
     ahead: { images: 0, batches: 0 }, etaSeconds: 21,
@@ -51,12 +53,12 @@ test('read_queue: status, the counts that occur, every saved image and every ima
   // Ended: no place in the queue any more; a stop reason and a manual source are said.
   reply = hostBatch({ status: 'partial', source: { kind: 'manual' }, error: { code: 'child_stopped' }, items: hostBatch().items.slice(0, 3), count: 3, activeJobId: null });
   const ended = await ok('read_queue', { batchId: BATCH });
-  assert.deepEqual(Object.keys(ended), ['batchId', 'status', 'stopReason', 'count', 'source', 'itemCounts', 'results', 'items']);
+  assert.deepEqual(Object.keys(ended), ['batchId', 'status', 'stopReason', 'count', 'source', 'itemCounts', 'dir', 'results', 'items']);
   assert.deepEqual([ended.source, ended.stopReason.code, ended.itemCounts], ['manual', 'child_stopped', { succeeded: 2, failed: 1 }]);
   // wait: the same view with how the wait ended.
   reply = hostBatch({ status: 'succeeded', items: hostBatch().items.slice(0, 1), count: 1 });
   const waited = await ok('read_queue', { batchId: BATCH, wait: { until: 'done', seconds: 5 } });
-  assert.deepEqual(waited, { batchId: BATCH, status: 'succeeded', count: 1, itemCounts: { succeeded: 1 }, results: [{ itemIndex: 0, historyId: 'h0', actualSeed: 11, fileName: 'proj_01.png' }], wait: { until: 'done', ended: 'done', waitedSeconds: 0 } });
+  assert.deepEqual(waited, { batchId: BATCH, status: 'succeeded', count: 1, itemCounts: { succeeded: 1 }, dir: '/pictures/out', results: [{ itemIndex: 0, historyId: 'h0', actualSeed: 11, fileName: 'proj_01.png' }], wait: { until: 'done', ended: 'done', waitedSeconds: 0 } });
   // A cleaned batch: how it ended and where its images are.
   reply = { batchId: BATCH, execution: 'queued', cleaned: true, status: 'succeeded', count: 4, cleanedAt: '2026-11-01T00:00:00.000Z', finishedAt: '2026-10-20T00:00:00.000Z', itemCounts: { succeeded: 4, failed: 0, unknown: 0, cancelled: 0, skipped: 0 } };
   const cleaned = await ok('read_queue', { batchId: BATCH });
@@ -84,12 +86,12 @@ test('get_queue_result: the image with its history identity, seed and file; the 
     : args.variant === 'thumbnail' ? { variant: 'thumbnail', mimeType: 'image/png', data: png, width: 1, height: 1, historyId: args.itemIndex === 0 ? 'h0' : args.index ? 'h1b' : 'h1' }
       : { jobId: 'job-0', index: args.index, historyId: 'h0', actualSeed: 11, filePath: '/pictures/out/proj_01.png', mimeType: 'image/png', data: png });
   const one = await call('get_queue_result', { batchId: BATCH, itemIndex: 0 });
-  assert.deepEqual(one.structuredContent, { historyId: 'h0', actualSeed: 11, fileName: 'proj_01.png' });
+  assert.deepEqual(one.structuredContent, { historyId: 'h0', actualSeed: 11, fileName: 'proj_01.png', dir: '/pictures/out' });
   assert.equal(one.content.filter(item => item.type === 'image').length, 1);
   const all = await call('get_queue_result', { batchId: BATCH });
-  assert.deepEqual(all.structuredContent, { status: 'succeeded', total: 3, results: [{ itemIndex: 0, historyId: 'h0', actualSeed: 11, fileName: 'proj_01.png' }, { itemIndex: 1, historyId: 'h1', actualSeed: 12, fileName: 'proj_02.png' }, { itemIndex: 1, index: 1, historyId: 'h1b', actualSeed: 12, fileName: 'proj_02b.png' }] });
+  assert.deepEqual(all.structuredContent, { status: 'succeeded', total: 3, dir: '/pictures/out', results: [{ itemIndex: 0, historyId: 'h0', actualSeed: 11, fileName: 'proj_01.png' }, { itemIndex: 1, historyId: 'h1', actualSeed: 12, fileName: 'proj_02.png' }, { itemIndex: 1, index: 1, historyId: 'h1b', actualSeed: 12, fileName: 'proj_02b.png' }] });
   assert.equal(all.content.filter(item => item.type === 'image').length, 3);
-  assert.ok(JSON.stringify(await ok('get_queue_result', { batchId: BATCH })).length < 320);
+  assert.ok(JSON.stringify(await ok('get_queue_result', { batchId: BATCH })).length < 345);
 });
 
 test('compactEnqueue: status, batch and count; seeds only where the server chose them; the batch state and instruction only where the answer is not the routine one', () => {
@@ -162,6 +164,49 @@ test('asset_library list: rows an image can be read or viewed by, without the re
   assert.ok(JSON.stringify(page.items[0]).length < 330, JSON.stringify(page.items[0]));
 });
 
+test('a batch saved into more than one folder names the first once and the other on its own images; a file inside the project has none', () => {
+  const result = (itemIndex, extra) => ({ itemIndex, index: 0, historyId: `h${itemIndex}`, actualSeed: itemIndex, fileName: `p_${itemIndex}.png`, file: null, ...extra });
+  const read = compactBatch({ batchId: BATCH, status: 'succeeded', count: 3, itemCounts: { succeeded: 3 }, pathBase: 'project-root',
+    results: [result(0, { dir: '/out/2026-11-14/proj' }), result(1, { dir: '/out/2026-11-15/proj' }), result(2, { file: 'out/p_2.png' })] });
+  assert.equal(read.dir, '/out/2026-11-14/proj');
+  assert.deepEqual(read.results, [{ itemIndex: 0, historyId: 'h0', actualSeed: 0, fileName: 'p_0.png' }, { itemIndex: 1, historyId: 'h1', actualSeed: 1, fileName: 'p_1.png', dir: '/out/2026-11-15/proj' }, { itemIndex: 2, historyId: 'h2', actualSeed: 2, fileName: 'p_2.png', file: 'out/p_2.png' }]);
+  assert.equal(Object.hasOwn(compactBatch({ batchId: BATCH, status: 'succeeded', count: 1, results: [result(2, { file: 'out/p_2.png' })] }), 'dir'), false);
+});
+
+test('asset_library mutate answers with identities and new revisions, collections with ids and names; a delete receipt is unchanged', async t => {
+  const record = (id, revision) => ({ ...historyRecord().item, id, revision, updatedAt: '2026-11-15T00:00:00.000Z' });
+  const collections = [{ namespace: 'history', id: 'history:g-1', name: 'proj', payload: { id: 'g-1', name: 'proj', createdAt: '2026-11-01T00:00:00.000Z' } }, { namespace: 'user', id: 'user:u-1', name: 'keep', payload: {} }];
+  const { ok, calls } = await connect(t, (method, args) => args.action === 'collections' ? { collections, revision: 12 } : args.action === 'create-collection' ? { collection: collections[1], revision: 13 }
+    : args.command === 'delete' ? { deleted: [{ trashId: 't-1', kind: 'history', id: 'h0', name: 'proj_00.png' }], revision: 15 } : { items: [record('h0', 2), { ...record('h1', 3), archived: true }], revision: 14 });
+  const items = [{ kind: 'history', id: 'h0', expectedRevision: 1 }, { kind: 'history', id: 'h1', expectedRevision: 2 }];
+  const changed = await ok('asset_library', { action: 'mutate', command: 'add-to-collection', collectionId: 'user:u-1', items });
+  assert.deepEqual(changed, { items: [{ kind: 'history', id: 'h0', revision: 2 }, { kind: 'history', id: 'h1', revision: 3, archived: true }], revision: 14 });
+  assert.equal(JSON.stringify(changed).includes(PROMPT), false, 'the records themselves are not repeated');
+  assert.deepEqual(await ok('asset_library', { action: 'collections' }), { collections: [{ id: 'history:g-1', name: 'proj' }, { id: 'user:u-1', name: 'keep' }], revision: 12 });
+  assert.deepEqual(await ok('asset_library', { action: 'create-collection', name: 'keep' }), { collection: { id: 'user:u-1', name: 'keep' }, revision: 13 });
+  const deleted = await ok('asset_library', { action: 'mutate', command: 'delete', items: [items[0]] });
+  assert.deepEqual(deleted.deleted, [{ category: 'history', trashId: 't-1', kind: 'history', id: 'h0', name: 'proj_00.png' }]);
+  assert.equal(calls.length, 4);
+  for (const other of [null, 'text', { error: { code: 'x' } }]) { assert.equal(compactAssetMutation(other), other); assert.equal(compactCollections(other), other); }
+});
+
+test('material_library list: identity, kind, name, group and the notes excerpt; the cover only as its state', async t => {
+  const cover = { sourceSha256: 'a'.repeat(64), sha256: 'b'.repeat(64), mimeType: 'image/webp', width: 821, height: 1200, byteLength: 82462, source: 'local', fileName: 'c.png', postId: null, savedAt: '2026-09-27T21:08:14.885Z' };
+  const tag = { id: 't-1', revision: 2, kind: 'tag', name: 'feet up', group: 'poses', notesPreview: 'works with from below', archived: false, updatedAt: '2026-09-27T21:07:18.001Z',
+    tag: { text: 'foot_focus', source: 'danbooru', category: 'general', target: 'base', postCount: 38098, resolution: 'canonical', checkedAt: '2026-09-27T20:53:54.532Z' }, coverRevision: 1, cover, coverStatus: 'ready' };
+  const note = { id: 'n-1', revision: 1, kind: 'note', name: 'template', group: 'styles', notesPreview: 'source: …', archived: true, updatedAt: '2026-11-05T19:04:46.105Z', coverRevision: 0, cover: null, coverStatus: 'none' };
+  const { ok } = await connect(t, () => ({ items: [tag, note], total: 7, offset: 0, limit: 2, hasMore: true }));
+  const page = await ok('material_library', { action: 'list', limit: 2 });
+  assert.deepEqual(page, { items: [
+    { id: 't-1', revision: 2, kind: 'tag', name: 'feet up', group: 'poses', notesPreview: 'works with from below', tag: { text: 'foot_focus', source: 'danbooru', category: 'general', target: 'base', postCount: 38098 }, coverRevision: 1, coverStatus: 'ready' },
+    { id: 'n-1', revision: 1, kind: 'note', name: 'template', group: 'styles', notesPreview: 'source: …', archived: true },
+  ], total: 7, hasMore: true });
+  // A later page says where it starts; a tag that resolved through an alias says so.
+  assert.deepEqual(compactMaterialList({ items: [{ ...tag, tag: { ...tag.tag, resolution: 'alias' } }], total: 7, offset: 4, limit: 2, hasMore: true }).items[0].tag.resolution, 'alias');
+  assert.equal(compactMaterialList({ items: [], total: 7, offset: 4, limit: 2, hasMore: true }).offset, 4);
+  for (const other of [null, 'text', { entry: {} }]) assert.equal(compactMaterialList(other), other);
+});
+
 const WIKI = 'The butt resting on a surface (often a [[chair]] or [[bench]]). For the knees on the floor, use [[kneeling]].\r\n\r\nh4. Examples\r\n\r\n* !post #3279793: Left to right: [[yokozuwari]], [[wariza]]\r\n\r\nh4. Related tags\r\n\r\n* [[seiza]]\r\n* [[indian style]]';
 const rawTag = (name, extra = {}) => ({ name, canonicalName: name, resolution: 'canonical', checkedAt: '2026-11-13T00:00:00.000Z', evidence: { retrieval: 'cache', cacheHits: 3 },
   tag: { status: 'found', name, categoryName: 'general', postCount: 1349098, isDeprecated: false, sourceUrl: `https://danbooru.donmai.us/tags/${name}` },
@@ -183,7 +228,12 @@ test('tag_details: per tag its category, post count and the wiki definition; any
   // A page that is only a definition has nothing more; one that opens with a heading gives the text under it; a long one is cut.
   assert.deepEqual(wikiDefinition('A short page.'), { text: 'A short page.', more: false });
   assert.deepEqual(wikiDefinition('h4. Definition\n\nSitting with knees up.\n\nh4. See also\n\n* [[x]]'), { text: 'Sitting with knees up.', more: true });
-  assert.deepEqual([wikiDefinition('x'.repeat(900)).text.length, wikiDefinition('x'.repeat(900)).more], [600, true]);
+  assert.deepEqual([wikiDefinition('x'.repeat(900)).text.length, wikiDefinition('x'.repeat(900)).more], [300, true]);
+  // A page that opens with one short line is defined in its next paragraph: paragraphs are taken until they hold 120 characters.
+  const second = `When clothes are so tight they indent into the skin and make the surrounding flesh bulge outwards. ${'x'.repeat(40)}`;
+  assert.deepEqual(wikiDefinition(`Portmanteau of "skin indentation".\n\n${second}\n\nSee [[deep skin]] for groping.`), { text: `Portmanteau of "skin indentation".\n\n${second}`, more: true });
+  // A first paragraph that is long enough stands alone.
+  assert.deepEqual(wikiDefinition(`${'a'.repeat(130)}\n\nMore.`), { text: 'a'.repeat(130), more: true });
   assert.equal(wikiDefinition(undefined), undefined);
   // The cooccurrence and full answers are not this projection's.
   assert.deepEqual(compactTags({ detail: 'full', items: [1] }), { detail: 'full', items: [1] });

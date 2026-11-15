@@ -157,8 +157,8 @@ test('get_queue_result without itemIndex: the whole batch as thumbnails in item 
   const value = first.structuredContent;
   assert.deepEqual([value.status, value.total, value.offset, value.returned, value.nextOffset, value.thumbnails], ['partial', 22, 0, QUEUE_RESULT_PAGE, QUEUE_RESULT_PAGE, { maxEdge: 384 }]);
   assert.deepEqual(value.results.map(entry => entry.itemIndex), [0, 1, 2, ...Array.from({ length: 17 }, (_, index) => index + 4)]);
-  assert.deepEqual(value.results[0], { itemIndex: 0, index: 0, historyId: 'h0', actualSeed: 100, fileName: 'img_0.png', file: null, width: 384, height: 256, imageAttached: true });
-  assert.deepEqual(value.results.find(entry => entry.itemIndex === 5), { itemIndex: 5, index: 0, historyId: 'h5', actualSeed: 105, fileName: 'img_5.png', file: null, imageAttached: false, error: 'result_unavailable' });
+  assert.deepEqual(value.results[0], { itemIndex: 0, index: 0, historyId: 'h0', actualSeed: 100, fileName: 'img_0.png', file: null, dir: '/outside/project', width: 384, height: 256, imageAttached: true });
+  assert.deepEqual(value.results.find(entry => entry.itemIndex === 5), { itemIndex: 5, index: 0, historyId: 'h5', actualSeed: 105, fileName: 'img_5.png', file: null, dir: '/outside/project', imageAttached: false, error: 'result_unavailable' });
   assert.equal(first.content.filter(entry => entry.type === 'image').length, QUEUE_RESULT_PAGE - 1);
   assert.ok(first.content.filter(entry => entry.type === 'image').every(entry => entry.mimeType === 'image/webp'));
   assert.deepEqual(calls.slice(0, 2).map(entry => [entry.method, entry.args]), [['read_queue', { batchId: BATCH }], ['get_queue_result', { batchId: BATCH, itemIndex: 0, index: 0, variant: 'thumbnail' }]]);

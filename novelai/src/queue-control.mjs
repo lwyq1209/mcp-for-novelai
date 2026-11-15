@@ -144,16 +144,19 @@ export function compactQueuedBatch(batch) {
 }
 
 /**
- * The saved file of a result as the host reports it: its base name, and `file` = projectPath(host path), the
- * project-relative path or null. The absolute host path itself never leaves this module; without a projectPath
- * function `file` is null.
+ * The saved file of a result as the host reports it: its base name and `file` = projectPath(host path), the
+ * project-relative path. A file outside the project root (the usual output folder is the user's Pictures) has no
+ * project-relative path: `file` is null and `dir` is the folder it was saved in, as the host names it, so the file is
+ * dir + fileName without a library read. Without a projectPath function `file` is null.
  */
 const fileOf = (filePath, projectPath) => {
   if (typeof filePath !== 'string' || !filePath || filePath.length > 4096 || /[\x00-\x1f]/.test(filePath)) return {};
   const fileName = filePath.split(/[\\/]/).pop();
   if (!fileName) return {};
   const file = typeof projectPath === 'function' ? projectPath(filePath) : null;
-  return { fileName, file: typeof file === 'string' && file ? file : null };
+  if (typeof file === 'string' && file) return { fileName, file };
+  const dir = filePath.slice(0, filePath.length - fileName.length).replace(/[\\/]+$/, '');
+  return { fileName, file: null, ...(dir ? { dir } : {}) };
 };
 
 const historyIdentity = value => typeof value === 'string' && value.length > 0 && value.length <= 512 && /\S/.test(value);
@@ -335,7 +338,7 @@ export async function queueBatchResults(args, { bridge, signal, projectPath } = 
   const saved = readExtras(read, projectPath).results.filter(result => result.historyId !== null && result.index !== null);
   const page = saved.slice(offset, offset + QUEUE_RESULT_PAGE), entries = [], images = [];
   for (const result of page) {
-    const entry = { itemIndex: result.itemIndex, index: result.index, historyId: result.historyId, actualSeed: result.actualSeed, ...(result.fileName !== undefined ? { fileName: result.fileName, file: result.file } : {}) };
+    const entry = { itemIndex: result.itemIndex, index: result.index, historyId: result.historyId, actualSeed: result.actualSeed, ...(result.fileName !== undefined ? { fileName: result.fileName, file: result.file, ...(result.dir !== undefined ? { dir: result.dir } : {}) } : {}) };
     let reply;
     try { reply = await bridge.call(QUEUE_HOST_METHODS.result, { batchId: args.batchId, itemIndex: result.itemIndex, index: result.index, variant: 'thumbnail' }, signal); }
     catch (error) {

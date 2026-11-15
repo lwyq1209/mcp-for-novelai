@@ -66,14 +66,22 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
     `characters`, `actualSeed`, `mode`, `filePath`, `assetId`, the queue batch, `groupId`, `userTags`,
     `collections`), about a third of the former full record. It is the only answer: `read` no longer takes `detail`
     (`invalid_arguments`), so a call that still asks for `detail: "full"` must drop it. `list` rows carry the identity, name, model, size, a prompt
-    excerpt and the `assetId`.
+    excerpt and the `assetId`. `mutate` (archive, update, add to or remove from a collection) answers with each
+    item's `kind`, `id` and new `revision` instead of the whole records; `collections` and `create-collection` with
+    `id` and `name` per collection.
+  - `material_library` `list`: per entry its identity, kind, name, group, notes excerpt and tag facts; the cover only
+    as `coverStatus` (when it has one) and `coverRevision` (when it is not 0). `read` gives the whole entry.
   - `read_queue`: `status`, `count`, the `itemCounts` that occur, `results` (`itemIndex`, `historyId`, `actualSeed`,
     `fileName`, `file`) and `items` only for images that are running, failed, unknown, cancelled or skipped; its place
     in the queue only while it has not ended. `list_queue`: `batchId`, `status` and `count` per batch, `storage` only
     when a store is nearly full. `get_queue_result`: `historyId`, `actualSeed`, `fileName`, `file`.
+    An image saved outside the project root has no `file`: `read_queue` and `get_queue_result` now name its folder as
+    `dir` (once per answer; an image in another folder carries its own), so the file is `dir` + `fileName` without a
+    library read. A file inside the project is still named relative to it.
   - `enqueue_recipes`: `status`, `batchId`, `count` (`seeds` where the server chose them, `warnings`).
   - `tag_details`: per tag its category, post count, canonical name and aliases where they differ, and the wiki's
-    definition (the text before its first heading, at most 600 characters; `wikiMore` when the page goes on).
+    definition (the leading paragraphs before its first heading, taken until they hold 120 characters, at most 300;
+    `wikiMore` when the page goes on).
 - **10 tools instead of 13.** Retired: `lookup_enqueue` (call `enqueue_recipes` again with the same key and plan: it
   looks the key up first, answers `already_enqueued` with the batch and never queues twice), `control_queue` (pause,
   resume and cancel a batch on the queue page of the app) and `list_workspaces` (`read_workspace` finds the one canvas

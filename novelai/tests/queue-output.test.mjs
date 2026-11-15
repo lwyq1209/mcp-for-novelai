@@ -72,7 +72,7 @@ test('the compact batch carries the output, string fields only', () => {
   assert.deepEqual(businessCompact(plain), compact);
 });
 
-test('read_queue and get_queue_result name each saved file project-relative, never absolute', async t => {
+test('read_queue and get_queue_result name each saved file project-relative, or by its folder when it is outside the project', async t => {
   const inside = join(PROJECT, 'novelai/.runtime/output/2026-10-14/sketchbook6/sketchbook6_2026-10-14_01_nai-diffusion-5-full.png');
   const outside = '/Volumes/elsewhere/output/2026-10-14/b.png';
   const batch = { batchId: BATCH, requestKey: 'mcp-x', execution: 'queued', status: 'succeeded', count: 3, recipePlanHash: 'a'.repeat(64), intervalSeconds: 0, output: { historyGroup: 'sketchbook6', historyGroupId: 'g-1', historyGroupName: 'sketchbook6', fileNamePrefix: 'sketchbook6' },
@@ -92,17 +92,16 @@ test('read_queue and get_queue_result name each saved file project-relative, nev
   assert.deepEqual(read.value.output, batch.output);
   assert.deepEqual(read.value.results, [
     { itemIndex: 0, index: 0, historyId: 'h0', actualSeed: null, fileName: 'sketchbook6_2026-10-14_01_nai-diffusion-5-full.png', file: 'novelai/.runtime/output/2026-10-14/sketchbook6/sketchbook6_2026-10-14_01_nai-diffusion-5-full.png' },
-    { itemIndex: 1, index: 0, historyId: 'h1', actualSeed: null, fileName: 'b.png', file: null },
+    { itemIndex: 1, index: 0, historyId: 'h1', actualSeed: null, fileName: 'b.png', file: null, dir: '/Volumes/elsewhere/output/2026-10-14' },
     { itemIndex: 2, index: 0, historyId: 'h2', actualSeed: null },
   ]);
   assert.equal(read.value.pathBase, 'project-root');
   assert.equal(read.value.projectRoot, 'NOVELAI_PROJECT_ROOT', 'the result names which project root the paths are relative to');
-  assert.ok(!JSON.stringify(read.value).includes('/Volumes/'), 'an absolute path outside the project never reaches the model');
-  assert.ok(!JSON.stringify(read.value).includes(PROJECT), 'nor does the project root itself');
+  assert.ok(!JSON.stringify(read.value).includes(PROJECT), 'a file inside the project is named relative to it: the project root itself never reaches the model');
   const first = await call('get_queue_result', { batchId: BATCH, itemIndex: 0 });
   assert.deepEqual(first.value, { batchId: BATCH, itemIndex: 0, index: 0, jobId: 'j0', historyId: 'h0', actualSeed: null, fileName: 'sketchbook6_2026-10-14_01_nai-diffusion-5-full.png', file: 'novelai/.runtime/output/2026-10-14/sketchbook6/sketchbook6_2026-10-14_01_nai-diffusion-5-full.png', imageAttached: true, pathBase: 'project-root', projectRoot: 'NOVELAI_PROJECT_ROOT' });
   const second = await call('get_queue_result', { batchId: BATCH, itemIndex: 1 });
-  assert.deepEqual(second.value, { batchId: BATCH, itemIndex: 1, index: 0, jobId: 'j1', historyId: 'h1', actualSeed: null, fileName: 'b.png', file: null, imageAttached: true });
+  assert.deepEqual(second.value, { batchId: BATCH, itemIndex: 1, index: 0, jobId: 'j1', historyId: 'h1', actualSeed: null, fileName: 'b.png', file: null, dir: '/Volumes/elsewhere/output/2026-10-14', imageAttached: true });
   const old = await call('get_queue_result', { batchId: BATCH, itemIndex: 2 });
   assert.deepEqual(old.value, { batchId: BATCH, itemIndex: 2, index: 0, jobId: 'j2', historyId: 'h2', actualSeed: null, imageAttached: true }, 'an older host without a file path adds nothing');
 });
@@ -130,14 +129,14 @@ test('an older client refusing the queue filters is host_outdated, not an argume
   assert.match(result.value.error.message, /rebuild and restart the client/);
 });
 
-test('queueControlAction never returns an absolute path, with or without a projectPath function', async () => {
+test('queueControlAction names a file by its folder without a project-relative path, and project-relative with one', async () => {
   const bridge = { async call() { return { batchId: BATCH, requestKey: 'mcp-x', execution: 'queued', status: 'succeeded', count: 1, recipePlanHash: 'a'.repeat(64), intervalSeconds: 0,
     items: [{ index: 0, status: 'succeeded', jobId: 'j0', results: [{ index: 0, id: 'h0', filePath: '/abs/out/x.png' }] }] }; } };
   const bare = await queueControlAction({ action: 'read', batchId: BATCH }, { bridge });
-  assert.deepEqual(bare.value.results, [{ itemIndex: 0, index: 0, historyId: 'h0', actualSeed: null, fileName: 'x.png', file: null }]);
+  assert.deepEqual(bare.value.results, [{ itemIndex: 0, index: 0, historyId: 'h0', actualSeed: null, fileName: 'x.png', file: null, dir: '/abs/out' }]);
   assert.equal(Object.hasOwn(bare.value, 'pathBase'), false);
   const mapped = await queueControlAction({ action: 'read', batchId: BATCH }, { bridge, projectPath: path => path.replace('/abs/', '') });
   assert.deepEqual(mapped.value.results, [{ itemIndex: 0, index: 0, historyId: 'h0', actualSeed: null, fileName: 'x.png', file: 'out/x.png' }]);
   assert.equal(mapped.value.pathBase, 'project-root');
-  assert.ok(!JSON.stringify([bare, mapped]).includes('/abs/'));
+  assert.ok(!JSON.stringify(mapped).includes('/abs/'), 'a project-relative file carries no folder');
 });

@@ -134,8 +134,9 @@ The library as the app shows it, without the canvas. Items are identified by `ki
   kinds are returned in full. There is one answer per kind: `read` has no `detail` option.
 - `image` returns one history image (a thumbnail of at most 384 px unless `variant: "original"` is asked for). The
   image's `assetId` (from `list` or `read`) is what `prepare_recipe` and covers use.
-- `collections`, `create-collection`, and `mutate` with `archive`, `update` (only the fields each kind allows),
-  `add-to-collection` and `remove-from-collection`.
+- `collections` (each by `id` and `name`), `create-collection`, and `mutate` with `archive`, `update` (only the
+  fields each kind allows), `add-to-collection` and `remove-from-collection`. A `mutate` answers with each item's
+  `kind`, `id` and new `revision`.
 - `mutate` `delete` moves items to **Recently deleted**; `delete-archived` deletes archived items (500 per call).
   `preview: true` lists the effects without changing anything: tag covers made from a deleted image are cleared,
   collection memberships are removed, recipes that use a deleted image as their source fail at enqueue until it is
@@ -166,7 +167,8 @@ The library as the app shows it, without the canvas. Items are identified by `ki
 
 Prompt materials: English tags (artists, styles, content), weighted combinations and notes.
 
-- `list`, `read`, `save` (create, or update with `id` + `expectedRevision`), `archive`, `export` (a JSON backup into
+- `list` (per entry its identity, kind, name, group, notes excerpt and tag facts; `coverStatus` when it has a cover
+  and `coverRevision` when it is not 0), `read` (the whole entry), `save` (create, or update with `id` + `expectedRevision`), `archive`, `export` (a JSON backup into
   `novelai/library-exports`) and `import` (from such a backup). `save` and `import` may name a JSON file in
   `novelai/library-inbox` instead of inline data. Danbooru-sourced tags are checked by the app before their facts are
   kept.
@@ -193,7 +195,8 @@ Imported images (the library's **Imported** category) and the generation metadat
 Danbooru facts for 1–20 English tag names (`name` or `names`): whether the tag exists, its canonical name, active
 aliases, deprecation, cumulative post count and the wiki's definition. The default answer gives per tag its category
 and post count, its canonical name and aliases where they differ from the name asked for, anything out of the ordinary
-(not found, deprecated, an unchecked alias, errors) and the wiki text before its first heading, at most 600 characters;
+(not found, deprecated, an unchecked alias, errors) and the wiki's definition: the leading paragraphs before its first
+heading, taken until they hold 120 characters, at most 300;
 `wikiMore: true` says the page goes on (examples, related tags), and `detail: "full"` returns all of it with the
 source links. `detail: "cooccurrence"` with one name returns the tags that
 most often appear with it in one rating (`g`, `s`, `q` or `e`; default `g`; `limit` 1–20, default 8). Results are cached
@@ -386,8 +389,11 @@ the call itself wrote.
 - `read_queue {batchId, wait?}`: `status`, `stopReason` when there is one, `count`, `itemCounts` (the statuses that
   occur, of `pending`, `running`, `succeeded`, `failed`, `unknown`, `cancelled`, `skipped`), and `results` — one entry
   per saved image with `itemIndex`, `historyId`, `actualSeed` (the seed it was generated with; absent for upscale and
-  director), `fileName` and `file` (the path relative to the project root, absent outside it), plus `index` when an
-  item saved more than one. `items` lists only the images that are running, failed, unknown, cancelled or skipped,
+  director), `fileName` and `file` (the path relative to the project root), plus `index` when an
+  item saved more than one. Images saved outside the project root (the usual output folder is in Pictures) have no
+  `file`; the answer names their folder once as `dir`, so the file is `dir` + `fileName`, and an image saved into
+  another folder carries its own `dir`. `asset_library` `list` with `queueBatchId` gives every image's `revision` and
+  `assetId` in one call. `items` lists only the images that are running, failed, unknown, cancelled or skipped,
   with their error code and `rateLimitRetries` (how often the image was sent again after HTTP 429); `itemReasons`
   explains the queue's own item codes present (see [below](#queue-limits-and-failures)). While the batch has not
   ended it also says where it stands in the shared queue:
@@ -415,11 +421,11 @@ the call itself wrote.
   Cancelling the MCP request stops the wait. 1200 seconds is the most one call waits, below the 1560-second tool
   timeout of the MCP configurations the app shows; wait again for longer.
 - `get_queue_result {batchId, itemIndex, index?}`: one saved image at full size, with its `historyId`, `actualSeed`,
-  `fileName` and `file`.
+  `fileName` and `file` (`dir` instead of `file` for an image saved outside the project root).
 - `get_queue_result {batchId, offset?}` (without `itemIndex`): the saved results of the whole batch in item order as
   native thumbnails (at most 384 px on the longer side, WebP), **at most 20 per call**: `total`, `nextOffset` (given
   while there are more; pass it as `offset` for the next page) and `results`, one entry per saved image with
-  `itemIndex`, `historyId`, `actualSeed`, `fileName` and `file`. The images follow the text in that order; an image
+  `itemIndex`, `historyId`, `actualSeed`, `fileName` and `file` (or `dir`, as in `read_queue`). The images follow the text in that order; an image
   whose preview cannot be made right now is listed with `imageAttached: false` and its error `code`. An app
   older than this server answers `host_outdated`; use `itemIndex` there.
 
@@ -601,7 +607,7 @@ All agents and projects share one queue and one output folder. Give every enqueu
   `proj_<date>_01_<model>.png`.
 
 Both are part of the plan (the same key with another group is a different plan). Take your files only by the
-`fileName` / `file` that `read_queue` or `get_queue_result` give per `historyId`, never by number ranges, because other
+`fileName` / `file` (or `dir` + `fileName`) that `read_queue` or `get_queue_result` give per `historyId`, never by number ranges, because other
 projects save into the same folders. A canvas capture does not take over the canvas's project; pass `historyGroup`
 yourself.
 

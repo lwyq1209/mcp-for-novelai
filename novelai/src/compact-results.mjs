@@ -16,8 +16,14 @@ const nonZero = counts => record(counts) ? Object.fromEntries(Object.entries(cou
 const ENDED = new Set(['succeeded', 'partial', 'cancelled', 'blocked']);
 
 // ------------------------------------------------------------------ queue
-/** One saved image: where it is in the batch, its history identity, the seed it was made with and its file. */
-const savedImage = result => present({ itemIndex: result.itemIndex, ...(result.index ? { index: result.index } : {}), historyId: result.historyId, actualSeed: result.actualSeed, fileName: result.fileName, file: result.file });
+/**
+ * One saved image: where it is in the batch, its history identity, the seed it was made with and its file. `dir` (the
+ * folder of a file saved outside the project root) only where it differs from `sharedDir`, the one the answer names once.
+ */
+const savedImage = (result, sharedDir) => present({ itemIndex: result.itemIndex, ...(result.index ? { index: result.index } : {}), historyId: result.historyId, actualSeed: result.actualSeed, fileName: result.fileName, file: result.file,
+  ...(typeof result.dir === 'string' && result.dir !== sharedDir ? { dir: result.dir } : {}) });
+/** The folder the answer names once: that of its first image saved outside the project root (a batch saves into one folder unless it runs past midnight). */
+const sharedDirOf = results => list(results).find(result => typeof result?.dir === 'string')?.dir;
 
 /**
  * read_queue: the batch's status, the images per status, every saved image, and every image that is not simply
@@ -30,12 +36,14 @@ export function compactBatch(batch) {
   const others = list(batch.items).filter(item => !['pending', 'succeeded'].includes(item.status) || (item.status === 'succeeded' && !saved.has(item.index)) || item.error || item.rateLimitRetries)
     .map(item => present({ itemIndex: item.index, status: item.status, error: item.error, rateLimitRetries: item.rateLimitRetries }));
   const ended = ENDED.has(batch.status) || batch.cleaned === true;
+  const dir = sharedDirOf(batch.results);
   return present({
     batchId: batch.batchId, status: batch.status, stopReason: batch.stopReason, count: batch.count,
     ...(batch.source?.kind === 'manual' ? { source: 'manual' } : {}),
     ...(batch.cleaned === true ? { cleaned: true, cleanedAt: batch.cleanedAt, ...(batch.recovered === true ? { recovered: true, savedImages: batch.savedImages } : {}) } : {}),
     itemCounts: nonZero(batch.itemCounts),
-    ...(list(batch.results).length ? { results: batch.results.map(savedImage) } : {}),
+    ...(dir ? { dir } : {}),
+    ...(list(batch.results).length ? { results: batch.results.map(result => savedImage(result, dir)) } : {}),
     ...(others.length ? { items: others } : {}),
     ...(batch.pathBase ? { pathBase: batch.pathBase } : {}),
     ...(ended ? {} : { ahead: batch.ahead, etaSeconds: batch.etaSeconds }),
@@ -61,10 +69,11 @@ export function compactQueueList(value) {
 /** get_queue_result: the image's history identity, seed and file (the call named the batch and the item). */
 export function compactQueueResult(value) {
   if (!record(value)) return value;
-  if (Array.isArray(value.results)) return present({ status: value.status, total: value.total, ...(value.offset ? { offset: value.offset } : {}), nextOffset: value.nextOffset,
-    results: value.results.map(result => ({ ...savedImage(result), ...(result.imageAttached === false ? { imageAttached: false, error: result.error } : {}) })),
+  const dir = sharedDirOf(value.results);
+  if (Array.isArray(value.results)) return present({ status: value.status, total: value.total, ...(value.offset ? { offset: value.offset } : {}), nextOffset: value.nextOffset, dir,
+    results: value.results.map(result => ({ ...savedImage(result, dir), ...(result.imageAttached === false ? { imageAttached: false, error: result.error } : {}) })),
     ...(value.pathBase ? { pathBase: value.pathBase } : {}), ...(value.nextOffset !== null && value.nextOffset !== undefined ? { instruction: value.instruction } : {}) });
-  return present({ historyId: value.historyId, actualSeed: value.actualSeed, fileName: value.fileName, file: value.file, ...(value.pathBase ? { pathBase: value.pathBase } : {}) });
+  return present({ historyId: value.historyId, actualSeed: value.actualSeed, fileName: value.fileName, file: value.file, dir: value.dir, ...(value.pathBase ? { pathBase: value.pathBase } : {}) });
 }
 
 /**
@@ -102,6 +111,43 @@ export function compactAssetList(page) {
     ...(page.budgetTruncated ? { budgetTruncated: true } : {}) });
 }
 
+/**
+ * asset_library mutate (archive, update, add-to-collection, remove-from-collection): each changed item by its identity
+ * and new revision, which is what a later call needs; the records themselves (prompts, parameters, files) are what the
+ * call already named, and a read gives them. Delete receipts are the host's compact shape and pass unchanged.
+ */
+export function compactAssetMutation(result) {
+  if (!record(result) || !Array.isArray(result.items)) return result;
+  return { ...result, items: result.items.map(item => record(item) ? present({ kind: item.kind, id: item.id, revision: item.revision, ...(item.archived ? { archived: true } : {}) }) : item) };
+}
+
+/** A collection by the id list and mutate take ("<namespace>:<id>") and its name. */
+const collectionRow = value => record(value) ? present({ id: value.id, name: value.name }) : value;
+/** asset_library collections and create-collection: id and name per collection (the id carries the namespace). */
+export function compactCollections(result) {
+  if (!record(result) || (!Array.isArray(result.collections) && !record(result.collection))) return result;
+  return { ...result, ...(Array.isArray(result.collections) ? { collections: result.collections.map(collectionRow) } : {}), ...(record(result.collection) ? { collection: collectionRow(result.collection) } : {}) };
+}
+
+// ------------------------------------------------------------------ prompt materials
+/**
+ * material_library list: each entry by identity, kind, name, group and its notes excerpt; a tag's facts without when
+ * they were checked. Left out: updatedAt, archived:false, and the cover record (hash, size, source): coverStatus is
+ * listed unless it is "none" and coverRevision unless it is 0, which is all set_local_cover and cover need.
+ */
+export function compactMaterialList(page) {
+  if (!record(page) || !Array.isArray(page.items)) return page;
+  const { offset, limit: _limit, items, ...rest } = page;
+  return { items: items.map(item => {
+    if (!record(item)) return item;
+    const { archived, updatedAt: _updated, cover: _cover, coverStatus, coverRevision, tag, ...entry } = item;
+    const { checkedAt: _checked, resolution, ...facts } = record(tag) ? tag : {};
+    return present({ ...entry, ...(archived ? { archived: true } : {}),
+      ...(record(tag) ? { tag: { ...facts, ...(resolution && resolution !== 'canonical' ? { resolution } : {}) } } : {}),
+      ...(coverRevision ? { coverRevision } : {}), ...(coverStatus && coverStatus !== 'none' ? { coverStatus } : {}) });
+  }), ...rest, ...(offset ? { offset } : {}) };
+}
+
 const PARAM_DEFAULTS = { smea: false, smeaDyn: false, variety: false, transparentBackground: false, fileNamePrefix: '', qualityToggle: true };
 /**
  * asset_library read of a history image, the only answer the tool gives: everything the image was made with, once.
@@ -137,14 +183,23 @@ export function historyRecipeView(whole) {
 }
 
 // ------------------------------------------------------------------ tags
-const WIKI_DEFINITION_CHARS = 600;
-/** The definition of a Danbooru wiki page: its text before the first heading (h1.–h6.: examples, related tags, see also), at most WIKI_DEFINITION_CHARS. */
+const WIKI_DEFINITION_CHARS = 300, WIKI_DEFINITION_ENOUGH = 120;
+/**
+ * The definition of a Danbooru wiki page: the leading paragraphs of its text before the first heading (h1.–h6.:
+ * examples, related tags, see also), taken until they hold WIKI_DEFINITION_ENOUGH characters (a page often opens with
+ * one short line and defines the tag in the next paragraph), at most WIKI_DEFINITION_CHARS. `more`: the page goes on.
+ */
 export function wikiDefinition(body) {
   if (typeof body !== 'string') return undefined;
   const text = body.replace(/\r\n/g, '\n');
   const heading = text.search(/^h[1-6]\.\s/m);
   const lead = (heading > 0 ? text.slice(0, heading) : heading === 0 ? text.replace(/^h[1-6]\.[^\n]*\n+/, '').split(/^h[1-6]\.\s/m)[0] : text).trim();
-  const cut = Array.from(lead).slice(0, WIKI_DEFINITION_CHARS).join('');
+  let taken = '';
+  for (const paragraph of lead.split(/\n\s*\n/)) {
+    taken = taken ? `${taken}\n\n${paragraph}` : paragraph;
+    if (Array.from(taken).length >= WIKI_DEFINITION_ENOUGH) break;
+  }
+  const cut = Array.from(taken).slice(0, WIKI_DEFINITION_CHARS).join('');
   return { text: cut, more: cut.length < lead.length || lead.length < text.trim().length };
 }
 
