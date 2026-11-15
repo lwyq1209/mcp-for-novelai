@@ -228,12 +228,9 @@ test('tag_details: per tag its category, post count and the wiki definition; any
   // A page that is only a definition has nothing more; one that opens with a heading gives the text under it; a long one is cut.
   assert.deepEqual(wikiDefinition('A short page.'), { text: 'A short page.', more: false });
   assert.deepEqual(wikiDefinition('h4. Definition\n\nSitting with knees up.\n\nh4. See also\n\n* [[x]]'), { text: 'Sitting with knees up.', more: true });
-  assert.deepEqual([wikiDefinition('x'.repeat(900)).text.length, wikiDefinition('x'.repeat(900)).more], [300, true]);
-  // A page that opens with one short line is defined in its next paragraph: paragraphs are taken until they hold 120 characters.
-  const second = `When clothes are so tight they indent into the skin and make the surrounding flesh bulge outwards. ${'x'.repeat(40)}`;
-  assert.deepEqual(wikiDefinition(`Portmanteau of "skin indentation".\n\n${second}\n\nSee [[deep skin]] for groping.`), { text: `Portmanteau of "skin indentation".\n\n${second}`, more: true });
-  // A first paragraph that is long enough stands alone.
-  assert.deepEqual(wikiDefinition(`${'a'.repeat(130)}\n\nMore.`), { text: 'a'.repeat(130), more: true });
+  assert.deepEqual([wikiDefinition('x'.repeat(900)).text.length, wikiDefinition('x'.repeat(900)).more], [600, true]);
+  // The paragraphs after the first stay: they say when not to use the tag and which one to use instead.
+  assert.deepEqual(wikiDefinition('A fetish.\n\nNot to be confused with [[netorare]]. Use [[swinging]] instead.\n\nh4. See also\n\n* [[x]]'), { text: 'A fetish.\n\nNot to be confused with [[netorare]]. Use [[swinging]] instead.', more: true });
   assert.equal(wikiDefinition(undefined), undefined);
   // The cooccurrence and full answers are not this projection's.
   assert.deepEqual(compactTags({ detail: 'full', items: [1] }), { detail: 'full', items: [1] });

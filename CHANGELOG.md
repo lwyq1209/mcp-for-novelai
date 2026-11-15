@@ -80,8 +80,7 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
     library read. A file inside the project is still named relative to it.
   - `enqueue_recipes`: `status`, `batchId`, `count` (`seeds` where the server chose them, `warnings`).
   - `tag_details`: per tag its category, post count, canonical name and aliases where they differ, and the wiki's
-    definition (the leading paragraphs before its first heading, taken until they hold 120 characters, at most 300;
-    `wikiMore` when the page goes on).
+    definition (the text before its first heading, at most 600 characters; `wikiMore` when the page goes on).
 - **10 tools instead of 13.** Retired: `lookup_enqueue` (call `enqueue_recipes` again with the same key and plan: it
   looks the key up first, answers `already_enqueued` with the batch and never queues twice), `control_queue` (pause,
   resume and cancel a batch on the queue page of the app) and `list_workspaces` (`read_workspace` finds the one canvas

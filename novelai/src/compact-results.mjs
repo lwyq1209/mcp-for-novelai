@@ -183,23 +183,18 @@ export function historyRecipeView(whole) {
 }
 
 // ------------------------------------------------------------------ tags
-const WIKI_DEFINITION_CHARS = 300, WIKI_DEFINITION_ENOUGH = 120;
+const WIKI_DEFINITION_CHARS = 600;
 /**
- * The definition of a Danbooru wiki page: the leading paragraphs of its text before the first heading (h1.–h6.:
- * examples, related tags, see also), taken until they hold WIKI_DEFINITION_ENOUGH characters (a page often opens with
- * one short line and defines the tag in the next paragraph), at most WIKI_DEFINITION_CHARS. `more`: the page goes on.
+ * The definition of a Danbooru wiki page: its text before the first heading (h1.–h6.: examples, related tags, see also),
+ * at most WIKI_DEFINITION_CHARS. Not shortened further: the paragraphs after the first are where a page says when not
+ * to use the tag and which tag to use instead, which is what a caller choosing between tags needs.
  */
 export function wikiDefinition(body) {
   if (typeof body !== 'string') return undefined;
   const text = body.replace(/\r\n/g, '\n');
   const heading = text.search(/^h[1-6]\.\s/m);
   const lead = (heading > 0 ? text.slice(0, heading) : heading === 0 ? text.replace(/^h[1-6]\.[^\n]*\n+/, '').split(/^h[1-6]\.\s/m)[0] : text).trim();
-  let taken = '';
-  for (const paragraph of lead.split(/\n\s*\n/)) {
-    taken = taken ? `${taken}\n\n${paragraph}` : paragraph;
-    if (Array.from(taken).length >= WIKI_DEFINITION_ENOUGH) break;
-  }
-  const cut = Array.from(taken).slice(0, WIKI_DEFINITION_CHARS).join('');
+  const cut = Array.from(lead).slice(0, WIKI_DEFINITION_CHARS).join('');
   return { text: cut, more: cut.length < lead.length || lead.length < text.trim().length };
 }
 
