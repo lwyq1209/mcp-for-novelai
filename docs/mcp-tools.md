@@ -498,6 +498,15 @@ Settings › Queue in the app holds the limits; they are this app's safety stops
 | Queued images in total (all unfinished images) | 200 | 1–100,000 or no limit | `queue_full` |
 | Frozen queue on disk | 64 MiB per batch, 512 MiB in total | fixed | `queue_input_too_large` / `queue_full` |
 
+The first two are settings the user can change at any time; a change applies to the next enqueue. **The
+`enqueue_recipes` description states them as they are now**, for example "1 up to 50 images in total (the per-enqueue
+limit the user has set in the client now … the whole queue holds at most 200 unfinished images …)". The app publishes
+the two numbers as `runtime/queue-limits.json` in its data folder (at start and when a setting changes), the server
+reads that file whenever a client lists the tools, and it sends `notifications/tools/list_changed` when the file
+changes, so a client that follows the notification (Claude Code and Pi do) shows the new values without reconnecting.
+No tool result carries the limits. With an app that has not published them yet (an older app, or one that never ran on
+this data folder) the description names the defaults instead.
+
 The images' frozen sources and masks may take about 32 MiB per enqueue. These limits apply to agent enqueues, not to
 generating on the canvas.
 

@@ -103,7 +103,9 @@ export function errorResult(error) {
 
 // wholeInputSchema: the arguments the module behind a tool takes beyond the public ones; only a server built with the
 // test option wholeResults validates against it. tools/list always shows inputSchema.
-const ENTRY_KEYS = new Set(['name', 'layer', 'description', 'inputSchema', 'wholeInputSchema', 'annotations', 'hostMethods', 'errors', 'precheck', 'validate', 'handle']);
+// describe(context): the description as tools/list gives it now, for a tool whose text names a client setting;
+// description is that text without the setting (TOOL_DEFINITIONS, and the fallback when describe fails).
+const ENTRY_KEYS = new Set(['name', 'layer', 'description', 'describe', 'inputSchema', 'wholeInputSchema', 'annotations', 'hostMethods', 'errors', 'precheck', 'validate', 'handle']);
 /** Checks and freezes the registry; names are unique and every entry is complete. */
 export function defineRegistry(entries) {
   const seen = new Set();
@@ -119,6 +121,13 @@ export function defineRegistry(entries) {
 }
 
 export const publicTool = ({ name, description, inputSchema, annotations }) => ({ name, description, inputSchema, annotations });
+/** The definition tools/list sends: a tool with describe states its description for the context as it is now. */
+function listedTool(entry, context) {
+  if (typeof entry.describe !== 'function') return publicTool(entry);
+  let description;
+  try { description = entry.describe(context); } catch { description = undefined; }
+  return publicTool({ ...entry, description: typeof description === 'string' && description ? description : entry.description });
+}
 
 /**
  * A successful result whose paths are project-relative (pathBase:'project-root') also names that project root:
@@ -140,9 +149,9 @@ export function createRegistryServer({ serverInfo, instructions, registry, expos
   const byName = new Map(registry.map(entry => [entry.name, entry]));
   const tools = exposed.map(name => { const entry = byName.get(name); if (!entry) throw new TypeError(`Unknown tool ${name}`); return entry; });
   const active = new Map(tools.map(entry => [entry.name, entry]));
-  const listed = tools.map(publicTool);
-  const server = new Server(serverInfo, { capabilities: { tools: {} }, instructions });
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: listed }));
+  // listChanged: a description that names a client setting changes with it (src/mcp.mjs sends the notification).
+  const server = new Server(serverInfo, { capabilities: { tools: { listChanged: true } }, instructions });
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: tools.map(entry => listedTool(entry, context)) }));
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const { name, arguments: args = {} } = request.params;
     const tool = typeof name === 'string' ? active.get(name) : undefined;

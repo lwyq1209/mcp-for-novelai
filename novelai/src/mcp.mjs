@@ -23,6 +23,7 @@ import { createAutostartBridge } from './app-autostart.mjs';
 import { PROJECT_ROOT, PROJECT_ROOT_SOURCE, guardBridge, projectRoots, resolveBusinessDirectories } from './business-guards.mjs';
 import { projectDirectories } from './data-paths.mjs';
 import { createRecipeQueue } from './recipe-queue.mjs';
+import { readQueueLimits, watchQueueLimits } from './queue-limits-file.mjs';
 import { CANVAS_TOOLS } from './mcp-canvas-tools.mjs';
 import { CORE_TOOLS } from './mcp-core-tools.mjs';
 import { createRegistryServer, defineRegistry, publicTool } from './mcp-registry.mjs';
@@ -47,7 +48,7 @@ const TAG_QUERY_OPTION_KEYS = ['fetchImpl', 'queryCoordinator', 'lookup', 'coocc
  * which root that is (projectRootSource, reported as projectRoot beside pathBase), tag options and the recipe
  * queue. Exported so tests can check the production wiring; createNovelAiMcpServer is its only production caller.
  */
-export function createToolContext({ bridgeClient = createAutostartBridge(createBridgeClient()), materialInbox, materialExports, studyInbox, studyExports, projectRoot = PROJECT_ROOT, projectRootSource = PROJECT_ROOT_SOURCE, tagQuery = {}, recipeQueue = {}, wholeResults = false } = {}) {
+export function createToolContext({ bridgeClient = createAutostartBridge(createBridgeClient()), materialInbox, materialExports, studyInbox, studyExports, projectRoot = PROJECT_ROOT, projectRootSource = PROJECT_ROOT_SOURCE, tagQuery = {}, recipeQueue = {}, wholeResults = false, queueLimits = readQueueLimits } = {}) {
   const bridge = guardBridge(bridgeClient);
   const folders = projectDirectories(resolve(projectRoot));
   return {
@@ -55,6 +56,9 @@ export function createToolContext({ bridgeClient = createAutostartBridge(createB
     dirs: resolveBusinessDirectories({ materialInbox: materialInbox ?? folders.materialInbox, materialExports: materialExports ?? folders.materialExports, studyInbox: studyInbox ?? folders.studyInbox, studyExports: studyExports ?? folders.studyExports }),
     roots: projectRoots(projectRoot),
     projectRootSource,
+    // The client's queue limits for the enqueue_recipes description, read at every tools/list ({perEnqueue,
+    // pendingLimit}, or null when the app has published none); by default from <data root>/runtime/queue-limits.json.
+    queueLimits: () => queueLimits(),
     // Tests only: every tool then answers with the whole result of its module instead of the compact one an agent gets
     // (src/compact-results.mjs, the prepare_recipe readback).
     wholeResults: wholeResults === true,
@@ -85,4 +89,6 @@ function isMainModule() {
 if (isMainModule()) {
   const server = createNovelAiMcpServer();
   await server.connect(new StdioServerTransport());
+  // The user changed a queue limit in the app: the client lists the tools again and gets the new description.
+  watchQueueLimits(() => { server.sendToolListChanged().catch(() => undefined); });
 }

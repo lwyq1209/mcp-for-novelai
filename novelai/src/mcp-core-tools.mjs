@@ -278,6 +278,8 @@ const assetLibrary = core({
 const recipeTool = name => {
   const spec = RECIPE_TOOL_SPECS[name];
   return core({ name, description: spec.description, inputSchema: spec.inputSchema, annotations: annotations(spec.readOnlyHint, spec.openWorldHint), hostMethods: spec.hostMethods,
+    // enqueue_recipes names the client's queue limits as they are now (the app publishes them; null: not published).
+    ...(spec.describe ? { describe: context => spec.describe(context?.queueLimits?.() ?? null) } : {}),
     async handle(args, { recipes, signal, roots, wholeResults }) {
       const answer = await recipes[RECIPE_TOOL_ACTIONS[name]](args, { signal });
       // An agent gets the compact answer only; the whole one is a test option of the server, never a tool argument.

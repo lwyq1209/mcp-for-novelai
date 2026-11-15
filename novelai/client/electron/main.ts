@@ -20,6 +20,7 @@ import { createBatchService } from "./batch-service";
 import { createQueueRecipeService, QUEUE_METHODS, QUEUE_WORKSPACE } from "./queue-recipe-service";
 import { batchFactsOf, type BatchFacts } from "../src/library/image-facts";
 import { createCanvasRecipeCapture } from "./canvas-recipe-capture";
+import { createQueueLimitsPublisher } from "./queue-limits-file";
 import { createMaterialLibraryService } from "./material-library";
 import { createImageStudyService } from "./image-studies";
 import { buildPromptReview } from "./prompt-review";
@@ -200,6 +201,8 @@ let disposeBatch: (() => void) | undefined;
 let recipeReferenceScan: RecipeReferenceScan | undefined;
 /** Queue retention: runs a cleaning now (Settings › Queue changed the period). */
 let runQueueRetention: (() => void) | undefined;
+// runtime/queue-limits.json: the two queue safety settings as the MCP server reads them for its tool description.
+const publishQueueLimits = createQueueLimitsPublisher({ runtimeDir: dataPaths.runtime, settings: () => getSettings(), log: message => logInfo(message) });
 // The queue's batches for the library window's mode and source filters (set once the batch service exists).
 let libraryBatchFacts: (() => BatchFacts) | undefined;
 // Whether the queue has batches generating or waiting (manual ones included; paused ones do not count): the
@@ -904,6 +907,8 @@ function registerIpc() {
   ipcMain.handle("settings:set", async (_event, key, value) => {
     const saved = setSetting(key, value);
     if (key === "queueRetentionDays") runQueueRetention?.();
+    // The MCP server writes these two into the enqueue_recipes description (runtime/queue-limits.json).
+    if (key === "queueMaxItemsPerEnqueue" || key === "queueMaxPendingItems") void publishQueueLimits();
     if ([
       "proxyMode",
       "proxyUrl",
@@ -1057,6 +1062,8 @@ app.whenReady().then(async () => {
   startupStep = "bridge";
   workspaceBridge = await startWorkspaceBridge(() => mainWindow, dataPaths.runtime, queueMethods, (method, caller) => agentActivity?.record(method, caller));
   startupStep = "startup";
+  // The MCP server's tool description names the queue limits as they are in this start's settings (never throws).
+  void publishQueueLimits();
   // Expired entries are purged now and every few hours while the app runs.
   trash.startAutoPurge();
   createWindow();
