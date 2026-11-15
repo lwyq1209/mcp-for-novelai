@@ -46,8 +46,8 @@ it('public contract → MCP asset_library → real HTTP → SQLite creates and r
     };
     try {
     const created = await call({ action: 'create-collection', name: ' 雨窗书店·体验 ' });
-    expect(created.collection).toMatchObject({ namespace: 'user', name: '雨窗书店·体验' });
-    expect(created.collection.id).toMatch(/^user:/);
+    // The compact answer: the collection by its id (which carries the namespace) and name.
+    expect(created.collection).toEqual({ id: expect.stringMatching(/^user:/), name: '雨窗书店·体验' });
     const revisionAfterCreate = repo.getRevision();
     const duplicate = await call({ action: 'create-collection', name: '雨窗书店·体验' });
     expect(duplicate.collection.id).toBe(created.collection.id);
@@ -85,7 +85,7 @@ it('public contract → MCP asset_library → real HTTP → SQLite creates and r
       { action: 'mutate', command: 'update', items: [{ ...items[1], expectedRevision: 2 }], patch: { observations: 'invented field' } },
     ]) await expect(call(args)).rejects.toMatchObject({ code: 'invalid_arguments' });
     expect(dispatch).toHaveBeenCalledTimes(beforeRejectedInputs);
-    expect((await call({ action: 'collections' })).collections.filter((value: any) => value.namespace === 'user')).toHaveLength(2);
+    expect((await call({ action: 'collections' })).collections.filter((value: any) => value.id.startsWith('user:'))).toHaveLength(2);
     } finally { await client.close(); await server.close(); }
   } finally {
     await host.close(); repo.close(); await rm(directory, { recursive: true, force: true });
