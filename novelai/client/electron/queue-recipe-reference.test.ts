@@ -85,7 +85,7 @@ describe('recipe sources stored by history reference (H8)', () => {
     expect(stored).not.toHaveProperty('assetRefs');
 
     const read = await service.read_queue_recipe({ recipeId: saved.recipeId, recipeRevision: 1 });
-    expect(reader).toHaveBeenCalledTimes(2); expect(read).toEqual(saved);
+    expect(reader).toHaveBeenCalledTimes(2); expect({ ...read, queueLimits: saved.queueLimits }).toEqual(saved);
     const omitted = await service.read_queue_recipe({ recipeId: saved.recipeId, recipeRevision: 1, assetData: 'omit' });
     expect(reader).toHaveBeenCalledTimes(3);
     expect(omitted.inputHash).toBe(saved.inputHash);

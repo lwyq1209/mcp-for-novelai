@@ -98,7 +98,9 @@ it('CE-I2-2 put/read/enqueue 都按 study 引用重读并核对原图：原图�
   expect(saved.inputHash).toBe(embedded.inputHash);
 
   // read：按引用回读，结果与 put 一致
-  expect(await h.service.read_queue_recipe({ recipeId: saved.recipeId, recipeRevision: 1 })).toEqual(saved);
+  // 写入回复 = 存储的快照，外加这次调用时的 queueLimits（队列上限是调用时的事实，不随配方存储）。
+  const { queueLimits: _limits, ...snapshotOnly } = saved;
+  expect(await h.service.read_queue_recipe({ recipeId: saved.recipeId, recipeRevision: 1 })).toEqual(snapshotOnly);
 
   // 原图被替换（同尺寸、不同字节）：enqueue、read、put 各自重读，都报 recipe_source_changed；不写回执、不派发
   await fs.writeFile(study.original, gradientPng(64, 64, 9));

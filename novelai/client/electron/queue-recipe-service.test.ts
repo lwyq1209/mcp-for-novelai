@@ -52,7 +52,9 @@ describe('independent recipe service', () => {
     expect(saved.snapshot.reviewInput).toEqual(await buildPromptReview(normalizeQueuePreparation(preparation)));
     expect(saved.snapshot.reviewInput.authored.charCaptions[0]).toEqual({ prompt: 'adult woman, blue coat', negativePrompt: 'hat', useCoords: true, x: .25, y: .6 });
     expect(saved.characterIds).toEqual(['character-0']);
-    const read = await service.read_queue_recipe({ recipeId: saved.recipeId, recipeRevision: 1 }); expect(read).toEqual(saved);
+    const read = await service.read_queue_recipe({ recipeId: saved.recipeId, recipeRevision: 1 });
+    // The put reply is the stored snapshot plus queueLimits, a fact of that call (the client's settings then).
+    expect(saved.queueLimits).toEqual({ maxItemsPerEnqueue: 20 }); expect({ ...read, queueLimits: saved.queueLimits }).toEqual(saved);
     // win32 reports no POSIX permission bits (always 0o666); privacy there relies on the user profile ACL.
     if (process.platform !== 'win32') expect((await fs.stat(path.join(runtimeDir, 'queue-recipes', `${saved.recipeId}.1.json`))).mode & 0o777).toBe(0o600);
   });
@@ -131,7 +133,7 @@ describe('independent recipe service', () => {
     const { service } = await setup(); const a = await service.put_queue_recipe({ preparation: prep('teacup, {{table}}') }); const identity = { recipeId: a.recipeId, recipeRevision: 1 };
     await expect(service.read_queue_recipe({ ...identity, styleOverrides: { params: 'watercolor' } })).rejects.toMatchObject({ code: 'invalid_argument' });
     await expect(service.read_queue_recipe({ ...identity, promptOverrides: [{ field: 'params.positivePrompt', value: 'teacup, table' }] })).rejects.toMatchObject({ code: 'invalid_argument' });
-    expect(await service.read_queue_recipe(identity)).toEqual(a);
+    expect({ ...await service.read_queue_recipe(identity), queueLimits: a.queueLimits }).toEqual(a);
   });
   it('source, Mask and independent inpaint text survive freeze; missing assets cannot enqueue', async () => {
     const { service, batch } = await setup();

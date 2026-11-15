@@ -189,7 +189,9 @@ test('compact readback of prepare_recipe, the only one the tool returns: nothing
   const compact = ok(await raw('prepare_recipe', args));
   assert.deepEqual(h.methods(), ['put_queue_recipe', 'put_queue_recipe'], 'the compact readback is a view: the host call is the same');
   // A saved recipe: its identity, the verdict, and the two texts the host appended. Every sampling value is as written, so none is listed.
-  assert.deepEqual(Object.keys(compact), ['recipeId', 'recipeRevision', 'inputHash', 'ready', 'warnings', 'effective']);
+  assert.deepEqual(Object.keys(compact), ['recipeId', 'recipeRevision', 'inputHash', 'ready', 'warnings', 'effective', 'queueLimits']);
+  // What the client lets the enqueue that follows add (a user setting: this host double keeps the default and reports no load).
+  assert.deepEqual(compact.queueLimits, { perEnqueue: 20 });
   assert.match(compact.recipeId, /^[a-f0-9-]{36}$/); assert.equal(compact.recipeRevision, 1); assert.equal(compact.inputHash, full.inputHash);
   assert.deepEqual([compact.ready, compact.warnings], [true, []]);
   assert.deepEqual(compact.effective, { automaticQuality: { appendedText: 'very aesthetic, masterpiece, no text' }, ucPreset: { text: V5_HUMAN } });
@@ -210,7 +212,9 @@ test('compact readback of prepare_recipe, the only one the tool returns: nothing
   // No presets and a random seed: nothing was appended, decided or changed.
   const bare = ok(await raw('prepare_recipe', t2i({ qualityPreset: 'none', ucPreset: 3, seed: null })));
   assert.deepEqual([bare.ready, bare.warnings, bare.effective], [true, [], {}]);
-  assert.ok(JSON.stringify(bare).length < 220, JSON.stringify(bare));
+  // Its identity, the verdict and the client's queue limits: nothing else.
+  assert.deepEqual(Object.keys(bare), ['recipeId', 'recipeRevision', 'inputHash', 'ready', 'warnings', 'effective', 'queueLimits']);
+  assert.ok(JSON.stringify(bare).length < 260, JSON.stringify(bare));
 
   // What the host changed is listed with its value, whether or not a warning names it; the rest is still not echoed.
   const corrected = ok(await raw('prepare_recipe', t2i({ qualityPreset: 'none', ucPreset: 3, width: 850, height: 1200, steps: 99 })));
@@ -277,7 +281,7 @@ test('prepare_recipe freezes a t2i recipe through the real host builder and read
   assert.deepEqual(prepared.authored.characters, [{ prompt: 'girl, red dress', negativePrompt: 'hat', useCoords: true, x: 0.3, y: 0.5 }]);
   // The readback is the host's own frozen snapshot: the same identity reads back identically.
   const read = ok(await readRecipe(ref(prepared)));
-  const { saved: _saved, generationSubmitted: _submitted, next: _next, ...readback } = prepared;
+  const { saved: _saved, generationSubmitted: _submitted, next: _next, queueLimits: _limits, ...readback } = prepared;
   assert.deepEqual(read, readback);
   assert.equal(errorOf(await readRecipe({ ...ref(prepared), inputHash: 'f'.repeat(64) })).code, 'recipe_changed');
 
@@ -317,7 +321,7 @@ test('transparentBackground: V5 recipes send the real builder flags and read bac
   assert.equal(prepared.effectiveRequest.parameters.tag_hint_transparent_background, true);
   assert.equal(prepared.effectiveRequest.parameters.straight_alpha, true);
   assert.equal(prepared.effective.negativePrompt, `blurry, ${V5_HUMAN}`, 'the negative prompt is unchanged');
-  const { saved: _saved, generationSubmitted: _submitted, next: _next, ...readback } = prepared;
+  const { saved: _saved, generationSubmitted: _submitted, next: _next, queueLimits: _limits, ...readback } = prepared;
   assert.deepEqual(ok(await readRecipe(ref(prepared))), readback);
 
   // Without quality tags the transparent text is the only appended segment.

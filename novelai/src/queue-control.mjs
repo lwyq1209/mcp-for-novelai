@@ -198,6 +198,20 @@ function itemReasonsOf(batch) {
   return codes.length ? { itemReasons: Object.fromEntries(codes.map(code => [code, ITEM_REASONS[code]])) } : {};
 }
 
+/**
+ * The client's queue limits as the host reports them with a recipe put, preview or capture and with list_queue
+ * (queueLimits): perEnqueue, the images one enqueue_recipes call may add (the user's setting, 1–200); pending, the
+ * unfinished images the queue holds now, and pendingLimit, the most it takes (null: the user chose no limit), both
+ * absent while the host cannot say. An older host reports nothing and a malformed value is dropped: undefined, so
+ * the answer simply has no queueLimits (they are advice for planning; enqueue_recipes itself is what refuses).
+ */
+export function queueLimitsOf(limits) {
+  const count = value => Number.isSafeInteger(value) && value >= 0;
+  if (!record(limits) || !count(limits.maxItemsPerEnqueue) || limits.maxItemsPerEnqueue < 1) return undefined;
+  const load = count(limits.pendingItems) && (limits.pendingItemLimit === null || count(limits.pendingItemLimit));
+  return { perEnqueue: limits.maxItemsPerEnqueue, ...(load ? { pending: limits.pendingItems, pendingLimit: limits.pendingItemLimit } : {}) };
+}
+
 const STORAGE_FIELDS = { frozenQueue: ['batches', 'batchLimit', 'bytes', 'byteLimit'], recipeStore: ['records', 'recordLimit', 'bytes', 'byteLimit'] };
 /**
  * Host storage usage (design-addendum §2.7), when the host reports it: each store is its four counters or null
@@ -226,9 +240,9 @@ export async function queueControlAction(args, { bridge, signal, projectPath } =
     if (args.batchId !== undefined || args.itemIndex !== undefined || args.index !== undefined) invalidArguments('Queue list takes no item identity.');
     const result = await bridge.call(QUEUE_HOST_METHODS.list, {}, signal);
     if (!Array.isArray(result?.batches) || result.batches.some(batch => !record(batch))) invalidResponse('Queue list is unavailable.');
-    const byStatus = new Map(), storage = storageUsage(result.storage);
+    const byStatus = new Map(), storage = storageUsage(result.storage), queueLimits = queueLimitsOf(result.queueLimits);
     for (const batch of result.batches) byStatus.set(batch.status, (byStatus.get(batch.status) ?? 0) + 1);
-    return { value: { total: result.batches.length, byStatus: Object.fromEntries(byStatus), ...(storage ? { storage } : {}),
+    return { value: { total: result.batches.length, byStatus: Object.fromEntries(byStatus), ...(queueLimits ? { queueLimits } : {}), ...(storage ? { storage } : {}),
       batches: result.batches.slice(0, QUEUE_LIST_LIMIT).map(batch => ({ batchId: batch.batchId, source: batchSource(batch.source), status: batch.status, stopReason: batchReason(batch.error), count: batch.count, activeJobId: batch.activeJobId ?? null,
         itemsFailed: itemCount(batch, 'failed'), itemsUnknown: itemCount(batch, 'unknown') })),
       omitted: Math.max(0, result.batches.length - QUEUE_LIST_LIMIT), instruction: 'Use read with a batchId for its item progress.' } };

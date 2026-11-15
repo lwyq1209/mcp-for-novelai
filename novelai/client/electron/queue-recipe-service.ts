@@ -222,6 +222,9 @@ interface ReceiptError { code: string; message: string }
 /** `output` (2026-10-14, issue #1): only on receipts of enqueues that asked for a history group or file prefix — the
  * request (part of requestHash) plus the group the host resolved before writing the receipt. */
 interface Receipt { schemaVersion: 2; requestKey: string; requestHash: string; recipePlanHash: string; items: QueueItem[]; args: Record<string, any> | null; status: 'preparing' | 'accepted' | 'rejected' | 'unknown'; revision: number; batchId: string | null; result: Record<string, any> | null; error: ReceiptError | null; previousRecordHash: string | null; updatedAt: string; output?: QueueOutput; _padding?: string; recordHash?: string }
+/** What an agent may enqueue now (queueLimits of a recipe put, preview, capture and of list_queue): the per-enqueue
+ * setting; the unfinished items the queue holds and the most it takes (null: no limit), absent while unknown. */
+export interface QueueLimits { maxItemsPerEnqueue: number; pendingItems?: number; pendingItemLimit?: number | null }
 interface QueueBackend {
   ready: Promise<unknown>;
   enqueue(args: unknown): Promise<BatchJob>;
@@ -1177,6 +1180,16 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
       catch { return fail('queue_acceptance_unknown', 'The batch was accepted but its final receipt could not be persisted. Reconcile this same request; do not resend.'); }
       return decorate(accepted);
   });
+  /** The client's queue safety settings as they are now, and the queue's unfinished load, for the agent that is about
+   * to enqueue: the replies of a recipe put, preview and canvas capture and of list_queue carry it (queueLimits), so a
+   * changed setting is known before an enqueue is refused. Read at every call; the load is left out while the frozen
+   * queue cannot say (not ready, failed). pendingItemLimit null: the user chose no limit. */
+  const queueLimits = (): QueueLimits => {
+    const maxItemsPerEnqueue = normalizeQueueEnqueueItems(options.enqueueItemLimit?.() ?? QUEUE_ENQUEUE_ITEMS.default);
+    let admission: BatchAdmission | null = null;
+    try { admission = options.batch.queueAdmission?.() ?? null; } catch { admission = null; }
+    return { maxItemsPerEnqueue, ...(admission ? { pendingItems: admission.pendingItems, pendingItemLimit: admission.pendingItemLimit } : {}) };
+  };
   /** Dry run of a new-recipe put: same normalization, source reread and builder, plus an inpaint overlay.
    * No init, lock, receipt or record: it creates no directory or file and uses no revision or quota.
    * canvas: the canvas capture's assembly rule (put_canvas_recipe). */
@@ -1185,7 +1198,7 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
     const omitAssetData = assetDataOmitted(args.assetData);
     const preparation = normalizeQueuePreparation(args.preparation, { newRecipe: true, authoredAssembly: canvas });
     const reviewInput = await buildPromptReview(await materialize(preparation, null));
-    return queueRecipePreviewResult({ inputHash: inputHash(reviewInput), characterIds: characterIdsFor(preparation), reviewInput, assetDetails: assetDetails(preparation), omitAssetData });
+    return { ...(await queueRecipePreviewResult({ inputHash: inputHash(reviewInput), characterIds: characterIdsFor(preparation), reviewInput, assetDetails: assetDetails(preparation), omitAssetData })), queueLimits: queueLimits() };
   }
   const api = {
     put_queue_recipe(raw: unknown) { return exclusive(async () => {
@@ -1214,7 +1227,7 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
       const input = await buildPromptReview(await materialize(preparation, null));
       const entry: RecipeRecord = { schemaVersion: 1, recipeId: id, recipeRevision: version, preparation, inputHash: inputHash(input) };
       try { await writeRecipe(filename(id, version), entry); } catch (error: any) { if (error.code === 'EEXIST') fail('recipe_conflict', 'Another writer already published this recipe revision.'); throw error; }
-      const result = snapshotFor(entry, input);
+      const result = { ...snapshotFor(entry, input), queueLimits: queueLimits() };
       return omitAssetData ? withoutAssetData(result) : result;
     }); },
     /** A new recipe frozen from the live canvas (capture_canvas_recipe): the put of a new recipe, plus its canvas
@@ -1229,7 +1242,7 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
       // The origin is written before the (possibly large) preparation: reclamation reads only a file's head to find captures.
       const entry: RecipeRecord = { schemaVersion: 1, recipeId: randomUUID(), recipeRevision: 1, canvasOrigin, preparation, inputHash: inputHash(input) };
       try { await writeRecipe(filename(entry.recipeId, 1), entry); } catch (error: any) { if (error.code === 'EEXIST') fail('recipe_conflict', 'Another writer already published this recipe revision.'); throw error; }
-      const result = snapshotFor(entry, input);
+      const result = { ...snapshotFor(entry, input), queueLimits: queueLimits() };
       return omitAssetData ? withoutAssetData(result) : result;
     }); },
     preview_queue_recipe(raw: unknown) { return previewRecipe(raw, false); },
@@ -1286,7 +1299,7 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
       // Latest scans only; a number the host does not have is null, never estimated.
       const frozen = options.batch.capacity?.() ?? null;
       if (!recipeUsage) try { await scanOwned(); } catch { /* A concurrent publication may be mid-flight; report null. */ }
-      return { batches, storage: {
+      return { batches, queueLimits: queueLimits(), storage: {
         frozenQueue: frozen ? { batches: frozen.batches, batchLimit: frozen.batchLimit, bytes: frozen.bytes, byteLimit: frozen.byteLimit } : null,
         recipeStore: recipeUsage ? { records: recipeUsage.records, recordLimit, bytes: recipeUsage.total, byteLimit: RECIPE_STORE_LIMITS.bytes } : null,
       } };

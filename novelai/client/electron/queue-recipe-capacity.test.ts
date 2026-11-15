@@ -158,7 +158,7 @@ describe('recipe store limits and list_queue storage', () => {
     const h = await setup({ batch, runtimeDir: root }), recipe = await h.service.put_queue_recipe({ preparation: prep() });
     await h.service.enqueue_queue_recipes({ requestKey: 'mcp-listed', items: [item(recipe, 1)] });
     const listed = await h.restart().list_queue({}), capacity = batch.capacity()!;
-    expect(Object.keys(listed).sort()).toEqual(['batches', 'storage']);
+    expect(Object.keys(listed).sort()).toEqual(['batches', 'queueLimits', 'storage']);
     expect(listed.batches.map((job: any) => job.requestKey)).toEqual(['mcp-listed']);
     let records = 0, bytes = 0; for (const name of await fs.readdir(h.store)) { records++; bytes += (await fs.stat(path.join(h.store, name))).size; }
     expect(listed.storage).toEqual({

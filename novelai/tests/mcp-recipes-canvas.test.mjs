@@ -146,7 +146,7 @@ test('compact readback of a canvas recipe: the caller wrote none of it, so every
     charCaptions: [{ prompt: 'keeper, long coat', negativePrompt: 'hat', useCoords: true, x: 0.4, y: 0.6 }, { prompt: 'black cat', negativePrompt: '', useCoords: true, x: 0.7, y: 0.8 }] });
   const full = ok(await call('prepare_recipe', { mode: 't2i', canvas: at(), preview: true }));
   const compact = ok(await agent('prepare_recipe', { mode: 't2i', canvas: at(), preview: true }));
-  assert.deepEqual(Object.keys(compact), ['preview', 'ready', 'warnings', 'effective', 'authoredPrompts'], 'a preview has no identity; a canvas capture adds its texts');
+  assert.deepEqual(Object.keys(compact), ['preview', 'ready', 'warnings', 'effective', 'authoredPrompts', 'queueLimits'], 'a preview has no identity; a canvas capture adds its texts');
   assert.equal(errorOf(await agent('prepare_recipe', { mode: 't2i', canvas: at(), preview: true, detail: 'full' })).code, 'invalid_arguments', 'there is no detail option');
   assert.deepEqual(compact.authoredPrompts, { stylePrompt: 'ink wash, muted palette', positivePrompt: 'a lighthouse on a cliff at dusk', negativePrompt: 'blurry, text' });
   const { automaticQuality, ucPreset, characters, ...sampling } = compact.effective;

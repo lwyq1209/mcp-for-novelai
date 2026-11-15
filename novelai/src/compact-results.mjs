@@ -44,13 +44,14 @@ export function compactBatch(batch) {
   });
 }
 
-/** list_queue: each batch by id, status and size; storage usage only when a store is at least four fifths full. */
+/** list_queue: each batch by id, status and size; the client's current queue limits; storage usage only when a store is at least four fifths full. */
 export function compactQueueList(value) {
   if (!record(value) || !Array.isArray(value.batches)) return value;
   const nearlyFull = store => record(store) && [['batches', 'batchLimit'], ['records', 'recordLimit'], ['bytes', 'byteLimit']].some(([used, limit]) => store[limit] > 0 && store[used] / store[limit] >= 0.8);
   const full = record(value.storage) ? Object.fromEntries(Object.entries(value.storage).filter(([, store]) => nearlyFull(store))) : {};
   return {
     total: value.total, byStatus: value.byStatus,
+    ...(record(value.queueLimits) ? { queueLimits: value.queueLimits } : {}),
     batches: value.batches.map(batch => present({ batchId: batch.batchId, status: batch.status, stopReason: batch.stopReason, count: batch.count,
       ...(batch.source?.kind === 'manual' ? { source: 'manual' } : {}), ...(batch.itemsFailed ? { failed: batch.itemsFailed } : {}), ...(batch.itemsUnknown ? { unknown: batch.itemsUnknown } : {}) })),
     ...(value.omitted ? { omitted: value.omitted } : {}),

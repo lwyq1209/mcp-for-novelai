@@ -79,6 +79,19 @@ test('list_queue: each batch by id, status and size; storage only when a store i
   assert.deepEqual((await ok('list_queue')).storage, { recipeStore: storage.recipeStore }, 'a store at four fifths of a limit is reported as it is');
 });
 
+test('list_queue: the client\'s current queue limits, as the host reports them at that call', async t => {
+  let queueLimits;
+  const { ok } = await connect(t, () => ({ batches: [], ...(queueLimits === undefined ? {} : { queueLimits }) }));
+  assert.equal('queueLimits' in await ok('list_queue'), false, 'an older host reports none');
+  queueLimits = { maxItemsPerEnqueue: 50, pendingItems: 12, pendingItemLimit: 200 };
+  assert.deepEqual((await ok('list_queue')).queueLimits, { perEnqueue: 50, pending: 12, pendingLimit: 200 });
+  queueLimits = { maxItemsPerEnqueue: 200, pendingItems: 0, pendingItemLimit: null };
+  assert.deepEqual((await ok('list_queue')).queueLimits, { perEnqueue: 200, pending: 0, pendingLimit: null }, 'null: the user chose no total limit');
+  queueLimits = { maxItemsPerEnqueue: 35 };
+  assert.deepEqual((await ok('list_queue')).queueLimits, { perEnqueue: 35 }, 'the load is left out while the frozen queue cannot say');
+  for (const bad of [null, 'x', {}, { maxItemsPerEnqueue: 0 }, { maxItemsPerEnqueue: '20' }]) { queueLimits = bad; assert.equal('queueLimits' in await ok('list_queue'), false, JSON.stringify(bad)); }
+});
+
 test('get_queue_result: the image with its history identity, seed and file; the whole batch as thumbnails in the same terms', async t => {
   const { ok, call } = await connect(t, (method, args) => method === 'read_queue' ? hostBatch({ status: 'succeeded' })
     : args.variant === 'thumbnail' ? { variant: 'thumbnail', mimeType: 'image/png', data: png, width: 1, height: 1, historyId: args.itemIndex === 0 ? 'h0' : args.index ? 'h1b' : 'h1' }
