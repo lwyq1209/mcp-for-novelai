@@ -183,19 +183,18 @@ export function historyRecipeView(whole) {
 }
 
 // ------------------------------------------------------------------ tags
-const WIKI_DEFINITION_CHARS = 600;
 /**
- * The definition of a Danbooru wiki page: its text before the first heading (h1.–h6.: examples, related tags, see also),
- * at most WIKI_DEFINITION_CHARS. Not shortened further: the paragraphs after the first are where a page says when not
- * to use the tag and which tag to use instead, which is what a caller choosing between tags needs.
+ * The definition of a Danbooru wiki page: its whole text before the first heading (h1.–h6.: examples, related tags,
+ * see also). It is not cut short: the paragraphs after the first are where a page says when not to use the tag and
+ * which tag to use instead, which is what a caller choosing between tags needs (the page body itself is bounded by
+ * tag-details, 6000 characters by default). `more`: the page goes on after it, or `truncated` says its body was cut.
  */
-export function wikiDefinition(body) {
+export function wikiDefinition(body, truncated = false) {
   if (typeof body !== 'string') return undefined;
   const text = body.replace(/\r\n/g, '\n');
   const heading = text.search(/^h[1-6]\.\s/m);
   const lead = (heading > 0 ? text.slice(0, heading) : heading === 0 ? text.replace(/^h[1-6]\.[^\n]*\n+/, '').split(/^h[1-6]\.\s/m)[0] : text).trim();
-  const cut = Array.from(lead).slice(0, WIKI_DEFINITION_CHARS).join('');
-  return { text: cut, more: cut.length < lead.length || lead.length < text.trim().length };
+  return { text: lead, more: truncated === true || lead.length < text.trim().length };
 }
 
 /**
@@ -208,7 +207,7 @@ export function compactTags(value) {
   if (!record(value) || !Array.isArray(value.items) || value.detail !== 'compact') return value;
   return { count: value.count, items: value.items.map(item => {
     if (!record(item)) return item;
-    const definition = wikiDefinition(item.wiki?.body);
+    const definition = wikiDefinition(item.wiki?.body, item.wiki?.truncated);
     return present({
       name: item.name, ...(item.canonicalName && item.canonicalName !== item.name ? { canonicalName: item.canonicalName } : {}),
       ...(item.resolution && item.resolution !== 'canonical' ? { resolution: item.resolution } : {}),

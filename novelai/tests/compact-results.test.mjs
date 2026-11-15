@@ -228,7 +228,10 @@ test('tag_details: per tag its category, post count and the wiki definition; any
   // A page that is only a definition has nothing more; one that opens with a heading gives the text under it; a long one is cut.
   assert.deepEqual(wikiDefinition('A short page.'), { text: 'A short page.', more: false });
   assert.deepEqual(wikiDefinition('h4. Definition\n\nSitting with knees up.\n\nh4. See also\n\n* [[x]]'), { text: 'Sitting with knees up.', more: true });
-  assert.deepEqual([wikiDefinition('x'.repeat(900)).text.length, wikiDefinition('x'.repeat(900)).more], [600, true]);
+  // The text before the first heading is whole, however long; a body the lookup cut short says the page goes on.
+  assert.deepEqual([wikiDefinition('x'.repeat(900)).text.length, wikiDefinition('x'.repeat(900)).more], [900, false]);
+  assert.deepEqual([wikiDefinition('x'.repeat(900), true).text.length, wikiDefinition('x'.repeat(900), true).more], [900, true]);
+  assert.deepEqual(wikiDefinition(`${'y'.repeat(1500)}\n\nh4. See also\n\n* [[x]]`), { text: 'y'.repeat(1500), more: true });
   // The paragraphs after the first stay: they say when not to use the tag and which one to use instead.
   assert.deepEqual(wikiDefinition('A fetish.\n\nNot to be confused with [[netorare]]. Use [[swinging]] instead.\n\nh4. See also\n\n* [[x]]'), { text: 'A fetish.\n\nNot to be confused with [[netorare]]. Use [[swinging]] instead.', more: true });
   assert.equal(wikiDefinition(undefined), undefined);

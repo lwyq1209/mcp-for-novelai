@@ -195,7 +195,7 @@ Imported images (the library's **Imported** category) and the generation metadat
 Danbooru facts for 1–20 English tag names (`name` or `names`): whether the tag exists, its canonical name, active
 aliases, deprecation, cumulative post count and the wiki's definition. The default answer gives per tag its category
 and post count, its canonical name and aliases where they differ from the name asked for, anything out of the ordinary
-(not found, deprecated, an unchecked alias, errors) and the wiki text before its first heading, at most 600 characters;
+(not found, deprecated, an unchecked alias, errors) and the whole wiki text before its first heading;
 `wikiMore: true` says the page goes on (examples, related tags), and `detail: "full"` returns all of it with the
 source links. `detail: "cooccurrence"` with one name returns the tags that
 most often appear with it in one rating (`g`, `s`, `q` or `e`; default `g`; `limit` 1–20, default 8). Results are cached
