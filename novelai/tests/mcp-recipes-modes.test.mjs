@@ -281,7 +281,7 @@ async function hostRequestMaskCells(h, recipe) {
 }
 
 const omit = (value, ...keys) => Object.fromEntries(Object.entries(value).filter(([key]) => !keys.includes(key)));
-const readbackOf = prepared => omit(prepared, 'saved', 'generationSubmitted', 'next', 'queueLimits');
+const readbackOf = prepared => omit(prepared, 'saved', 'generationSubmitted', 'next');
 const GIF = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
 const historyFacts = (id, bytes, width, height, mimeType = 'image/png') => ({ kind: 'history', historyId: id, historyRevision: 1, assetId: `${id}-original`, sha256: sha256(bytes), mimeType, width, height, byteLength: bytes.length });
 
@@ -371,7 +371,7 @@ test('compact readback of image modes: only what the call did not write (the req
   const full = ok(await call('prepare_recipe', r.inpaint(mask, { preview: true })));
   const result = await agent('prepare_recipe', r.inpaint(mask, { preview: true })), compact = ok(result);
   assert.equal(result.content.filter(item => item.type === 'image').length, 1, 'the mask overlay is still attached');
-  assert.deepEqual(Object.keys(compact), ['preview', 'ready', 'warnings', 'effective', 'source', 'mask', 'previewImage', 'next', 'queueLimits']);
+  assert.deepEqual(Object.keys(compact), ['preview', 'ready', 'warnings', 'effective', 'source', 'mask', 'previewImage', 'next']);
   // The call names no size and the plain model: the inpainting model id and the request size are the host's.
   assert.deepEqual(compact.effective, { model: 'nai-diffusion-4-5-full-inpainting', width: 832, height: 1216, automaticQuality: { appendedText: full.effective.automaticQuality.appendedText }, ucPreset: { text: full.effective.ucPreset.text } });
   assert.deepEqual(compact.source, { width: 832, height: 1216 }, 'the identity the call wrote is not repeated');
@@ -384,7 +384,7 @@ test('compact readback of image modes: only what the call did not write (the req
   t.diagnostic(`inpaint readback characters: compact ${text.length}, whole ${JSON.stringify(full).length}`);
   // Saved inpaint: the identity, and no next step beyond the routine one.
   const saved = ok(await agent('prepare_recipe', r.inpaint(mask)));
-  assert.deepEqual(Object.keys(saved), ['recipeId', 'recipeRevision', 'inputHash', 'ready', 'warnings', 'effective', 'source', 'mask', 'queueLimits']);
+  assert.deepEqual(Object.keys(saved), ['recipeId', 'recipeRevision', 'inputHash', 'ready', 'warnings', 'effective', 'source', 'mask']);
 
   // i2i as written: nothing but the appended texts and the source size.
   const i2i = ok(await agent('prepare_recipe', r.i2i({ preview: true })));
@@ -404,7 +404,7 @@ test('compact readback of image modes: only what the call did not write (the req
   // Post-processing: the sizes; the tool and scale the call wrote are not repeated.
   const upscale = ok(await agent('prepare_recipe', r.upscale({ preview: true })));
   const whole = ok(await call('prepare_recipe', r.upscale({ preview: true }))).effective;
-  assert.deepEqual(upscale, { preview: true, ready: true, warnings: [], effective: { input: whole.input, output: whole.output }, queueLimits: { perEnqueue: 20 } });
+  assert.deepEqual(upscale, { preview: true, ready: true, warnings: [], effective: { input: whole.input, output: whole.output } });
   const director = ok(await agent('prepare_recipe', r.director({ tool: 'emotion', emotion: 'sad', emotionLevel: 3, preview: true })));
   assert.deepEqual(Object.keys(director.effective), ['input', 'output']);
 });

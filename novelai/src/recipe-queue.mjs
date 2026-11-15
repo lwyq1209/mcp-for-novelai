@@ -44,7 +44,7 @@
  */
 import { createHash } from 'node:crypto';
 import { BridgeError } from './bridge-client.mjs';
-import { MAX_QUEUE_ITEMS, cleanedBatchInstruction, compactQueuedBatch, queueLimitsOf } from './queue-control.mjs';
+import { MAX_QUEUE_ITEMS, cleanedBatchInstruction, compactQueuedBatch } from './queue-control.mjs';
 import { buildMask } from './recipe-masks.mjs';
 import { maskProvenance, maskReadback, prepareMaskSpec, readAlphaImages, readSourceMetadata, sourceIdentity } from './recipe-sources.mjs';
 
@@ -915,8 +915,6 @@ export function recipeReadback(result, { built = null } = {}) {
   const view = seeded(mode) ? generationView(input) : postprocessView(input);
   const lineage = recipeLineage(result);
   const source = sourceReadback(result), maskAsset = mode === 'inpaint' ? input.assets.find(item => item.role === 'mask') : undefined;
-  // A put, preview or capture reply also says what the client lets one enqueue add now (not a stored recipe read).
-  const queueLimits = queueLimitsOf(result.queueLimits);
   return {
     recipeId: result.recipeId, recipeRevision: result.recipeRevision, inputHash: result.inputHash, mode, lineage,
     ready: input.readiness.status === 'ready', readiness: input.readiness,
@@ -929,7 +927,6 @@ export function recipeReadback(result, { built = null } = {}) {
     ...(source ? { source } : {}),
     ...(maskAsset ? { mask: maskReadback(maskAsset, result.assetProvenance?.mask, built) } : {}),
     ...(result.canvasOrigin ? { canvas: { workspaceId: result.canvasOrigin.workspaceId, revision: result.canvasOrigin.revision, draftId: result.canvasOrigin.draftId, patched: result.canvasOrigin.patched, capturedAt: result.canvasOrigin.capturedAt } } : {}),
-    ...(queueLimits ? { queueLimits } : {}),
   };
 }
 
@@ -1018,7 +1015,6 @@ function compactPostprocess(effective, written, mode, known) {
  * - When the appended text could not be separated (warning readback_not_derived), the final prompts are given.
  * - source and mask: what the call did not state (the source size; the cells the mask selects, per layer).
  * - next: only where the next step is not the routine one (a blocked recipe, a mask overlay to look at).
- * - queueLimits: what the client lets enqueue_recipes add now (a user setting the tool description cannot know).
  *
  * The whole readback (recipeReadback: authored, the raw request, assets, hashes, the mask spec) states every prompt
  * three to five times; it stays a module API for tests (createToolContext wholeResults), not a tool option:
@@ -1026,7 +1022,7 @@ function compactPostprocess(effective, written, mode, known) {
  */
 export function compactReadback(full, args = {}) {
   if (!record(full) || !MODES.includes(full.mode)) return full;
-  const { authored, effective, readiness, source, mask, previewImage, recipeId, recipeRevision, inputHash, mode, lineage, ready, warnings, preview, next, saved, queueLimits } = full;
+  const { authored, effective, readiness, source, mask, previewImage, recipeId, recipeRevision, inputHash, mode, lineage, ready, warnings, preview, next, saved } = full;
   const canvas = lineage !== 'plain', written = canvas || !record(args) ? {} : args;
   const view = !record(effective) ? null : seeded(mode) ? (record(effective.automaticQuality) ? compactEffective(effective, written, mode, !canvas) : effective) : compactPostprocess(effective, written, mode, !canvas);
   const overlay = record(previewImage);
@@ -1045,8 +1041,6 @@ export function compactReadback(full, args = {}) {
     // The overlay itself is attached as an image; its bytes (data) leave the JSON in the tool handler.
     ...(overlay ? { previewImage: { width: previewImage.width, height: previewImage.height, ...(typeof previewImage.data === 'string' ? { mimeType: previewImage.mimeType, data: previewImage.data } : {}) } } : {}),
     ...(!ready || overlay ? { next } : {}),
-    // The client's current limits for the enqueue that follows (the user can change them at any time).
-    ...(record(queueLimits) ? { queueLimits } : {}),
   };
 }
 

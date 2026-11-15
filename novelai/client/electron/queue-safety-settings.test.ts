@@ -124,31 +124,6 @@ describe('single enqueue at most (enqueue_limit_exceeded)', () => {
   });
 });
 
-describe('queueLimits: the current settings in the replies an agent reads before it enqueues', () => {
-  it('a recipe put, a preview and list_queue carry the setting as it is at that call, without a restart', async () => {
-    let limit = 20, admission: { pendingItems: number; pendingItemLimit: number | null } = { pendingItems: 3, pendingItemLimit: 200 };
-    const h = await recipes(() => limit, () => admission);
-    expect(h.recipe.queueLimits).toEqual({ maxItemsPerEnqueue: 20, pendingItems: 3, pendingItemLimit: 200 });
-    // The user raises one setting and removes the other: the next replies say so.
-    limit = 50; admission = { pendingItems: 7, pendingItemLimit: null };
-    const expected = { maxItemsPerEnqueue: 50, pendingItems: 7, pendingItemLimit: null };
-    expect((await h.service.put_queue_recipe({ preparation: prep('second') })).queueLimits).toEqual(expected);
-    expect((await h.service.put_queue_recipe({ recipeId: h.recipe.recipeId, expectedRevision: 1, preparation: prep('revised') })).queueLimits).toEqual(expected);
-    expect((await h.service.preview_queue_recipe({ preparation: prep('dry run') })).queueLimits).toEqual(expected);
-    expect((await h.service.list_queue({})).queueLimits).toEqual(expected);
-    // A stored recipe read is not a statement about the queue.
-    expect((await h.service.read_queue_recipe({ recipeId: h.recipe.recipeId, recipeRevision: 1 }) as any).queueLimits).toBeUndefined();
-  });
-
-  it('leaves the load out while the frozen queue cannot say, and still gives the per-enqueue setting', async () => {
-    const failing = await recipes(() => 35, () => { throw new Error('frozen queue failed'); });
-    expect(failing.recipe.queueLimits).toEqual({ maxItemsPerEnqueue: 35 });
-    expect((await failing.service.list_queue({})).queueLimits).toEqual({ maxItemsPerEnqueue: 35 });
-    const none = await recipes(() => 35);
-    expect(none.recipe.queueLimits).toEqual({ maxItemsPerEnqueue: 35 });
-  });
-});
-
 describe('total queue limit (queue_full)', () => {
   it('names the current limit before the receipt, and an unlimited setting admits any count', async () => {
     let admission: { pendingItems: number; pendingItemLimit: number | null } = { pendingItems: 9, pendingItemLimit: 10 };

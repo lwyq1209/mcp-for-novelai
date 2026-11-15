@@ -124,7 +124,7 @@ async function fixture() {
 }
 /** 成功的工具回复；失败时把公开的错误回复原样写进断言信息（基点日志里能看到拒绝原因）。 */
 const ok = (result: any, step: string) => { expect(result.isError, `${step}: ${JSON.stringify(result.structuredContent ?? result).slice(0, 3000)}`).not.toBe(true); return result.structuredContent; };
-const readbackOf = (prepared: Record<string, unknown>) => Object.fromEntries(Object.entries(prepared).filter(([key]) => !['saved', 'generationSubmitted', 'next', 'queueLimits'].includes(key)));
+const readbackOf = (prepared: Record<string, unknown>) => Object.fromEntries(Object.entries(prepared).filter(([key]) => !['saved', 'generationSubmitted', 'next'].includes(key)));
 
 it('CE-I2-1 外部图片经 material_studies import 成为 study 源：i2i、inpaint（preview 再保存）、重复导入走公开 MCP，存储回读走配方模块', async () => {
   const f = await fixture();

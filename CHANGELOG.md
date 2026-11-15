@@ -41,10 +41,6 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
 - `lookup_enqueue` reports `inFlight`: whether the app has received an enqueue under the key and is still handling it.
 - `prepare_recipe` i2i may leave out `width`/`height`: the source's aspect ratio is used at about 832×1216 pixels,
   within the Opus free size (warning `i2i_size_from_source`).
-- **Agents see the queue limits you set.** The `prepare_recipe` readback (also a preview) and `list_queue` carry
-  `queueLimits: {perEnqueue, pending, pendingLimit}`: the current Settings › Queue values (images per enqueue, queued
-  images in total; `null` = no limit) and the unfinished images queued now. Before, an agent knew only the defaults
-  named in the tool descriptions and learned a changed limit from a refused enqueue.
 
 ### Changed
 

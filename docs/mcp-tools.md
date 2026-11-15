@@ -233,8 +233,6 @@ readback; it has no detail option.
 - When the appended text cannot be separated from the builder output (warning `readback_not_derived`), the final
   `effective.positivePrompt` and `effective.negativePrompt` are returned instead.
 - `next` only where the next step is not the routine one: a blocked recipe, or a mask overlay to look at.
-- `queueLimits`: what the app lets `enqueue_recipes` add now — the user's
-  [queue limits](#queue-limits-and-failures), which the tool descriptions cannot know.
 
 What an image was really made with is read afterwards from the library (`asset_library` `read` gives its prompts,
 parameters and seed) and from the queue (`read_queue` gives each image's status, error and seed).
@@ -382,9 +380,9 @@ the call itself wrote.
 
 - `list_queue`: the total, counts by status and the first 8 batches (`batchId`, `status`, `count`; `stopReason`, and
   `failed` / `unknown` image counts, when there are any). A batch started with **Generate** in the app says
-  `source: "manual"` (it is kept only while the app runs); every other batch was enqueued by an agent. `queueLimits`
-  gives the app's current [queue limits](#queue-limits-and-failures). `storage` (use of the frozen queue and the
-  recipe store against their limits) appears only when a store is at least four fifths full.
+  `source: "manual"` (it is kept only while the app runs); every other batch was enqueued by an agent. `storage` (use
+  of the frozen queue and the recipe store against their limits) appears only when a store is at least four fifths
+  full.
 - `read_queue {batchId, wait?}`: `status`, `stopReason` when there is one, `count`, `itemCounts` (the statuses that
   occur, of `pending`, `running`, `succeeded`, `failed`, `unknown`, `cancelled`, `skipped`), and `results` — one entry
   per saved image with `itemIndex`, `historyId`, `actualSeed` (the seed it was generated with; absent for upscale and
@@ -499,18 +497,6 @@ Settings › Queue in the app holds the limits; they are this app's safety stops
 | Images per enqueue | 20 | 1–200 | `enqueue_limit_exceeded`, naming the current limit |
 | Queued images in total (all unfinished images) | 200 | 1–100,000 or no limit | `queue_full` |
 | Frozen queue on disk | 64 MiB per batch, 512 MiB in total | fixed | `queue_input_too_large` / `queue_full` |
-
-The first two are settings the user can change at any time, and a change applies to the next enqueue. The tool
-descriptions only name the defaults, so the current values come with every `prepare_recipe` readback (also a
-preview) and with `list_queue`:
-
-```json
-"queueLimits": { "perEnqueue": 50, "pending": 12, "pendingLimit": 200 }
-```
-
-`perEnqueue` is the images one `enqueue_recipes` call may add, `pending` the unfinished images queued now and
-`pendingLimit` the most the queue holds (`null`: no limit). `pending` and `pendingLimit` are left out while the queue
-cannot say (for example after a storage failure). Plan an enqueue with these values, not with the defaults.
 
 The images' frozen sources and masks may take about 32 MiB per enqueue. These limits apply to agent enqueues, not to
 generating on the canvas.
