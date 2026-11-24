@@ -106,48 +106,22 @@ describe("official Anlas pricing", () => {
     ).toBe(2);
   });
 
-  it("charges a flat 5 Anlas per image for precise reference, regardless of reference count", () => {
-    const oneRef = calculateImageGenerationAnlas({
-      params: { ...DEFAULT_PARAMS, model: "nai-diffusion-4-5-full" },
+  it("charges 5 Anlas per precise reference per image (the official client's sum), on V4.5 and V5", () => {
+    const reference = (type: "character" | "style" | "costume" | "character_mainoutfit") => ({ base64: "", type, strength: 1, fidelity: 1 });
+    const quote = (model: "nai-diffusion-4-5-full" | "nai-diffusion-5-full" | "nai-diffusion-4-full", types: Array<Parameters<typeof reference>[0]>, batchCount = 2) => calculateImageGenerationAnlas({
+      params: { ...DEFAULT_PARAMS, model },
       account: opusAccount, // base image is free for Opus, so only the reference fee remains
-      batchCount: 2,
-      extras: {
-        vibeImages: [],
-        charCaptions: [],
-        preciseReferences: [{ base64: "", type: "character", strength: 1, fidelity: 1 }],
-      },
+      batchCount,
+      extras: { vibeImages: [], charCaptions: [], preciseReferences: types.map(reference) },
     });
-    expect(oneRef.amount).toBe(10); // 5 Anlas x 2 images (flat per image)
-
-    const twoRefs = calculateImageGenerationAnlas({
-      params: { ...DEFAULT_PARAMS, model: "nai-diffusion-4-5-full" },
-      account: opusAccount,
-      batchCount: 2,
-      extras: {
-        vibeImages: [],
-        charCaptions: [],
-        preciseReferences: [
-          { base64: "", type: "character", strength: 1, fidelity: 1 },
-          { base64: "", type: "style", strength: 1, fidelity: 1 },
-        ],
-      },
-    });
-    // Official docs: "5 Anlas to each image generation" — flat, NOT per reference.
-    expect(twoRefs.amount).toBe(10);
-  });
-
-  it("does not estimate a Precise Reference surcharge on V5", () => {
-    const quote = calculateImageGenerationAnlas({
-      params: DEFAULT_PARAMS,
-      account: opusAccount,
-      batchCount: 2,
-      extras: {
-        vibeImages: [],
-        charCaptions: [],
-        preciseReferences: [{ base64: "", type: "character", strength: 1, fidelity: 1 }],
-      },
-    });
-    expect((quote.details ?? []).join("\n")).not.toContain("Precise reference");
+    expect(quote("nai-diffusion-4-5-full", ["character"]).amount).toBe(10); // 5 x 1 reference x 2 images
+    expect(quote("nai-diffusion-4-5-full", ["character", "style"]).amount).toBe(20); // 5 x 2 references x 2 images
+    expect(quote("nai-diffusion-5-full", ["character", "style", "costume"], 1).amount).toBe(15);
+    expect(quote("nai-diffusion-5-full", ["character_mainoutfit"]).details?.join("\n")).toContain("5 Anlas x 1 reference(s) x 2 image(s) = 10");
+    // V4.5 skips an Outfit reference, so it is not charged; a model without the feature charges none.
+    expect(quote("nai-diffusion-4-5-full", ["character", "costume"]).amount).toBe(10);
+    expect(quote("nai-diffusion-4-5-full", ["costume"]).details?.join("\n")).not.toContain("Precise reference");
+    expect(quote("nai-diffusion-4-full", ["character"]).details?.join("\n")).not.toContain("Precise reference");
   });
 
   it("uses the official upscale pixel tier", () => {

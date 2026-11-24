@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sourceSha256": "ad7f9bff3a105c1541e78aee05109c3b7bdd64da02a920424225e3ec5e37883a",
+  "sourceSha256": "79c806139eb637d15bced26675fc84b25f1aea0ace4a9321cf61e6c737df3ff4",
   "schemas": {
     "libraryPayloads": {
       "tag": {
@@ -2949,8 +2949,11 @@
           "preciseType": {
             "enum": [
               "character",
+              "character_mainoutfit",
               "style",
-              "character&style"
+              "costume",
+              "character&style",
+              "character&style_anyoutfit"
             ]
           },
           "fidelity": {
@@ -7024,8 +7027,11 @@
                 "preciseType": {
                   "enum": [
                     "character",
+                    "character_mainoutfit",
                     "style",
-                    "character&style"
+                    "costume",
+                    "character&style",
+                    "character&style_anyoutfit"
                   ]
                 },
                 "fidelity": {
@@ -9253,7 +9259,7 @@
                   "strength": {
                     "type": "number",
                     "minimum": 0,
-                    "maximum": 1
+                    "maximum": 5
                   },
                   "infoExtracted": {
                     "type": "number",
@@ -9263,8 +9269,11 @@
                   "preciseType": {
                     "enum": [
                       "character",
+                      "character_mainoutfit",
                       "style",
-                      "character&style"
+                      "costume",
+                      "character&style",
+                      "character&style_anyoutfit"
                     ]
                   },
                   "fidelity": {
@@ -9279,7 +9288,7 @@
                   }
                 },
                 "additionalProperties": false,
-                "description": "Allowed update fields by kind: history: groupId only (existing history-group raw ID; never name or group); tag/combo/note: name, group, notes; study: name, notes; style_preset: name, group, prompt; positive_preset: name, prompt; prompt_chunk: name, content, updatedAt; reference_preset: name, group, strength, infoExtracted, preciseType, fidelity, informationExtracted; artist_favorite: none. Note prose belongs in notes; do not invent fields. To collect history and notes together, create-collection then add-to-collection with its returned collectionId, not update."
+                "description": "Allowed update fields by kind: history: groupId only (existing history-group raw ID; never name or group); tag/combo/note: name, group, notes; study: name, notes; style_preset: name, group, prompt; positive_preset: name, prompt; prompt_chunk: name, content, updatedAt; reference_preset: name, group, strength (precise 0–5, V4.5 uses at most 1; vibe 0–1), infoExtracted, preciseType (character, character_mainoutfit, style, costume = outfit, character&style, character&style_anyoutfit; the outfit ones are V5-only), fidelity (V4.5 only), informationExtracted; artist_favorite: none. Note prose belongs in notes; do not invent fields. To collect history and notes together, create-collection then add-to-collection with its returned collectionId, not update."
               }
             },
             "additionalProperties": false
@@ -9557,7 +9566,7 @@
           }
         ],
         "type": "object",
-        "description": "AI list is summary-only (default 10, max 20, 12 KiB UTF-8 JSON). Explicit image reads one selected history original by kind/id/exact revision/registered assetId; variant defaults to thumbnail (max 384), original must be explicit. Native attachment only, no workspace, paths, batch, exports or automatic reads. Read detail:summary|full; history defaults to summary, other kinds to full. Summaries are not recipes or verified images. Explicit full is untruncated and may be large. Create a mixed user collection with {action:\"create-collection\",name}; reuse its returned collection.id for explicit versioned membership changes. System namespaces are not public; mutate delete with a user collectionId moves that collection (not its items) to Recently Deleted. Allowed update fields by kind: history: groupId only (existing history-group raw ID; never name or group); tag/combo/note: name, group, notes; study: name, notes; style_preset: name, group, prompt; positive_preset: name, prompt; prompt_chunk: name, content, updatedAt; reference_preset: name, group, strength, infoExtracted, preciseType, fidelity, informationExtracted; artist_favorite: none. Note prose belongs in notes; do not invent fields. To collect history and notes together, create-collection then add-to-collection with its returned collectionId, not update.",
+        "description": "AI list is summary-only (default 10, max 20, 12 KiB UTF-8 JSON). Explicit image reads one selected history original by kind/id/exact revision/registered assetId; variant defaults to thumbnail (max 384), original must be explicit. Native attachment only, no workspace, paths, batch, exports or automatic reads. Read detail:summary|full; history defaults to summary, other kinds to full. Summaries are not recipes or verified images. Explicit full is untruncated and may be large. Create a mixed user collection with {action:\"create-collection\",name}; reuse its returned collection.id for explicit versioned membership changes. System namespaces are not public; mutate delete with a user collectionId moves that collection (not its items) to Recently Deleted. Allowed update fields by kind: history: groupId only (existing history-group raw ID; never name or group); tag/combo/note: name, group, notes; study: name, notes; style_preset: name, group, prompt; positive_preset: name, prompt; prompt_chunk: name, content, updatedAt; reference_preset: name, group, strength (precise 0–5, V4.5 uses at most 1; vibe 0–1), infoExtracted, preciseType (character, character_mainoutfit, style, costume = outfit, character&style, character&style_anyoutfit; the outfit ones are V5-only), fidelity (V4.5 only), informationExtracted; artist_favorite: none. Note prose belongs in notes; do not invent fields. To collect history and notes together, create-collection then add-to-collection with its returned collectionId, not update.",
         "properties": {
           "action": {
             "anyOf": [
@@ -10165,7 +10174,7 @@
                   "strength": {
                     "type": "number",
                     "minimum": 0,
-                    "maximum": 1
+                    "maximum": 5
                   },
                   "infoExtracted": {
                     "type": "number",
@@ -10175,8 +10184,11 @@
                   "preciseType": {
                     "enum": [
                       "character",
+                      "character_mainoutfit",
                       "style",
-                      "character&style"
+                      "costume",
+                      "character&style",
+                      "character&style_anyoutfit"
                     ]
                   },
                   "fidelity": {
@@ -10191,7 +10203,7 @@
                   }
                 },
                 "additionalProperties": false,
-                "description": "Allowed update fields by kind: history: groupId only (existing history-group raw ID; never name or group); tag/combo/note: name, group, notes; study: name, notes; style_preset: name, group, prompt; positive_preset: name, prompt; prompt_chunk: name, content, updatedAt; reference_preset: name, group, strength, infoExtracted, preciseType, fidelity, informationExtracted; artist_favorite: none. Note prose belongs in notes; do not invent fields. To collect history and notes together, create-collection then add-to-collection with its returned collectionId, not update."
+                "description": "Allowed update fields by kind: history: groupId only (existing history-group raw ID; never name or group); tag/combo/note: name, group, notes; study: name, notes; style_preset: name, group, prompt; positive_preset: name, prompt; prompt_chunk: name, content, updatedAt; reference_preset: name, group, strength (precise 0–5, V4.5 uses at most 1; vibe 0–1), infoExtracted, preciseType (character, character_mainoutfit, style, costume = outfit, character&style, character&style_anyoutfit; the outfit ones are V5-only), fidelity (V4.5 only), informationExtracted; artist_favorite: none. Note prose belongs in notes; do not invent fields. To collect history and notes together, create-collection then add-to-collection with its returned collectionId, not update."
               }
             ]
           },

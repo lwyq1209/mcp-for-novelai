@@ -1,11 +1,32 @@
-import type { CharCaption, WorkingImage } from "../types";
-import { baseModelForInpaint } from "../types";
+import type { CharCaption, PreciseReferenceItem, WorkingImage } from "../types";
+import { MAX_NAI_PRECISE_REFERENCES, baseModelForInpaint, naiPreciseReferenceCapability } from "../types";
 import { adaptiveNAIImageSize } from "../nai-dimensions";
 import { WorkspaceError } from "./protocol";
 import type { CreativeState } from "./state";
 import { isSeededGeneration, type GenerationMode, type GenerationSnapshot } from "./generation-types";
 import { resolvePostprocessRecipe } from "./generation-postprocess";
 import { applyNAIEffort } from "../nai-effort";
+
+/** Modes whose queued request carries precise references (the request has no mask and is a generation). */
+export const PRECISE_REFERENCE_QUEUE_MODES: readonly GenerationMode[] = ["t2i", "i2i", "enhance"];
+
+/** Queued generation is one provider request; Vibe Transfer needs a separate paid encode-vibe request first. */
+export const QUEUE_VIBE_REFUSAL = "Queued generation does not send Vibe Transfer references (they need a separate paid encode request). Keep these materials and remove them from the active recipe before submitting.";
+
+/**
+ * Why a queued recipe cannot send these precise references, or null when it can. A queued recipe sends every
+ * reference it holds or is refused: a reference the model would skip (an Outfit reference on V4.5) is never dropped
+ * silently, because the image would be paid for without it.
+ */
+export function queuedPreciseReferenceProblem(references: ReadonlyArray<Pick<PreciseReferenceItem, "type">>, mode: GenerationMode, model: string): string | null {
+  if (!references.length) return null;
+  if (!PRECISE_REFERENCE_QUEUE_MODES.includes(mode)) return `Queued ${mode} does not send precise references (NovelAI V5 takes none with a mask); they are sent in t2i, i2i and enhance. Remove them from this recipe.`;
+  const capability = naiPreciseReferenceCapability(model);
+  if (!capability) return `The model ${model} has no Precise Reference; NovelAI V4.5 and V5 have it. Use one of those models or remove the precise references.`;
+  if (references.length > MAX_NAI_PRECISE_REFERENCES) return `A request takes at most ${MAX_NAI_PRECISE_REFERENCES} precise references; this recipe has ${references.length}.`;
+  if (!capability.outfit && references.some((reference) => reference.type === "costume")) return `The model ${model} has no Outfit references (NovelAI V5 has them) and would skip them. Remove the Outfit references or use a V5 model.`;
+  return null;
+}
 
 export async function freezeGenerationInput(
   current: CreativeState,
@@ -14,7 +35,11 @@ export async function freezeGenerationInput(
 ): Promise<GenerationSnapshot> {
   // Clone before any file read; renderer edits must never alter a submitted recipe.
   const state = structuredClone(current);
-  if (isSeededGeneration(mode) && (state.vibeImages.length || state.preciseReferences.length)) throw new WorkspaceError("unsupported_reference", "Queue generation does not encode references in this version. Keep these materials and remove them from the active recipe before submitting.");
+  if (isSeededGeneration(mode) && state.vibeImages.length) throw new WorkspaceError("unsupported_reference", QUEUE_VIBE_REFUSAL);
+  // Precise references travel inside the one request of a t2i, i2i or enhance image; upscale and director use none.
+  const preciseReferences = isSeededGeneration(mode) ? state.preciseReferences : [];
+  const referenceProblem = queuedPreciseReferenceProblem(preciseReferences, mode, state.params.model);
+  if (referenceProblem) throw new WorkspaceError("unsupported_reference", referenceProblem);
   const independentInpaint = mode === "inpaint" && state.inpaintRecipe != null;
   if (mode === "inpaint" && !independentInpaint && state.charCaptions.length) throw new WorkspaceError("unsupported_configuration", "The current inpaint protocol does not accept character captions. They were preserved; use a recipe without character captions for this operation.");
   const params = { ...(independentInpaint ? state.inpaintRecipe : state.params) };
@@ -27,7 +52,8 @@ export async function freezeGenerationInput(
   const snapshot: GenerationSnapshot = {
     params: effective,
     extras: {
-      vibeImages: [], preciseReferences: [],
+      vibeImages: [],
+      preciseReferences: preciseReferences.map(({ base64, type, strength, fidelity, prepared, sha256 }: PreciseReferenceItem) => ({ base64, type, strength, fidelity, ...(prepared ? { prepared: true } : {}), ...(sha256 ? { sha256 } : {}) })),
       charCaptions: (isSeededGeneration(mode) && !independentInpaint ? state.charCaptions : []).map(({ prompt, negativePrompt, useCoords, x, y }: CharCaption) => ({ prompt, negativePrompt, useCoords, x, y })),
       modelMode: state.modelMode as "anime" | "furry",
       historyGroupId: state.generationGroupId,

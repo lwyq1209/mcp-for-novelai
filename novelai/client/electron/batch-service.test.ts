@@ -125,6 +125,39 @@ describe('durable frozen recipe FIFO', () => {
     expect(vi.mocked(h.generation.submit).mock.calls.map(([args]) => (args as any).queue)).toEqual([0, 1].map(itemIndex => ({ batchId: a.batchId, requestKey: 'mcp-queued-key', itemIndex })));
   });
 
+  it('a batch of several recipes stores a shared precise reference once and gives every image its bytes back, also after a restart', async () => {
+    const png = new PNG({ width: 8, height: 8 }); png.data.fill(200); const bytes = PNG.sync.write(png), data = bytes.toString('base64'), key = createHash('sha256').update(bytes).digest('hex');
+    const withReference = (positivePrompt: string, extra: Partial<GenerationSnapshot> = {}): GenerationSnapshot => ({ ...snapshot(), params: { ...snapshot().params, positivePrompt },
+      extras: { ...snapshot().extras, preciseReferences: [{ base64: '', type: 'character', strength: 1, fidelity: 1, prepared: true, sha256: key }] }, ...extra });
+    const snapshots = [withReference('first', { referenceImages: { [key]: data } }), withReference('second'), { ...snapshot(), params: { ...snapshot().params, positivePrompt: 'plain' } }, withReference('fourth')];
+    let busy = false;
+    const first = await queueSetup({ isBusy: () => busy });
+    const input: Record<string, unknown> = queued({ requestKey: 'shared-reference', count: 4, snapshots, snapshot: undefined, seeds: [1, 2, 3, 4], seedMode: undefined }); delete input.seedMode;
+    // A table that does not hold what the recipes name is refused before anything is stored.
+    const broken = structuredClone(input) as any; broken.requestKey = 'broken-reference'; broken.snapshots[0].referenceImages = {};
+    await expect(first.service.enqueue(broken)).rejects.toMatchObject({ code: 'invalid_arguments', message: 'A precise reference has no image bytes.' });
+    const batch = await first.service.enqueue(input);
+    const stored = await fs.readFile(path.join(first.runtimeDir, 'frozen-queue', `${batch.batchId}.input.json`), 'utf8');
+    expect(stored.split(data).length - 1).toBe(1); // the image is on disk once for four recipes
+    // The same plan under its key is the same batch; other bytes under it are a conflict.
+    expect((await first.service.enqueue(structuredClone(input))).batchId).toBe(batch.batchId);
+    await expectCount(first, 1); first.settle(0); await expectCount(first, 2);
+    busy = true; first.settle(1); await waitUntil(() => expect(first.read(batch).items[1].status).toBe('succeeded'));
+    await first.service.dispose();
+    // After a restart the remaining images still get the stored bytes.
+    const second = setup({ runtimeDir: first.runtimeDir }); await second.service.ready;
+    await waitUntil(() => expect(second.accepted).toHaveLength(1)); second.settle(0);
+    await waitUntil(() => expect(second.accepted).toHaveLength(2)); second.settle(1);
+    await waitUntil(() => expect(second.service.read({ workspaceId: 'viewer', batchId: batch.batchId }).status).toBe('succeeded'));
+    const sent = [...first.accepted, ...second.accepted].map(item => item.snapshot);
+    expect(sent.map(item => item.params.positivePrompt)).toEqual(['first', 'second', 'plain', 'fourth']);
+    expect(sent.map(item => item.params.seed)).toEqual([1, 2, 3, 4]);
+    for (const [index, item] of sent.entries()) {
+      expect(item.referenceImages, String(index)).toBeUndefined();
+      expect(item.extras.preciseReferences, String(index)).toEqual(index === 2 ? [] : [{ base64: data, type: 'character', strength: 1, fidelity: 1, prepared: true, sha256: key }]);
+    }
+  });
+
   it('persists immutable inputs before accepting and submitting status before calling the single executor', async () => {
     let busy = true;
     const h = await queueSetup({ isBusy: () => busy });

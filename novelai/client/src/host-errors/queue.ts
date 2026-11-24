@@ -103,7 +103,8 @@ export const QUEUE_ERROR_TEXTS: HostErrorTexts = {
   // Failures the generation request found itself (electron/ipc/nai.ts, step 4c1: they reached an English window in Chinese)
   "generation.precise_undecodable": { "zh-CN": "精准参考图 #{index} 无法解码，请换用有效的 PNG、JPG 或 WebP 图片。", "en-US": "Precise reference #{index} cannot be decoded; use a valid PNG, JPG or WebP image." },
   "generation.precise_size": { "zh-CN": "精准参考图 #{index} 尺寸无效，请换用有效的 PNG、JPG 或 WebP 图片。", "en-US": "Precise reference #{index} has an invalid size; use a valid PNG, JPG or WebP image." },
-  "generation.precise_model": { "zh-CN": "精准参考当前仅支持 NovelAI V4.5；请切换到 V4.5 Full/Curated，或移除精准参考图。", "en-US": "Precise references work with NovelAI V4.5 only for now; switch to V4.5 Full or Curated, or remove the precise references." },
+  "generation.precise_model": { "zh-CN": "精准参考目前只支持 NovelAI V4.5 和 V5；请切换到其中一个模型，或移除精准参考图。", "en-US": "Precise references work with NovelAI V4.5 and V5 only; switch to one of those models, or remove the precise references." },
+  "generation.precise_limit": { "zh-CN": "一次请求最多带 {limit} 张精准参考图（现在有 {count} 张）；请移除一些再试。", "en-US": "A request takes at most {limit} precise references (there are {count}); remove some and try again." },
   "generation.vibe_model": { "zh-CN": "NovelAI V5 当前不支持氛围迁移（Vibe Transfer）；请切换到 V4.5，或移除氛围图。", "en-US": "NovelAI V5 does not support Vibe Transfer for now; switch to V4.5, or remove the Vibe images." },
   "generation.vibe_encode_failed": { "zh-CN": "参考图编码失败（encode-vibe）：{detail}", "en-US": "Encoding a Vibe image failed (encode-vibe): {detail}" },
   "generation.zip_undecodable": { "zh-CN": "NovelAI 返回压缩包中的图片无法解码；未自动重试生成。", "en-US": "An image in NovelAI’s ZIP answer cannot be decoded; the generation was not retried." },
@@ -117,5 +118,5 @@ export const QUEUE_ERROR_TEXTS: HostErrorTexts = {
   "generation.stream_no_image": { "zh-CN": "流式生成结束，但没有收到最终图片。为避免重复扣费，未自动重发请求。", "en-US": "The stream ended without a final image; the request was not resent, to avoid charging twice." },
   "generation.image_load_failed": { "zh-CN": "加载图片失败：{detail}", "en-US": "Loading the image failed: {detail}" },
   "generation.post_undecodable": { "zh-CN": "后期返回的图片不能解码。", "en-US": "The image the post-processing returned cannot be decoded." },
-  "generation.queue_references": { "zh-CN": "队列出图暂不执行 Precise/Vibe 参考编码或参考出图；素材和模型保持不变。", "en-US": "Queued generation does not encode Precise/Vibe references or generate with them; the references and the model are kept." },
+  "generation.queue_references": { "zh-CN": "队列出图不发送氛围迁移（Vibe Transfer）参考图（它需要先单独付费编码一次），请移除；精准参考图可以发送。", "en-US": "Queued generation does not send Vibe Transfer references (they need a separate paid encode request); remove them. Precise references are sent." },
 };

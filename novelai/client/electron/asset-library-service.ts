@@ -60,6 +60,8 @@ export function createAssetLibraryService(options: {
       if (['tag','combo','note','study'].includes(kind)) error('invalid_argument', `${kind} update only allows fields: ${permitted}. Put note prose in notes; edit the full content and source in the editor of the item.`, 'library.update_fields_notes', { kind, fields: permitted });
       error('invalid_argument', `${kind} update only allows fields: ${permitted}.`, 'library.update_fields', { kind, fields: permitted });
     }
+    // The update schema takes a precise preset's V5 strength (up to 5); a Vibe preset stays within 0–1.
+    if (item.kind === 'reference_preset' && item.payload.kind !== 'precise' && typeof patch.strength === 'number' && patch.strength > 1) error('invalid_argument', 'A Vibe reference preset takes a strength from 0 to 1; only a precise reference preset goes up to 5.', 'library.update_vibe_strength', { max: 5 });
     if (item.kind === 'history' && patch.groupId && !repo.collections('history').some(value => value.id === patch.groupId)) error('library_not_found', 'This history group does not exist.', 'library.history_group_not_found');
     if (['id','filePath','fileUrl','generationOrigin','image','previewImages','sections','source'].some(key => key in patch)) error('invalid_argument', 'Images, identity and source can only be changed through their own import or save entry points.', 'library.immutable_fields');
     const updatedAt = new Date().toISOString();

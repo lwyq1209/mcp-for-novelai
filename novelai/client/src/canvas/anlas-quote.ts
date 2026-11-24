@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useAppStore } from '../store';
 import { adaptiveNAIImageSize } from '../nai-dimensions';
-import type { AnlasQuoteFeature, AnlasQuoteResult } from '../types';
+import type { AnlasQuoteFeature, AnlasQuoteResult, PreciseReferenceType } from '../types';
 
 /**
  * The cost shown before a manual generation (step 4b3: moved here unchanged from the old FeatureCostCard of App.tsx,
@@ -27,7 +27,8 @@ export function useAnlasQuote(feature: AnlasQuoteFeature, override?: QuoteOverri
   const directorTool = useAppStore((state) => state.directorTool);
   const workbenchImage = useAppStore((state) => state.workbenchImage);
   const vibeCount = useAppStore((state) => state.vibeImages.length);
-  const preciseCount = useAppStore((state) => state.preciseReferences.length);
+  // The types too: a model that has no Outfit references skips them, and they are not charged.
+  const preciseTypes = useAppStore((state) => state.preciseReferences.map((reference) => reference.type).join("|"));
   const [quote, setQuote] = useState<AnlasQuoteResult | null>(null);
   const [loading, setLoading] = useState(false);
   const balance = account.anlasBalance;
@@ -53,7 +54,7 @@ export function useAnlasQuote(feature: AnlasQuoteFeature, override?: QuoteOverri
     workbenchWidth: workbenchImage?.width ?? 0,
     workbenchHeight: workbenchImage?.height ?? 0,
     vibeCount,
-    preciseCount,
+    preciseTypes,
     hasToken: account.hasToken,
     tierLevel: account.tierLevel,
     active: account.hasActiveSubscription,
@@ -85,9 +86,9 @@ export function useAnlasQuote(feature: AnlasQuoteFeature, override?: QuoteOverri
       const extras = {
         vibeImages: Array.from({ length: vibeCount }, () => ({ base64: "", infoExtracted: 1, strength: 1 })),
         charCaptions: [],
-        preciseReferences: Array.from({ length: preciseCount }, () => ({
+        preciseReferences: (preciseTypes ? preciseTypes.split("|") : []).map((type) => ({
           base64: "",
-          type: "character" as const,
+          type: type as PreciseReferenceType,
           strength: 1,
           fidelity: 1,
         })),

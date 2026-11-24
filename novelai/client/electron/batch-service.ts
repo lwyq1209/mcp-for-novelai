@@ -184,6 +184,32 @@ function reasonOf(error: unknown): { reason?: string; params?: Record<string, st
   return { reason: value.reason, ...(params && Object.keys(params).length ? { params } : {}) };
 }
 function errorCode(error: unknown): string { return error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : 'batch_error'; }
+/**
+ * The frozen recipe of one image as it is submitted. A batch of several recipes stores each precise reference's
+ * request image once, on its first snapshot (referenceImages, by sha256; queue-recipe-service shareReferenceImages);
+ * this copy gets the bytes back and never carries the table. A reference whose bytes are missing keeps its empty
+ * base64, which the generation service refuses before anything is sent.
+ */
+export function inflateReferenceImages(snapshots: GenerationSnapshot[], index: number): GenerationSnapshot {
+  const { referenceImages: _table, ...stored } = snapshots[index];
+  const snapshot = structuredClone(stored) as GenerationSnapshot, table = snapshots[0]?.referenceImages;
+  const references = snapshot.extras?.preciseReferences;
+  if (table && references?.length) snapshot.extras = { ...snapshot.extras, preciseReferences: references.map(reference =>
+    !reference.base64 && reference.sha256 && typeof table[reference.sha256] === 'string' ? { ...reference, base64: table[reference.sha256] } : reference) };
+  return snapshot;
+}
+/** Why a submitted set of snapshots has an unusable reference table, or null: every shared reference names an image the table holds, and every image is the one its key names. */
+export function referenceTableProblem(snapshots: GenerationSnapshot[]): string | null {
+  const table = snapshots[0]?.referenceImages;
+  if (snapshots.slice(1).some(snapshot => snapshot?.referenceImages !== undefined)) return 'Only the first frozen recipe may carry the shared reference images.';
+  if (table !== undefined) {
+    if (!table || typeof table !== 'object' || Array.isArray(table)) return 'The shared reference images are invalid.';
+    for (const [key, data] of Object.entries(table)) if (!/^[a-f0-9]{64}$/.test(key) || typeof data !== 'string' || !data || createHash('sha256').update(Buffer.from(data, 'base64')).digest('hex') !== key) return 'A shared reference image does not match its sha256.';
+  }
+  for (const snapshot of snapshots) for (const reference of Array.isArray(snapshot?.extras?.preciseReferences) ? snapshot.extras.preciseReferences : [])
+    if (!reference?.base64 && !(typeof reference?.sha256 === 'string' && typeof table?.[reference.sha256] === 'string')) return 'A precise reference has no image bytes.';
+  return null;
+}
 const snapshotHash = (input: Record<string, any>) => createHash('sha256').update(JSON.stringify(canonical(input.snapshots ?? [input.snapshot])), 'utf8').digest('hex');
 /** A durable queued batch derives a missing i2i/enhance extra-noise seed from its own identity
  * (workspace, requestKey, snapshot index) instead of drawing it. The frozen input then stores the
@@ -570,7 +596,7 @@ export function createBatchService(deps: BatchDependencies) {
     let child = found.value;
     if (!child) {
       if (interrupted(entry)) { item.status = 'pending'; item.startedAt = null; entry.public.activeIndex = null; return 'next'; }
-      let snapshot = structuredClone(entry.snapshots![entry.snapshots!.length === 1 ? 0 : item.index]);
+      let snapshot = inflateReferenceImages(entry.snapshots!, entry.snapshots!.length === 1 ? 0 : item.index);
       snapshot.params = { ...snapshot.params, seed: item.plannedSeed, seedMode: 'fixed' };
       snapshot.batchCount = 1;
       if (entry.manual?.prepare) snapshot = entry.manual.prepare(snapshot, item.index);
@@ -665,6 +691,8 @@ export function createBatchService(deps: BatchDependencies) {
     if (perItem ? !Array.isArray(input.snapshots) || input.snapshots.length !== args.count || input.snapshot !== undefined : input.snapshots !== undefined) return fail('invalid_arguments', 'Per-image frozen recipes must match count; snapshot and snapshots cannot be mixed.');
     const snapshots = structuredClone(perItem ? input.snapshots : [record(input.snapshot)]) as GenerationSnapshot[];
     for (const snapshot of snapshots) { record(snapshot); record(snapshot.params); record(snapshot.extras); }
+    const referenceProblem = referenceTableProblem(snapshots);
+    if (referenceProblem) return fail('invalid_arguments', referenceProblem);
     // A manual i2i draws its extra noise seed per image, as the window always did.
     if (!manual) resolveNoiseSeeds(snapshots, args);
     // Durable identity of the recipes exactly as frozen (storage and recover verify the same hash).
@@ -694,6 +722,7 @@ export function createBatchService(deps: BatchDependencies) {
     // A compacted input has no recipes left to submit; only an ended batch may own one.
     if (compaction && !isBatchTerminal(job.status)) return storageFailed();
     if (original) for (const snapshot of original.snapshots) { record(snapshot); record(snapshot.params); record(snapshot.extras); }
+    if (original && referenceTableProblem(original.snapshots)) return storageFailed();
     // source (step 4a) is absent on batches stored before it; it never changes after the enqueue.
     const immutable = ['batchId','execution','originWorkspaceId','expectedRevision','submittedRevision','requestKey','mode','count','intervalSeconds','seedMode','scenePlanHash','draftId','createdAt','source'];
     for (const key of immutable) if (JSON.stringify((job as any)[key]) !== JSON.stringify((input.initial as any)[key])) return storageFailed();

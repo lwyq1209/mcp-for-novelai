@@ -130,11 +130,41 @@ describe('Queue generation policy through the real NovelAI generation functions'
     expect(fixture.post.mock.calls[0][1].parameters.v4_prompt.caption.char_captions).toHaveLength(1);
   });
 
-  it('rejects Vibe and Precise references before any generation or encode POST', async () => {
-    for (const refs of [{ vibeImages: [{ base64: IMAGE.toString('base64'), strength: 1, infoExtracted: 1 }] }, { preciseReferences: [{ base64: IMAGE.toString('base64'), type: 'character', strength: 1, fidelity: 1 }] }]) {
-      await expect(generateImage(params, { ...extras, ...refs } as any, undefined, options())).rejects.toMatchObject({ code: 'unsupported_reference' });
-    }
+  it('rejects Vibe references before any generation or encode POST (a queued image is one request)', async () => {
+    await expect(generateImage(params, { ...extras, vibeImages: [{ base64: IMAGE.toString('base64'), strength: 1, infoExtracted: 1 }] } as any, undefined, options())).rejects.toMatchObject({ code: 'unsupported_reference', message: expect.stringContaining('Vibe Transfer') });
     expect(fixture.post).not.toHaveBeenCalled();
+  });
+
+  it('sends a queued image\'s precise references inside its one request: a prepared image as it is, another prepared for the model', async () => {
+    const part = (body: any, name: string) => {
+      const buffer: Buffer = body.getBuffer(), header = Buffer.from(`name="${name}"`), at = buffer.indexOf(header);
+      expect(at, name).toBeGreaterThan(-1);
+      const start = buffer.indexOf('\r\n\r\n', at) + 4, end = buffer.indexOf(`\r\n--${body.getBoundary()}`, start);
+      return buffer.subarray(start, end);
+    };
+    // Prepared when the recipe was reviewed: sent byte for byte, whatever its size.
+    fixture.post.mockResolvedValueOnce(await archive());
+    const prepared = await generateImage(params, { ...extras, preciseReferences: [{ base64: IMAGE.toString('base64'), type: 'costume', strength: 1.5, fidelity: 1, prepared: true }] }, undefined, options());
+    expect(prepared.ok).toBe(true); expect(fixture.post).toHaveBeenCalledTimes(1);
+    let body = fixture.post.mock.calls[0][1];
+    expect(part(body, 'director_ref_0').equals(IMAGE)).toBe(true);
+    const request = JSON.parse(part(body, 'request').toString('utf8'));
+    expect(request.model).toBe('nai-diffusion-5-full');
+    expect(request.parameters.director_reference_descriptions).toEqual([{ caption: { base_caption: 'costume', char_captions: [] }, legacy_uc: false }]);
+    expect(request.parameters.director_reference_strength_values).toEqual([1.5]);
+    expect(request.parameters.director_reference_secondary_strength_values).toEqual([0]);
+    expect(request.parameters.director_reference_images).toBeUndefined();
+    expect(request.parameters.director_reference_images_cached).toHaveLength(1);
+    // Not prepared (a canvas submission): cropped to its V5 bucket here, still one request.
+    fixture.post.mockResolvedValueOnce(await archive());
+    const raw = await generateI2I(params, { strength: 0.5, noise: 0, extraNoiseSeed: 42 }, { ...extras, preciseReferences: [{ base64: IMAGE.toString('base64'), type: 'character', strength: 1, fidelity: 1 }] }, options(IMAGE));
+    expect(raw.ok).toBe(true); expect(fixture.post).toHaveBeenCalledTimes(2);
+    body = fixture.post.mock.calls[1][1];
+    const sent = PNG.sync.read(part(body, 'director_ref_0'));
+    expect([sent.width, sent.height]).toEqual([1024, 1024]);
+    // A model without the feature refuses before any request.
+    await expect(generateImage({ ...params, model: 'nai-diffusion-4-full' }, { ...extras, preciseReferences: [{ base64: IMAGE.toString('base64'), type: 'character', strength: 1, fidelity: 1 }] }, undefined, options())).resolves.toMatchObject({ ok: false });
+    expect(fixture.post).toHaveBeenCalledTimes(2);
   });
 
   it('uses frozen img2img bytes even when the global workbench points to a different nonexistent image', async () => {

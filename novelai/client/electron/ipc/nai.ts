@@ -24,8 +24,10 @@ import {
   assertPromptAssemblyVersion,
   isNAIV4PlusModel,
   normalizeGenerateParams,
-  supportsNAIPreciseReference,
+  naiPreciseReferenceCapability,
+  resolveNAIPreciseReferences,
   supportsNAIVibeTransfer,
+  MAX_NAI_PRECISE_REFERENCES,
   MAX_NAI_DIRECTOR_INPUT_PIXELS,
   MAX_NAI_UPSCALE_INPUT_PIXELS,
   MAX_NAI_UPSCALE_OUTPUT_DIMENSION,
@@ -53,6 +55,7 @@ import {
 import { inspectImageMetadata, parseImageMeta } from "../../src/png-meta";
 import { calculateFeatureAnlasQuote } from "../../src/anlas";
 import { applyNAIEffort, naiRequestModel } from "../../src/nai-effort";
+import { naiReferenceBucket } from "../../src/nai-dimensions";
 import { compactRemoteErrorText, describeRemoteError, type RemoteError } from "../../src/error-message";
 import { hostError, type HostErrorParams } from "../host-error";
 import { cleanUpstreamText, type UpstreamReason } from "../upstream-reason";
@@ -497,6 +500,37 @@ function prepareDirectorReferenceImage(
   return PNG.sync.write(canvas).toString("base64");
 }
 
+/**
+ * V5 Precise Reference preprocessing, as the official client does it (bucketCharacterReferences, build fac57e6): the
+ * image is resized to cover the ~1 MP bucket closest to its aspect ratio and cropped around its centre. Nothing is
+ * padded and the alpha channel is kept. An image that already has its bucket's size is sent as it is.
+ */
+export async function prepareDirectorReferenceBucket(rawBase64: string, index: number): Promise<string> {
+  const bytes = Buffer.from(rawBase64, "base64");
+  let width: number | undefined, height: number | undefined;
+  try { ({ width, height } = await sharp(bytes, { limitInputPixels: 64 * 1024 * 1024, pages: 1 }).metadata()); }
+  catch { throw generationRefusal("generation.precise_undecodable", `Precise reference #${index + 1} cannot be decoded; use a valid PNG, JPG or WebP image.`, { index: index + 1 }); }
+  if (!width || !height) throw generationRefusal("generation.precise_size", `Precise reference #${index + 1} has an invalid size; use a valid PNG, JPG or WebP image.`, { index: index + 1 });
+  const bucket = naiReferenceBucket(width, height);
+  const png = bucket.unchanged && bytes.subarray(0, 8).equals(PNG_SIGNATURE)
+    ? bytes
+    : await sharp(bytes, { limitInputPixels: 64 * 1024 * 1024, pages: 1 })
+        .resize(bucket.resizeWidth, bucket.resizeHeight, { fit: "fill", kernel: "lanczos3" })
+        .extract({ left: bucket.left, top: bucket.top, width: bucket.width, height: bucket.height })
+        .png()
+        .toBuffer();
+  logInfo(`precise-ref image #${index + 1}: src ${width}x${height} → bucket ${bucket.width}x${bucket.height}` +
+    (bucket.unchanged ? " (unchanged)" : ` (resized ${bucket.resizeWidth}x${bucket.resizeHeight}, centre crop)`));
+  return png.toString("base64");
+}
+
+/** The request image of one precise reference for a model's preprocessing ("pad": V4.5, "bucket": V5), as base64 PNG. */
+export async function prepareDirectorReference(rawBase64: string, index: number, preprocess: "pad" | "bucket"): Promise<string> {
+  return preprocess === "bucket"
+    ? prepareDirectorReferenceBucket(rawBase64, index)
+    : prepareDirectorReferenceImage((await processableImage(Buffer.from(rawBase64, "base64"))).toString("base64"), index);
+}
+
 function vibeCacheKey(
   rawBase64: string,
   model: string,
@@ -545,21 +579,26 @@ export async function prepareExtras(
   if (!extras) return extras;
   if (extras.vibeImages?.length) extras = {...extras, vibeImages: await Promise.all(extras.vibeImages.map(async ref => ({...ref, base64:(await processableImage(Buffer.from(stripBase64Prefix(ref.base64), "base64"))).toString("base64")})))};
 
-  // Precise/director references: any size accepted, preprocessed to the nearest
-  // of NovelAI's three official sizes (scale-to-fit + black pad), matching the
-  // official client.
+  // Precise/director references: any size accepted and preprocessed as the official client does for the model —
+  // V4.5: fitted into the nearest of three sizes and padded; V5: cropped to the nearest ~1 MP bucket. Only the
+  // references the model takes are prepared and sent (resolveNAIPreciseReferences: V4.5 skips Outfit references).
   let preciseReferences = extras.preciseReferences;
   if (preciseReferences && preciseReferences.length > 0) {
-    if (!supportsNAIPreciseReference(params.model)) {
-      throw generationRefusal("generation.precise_model", "Precise references work with NovelAI V4.5 only for now; switch to V4.5 Full or Curated, or remove the precise references.");
+    const capability = naiPreciseReferenceCapability(params.model);
+    if (!capability) {
+      throw generationRefusal("generation.precise_model", "Precise references work with NovelAI V4.5 and V5 only; switch to one of those models, or remove the precise references.");
     }
-    preciseReferences = await Promise.all(preciseReferences.map(async (ref, index) => ({
-      ...ref,
-      base64: prepareDirectorReferenceImage(
-        (await processableImage(Buffer.from(stripBase64Prefix(ref.base64), "base64"))).toString("base64"),
-        index,
-      ),
-    })));
+    preciseReferences = resolveNAIPreciseReferences(preciseReferences, params.model);
+    if (preciseReferences.length > MAX_NAI_PRECISE_REFERENCES) {
+      throw generationRefusal("generation.precise_limit", `A request takes at most ${MAX_NAI_PRECISE_REFERENCES} precise references; remove some and try again.`, { limit: MAX_NAI_PRECISE_REFERENCES, count: preciseReferences.length });
+    }
+    preciseReferences = await Promise.all(preciseReferences.map(async (ref, index) => {
+      const raw = stripBase64Prefix(ref.base64);
+      // A queued recipe was prepared when it was reviewed: its bytes are the request image (the one its readback
+      // names by sha256) and are sent as they are.
+      if (ref.prepared) return { ...ref, base64: raw };
+      return { ...ref, base64: await prepareDirectorReference(raw, index, capability.preprocess) };
+    }));
   }
 
   if (!extras.vibeImages || extras.vibeImages.length === 0) {
@@ -1848,9 +1887,13 @@ export interface GenerationExecutionOptions {
 /** A queue execution with the queue's single-request rules (not a manual batch item). */
 const strictQueue = (execution?: GenerationExecutionOptions) => Boolean(execution && !execution.manual);
 
+/**
+ * A queued request is one provider request. Precise references travel inside it (prepared when the recipe was
+ * reviewed), so the queue sends them; Vibe Transfer needs a separate paid encode-vibe request first and stays refused.
+ */
 function assertQueueReferences(extras: GenerateExtras | undefined, execution?: GenerationExecutionOptions) {
-  if (strictQueue(execution) && ((extras?.vibeImages?.length ?? 0) > 0 || (extras?.preciseReferences?.length ?? 0) > 0)) {
-    throw generationRefusal("generation.queue_references", "Queued generation does not encode Precise/Vibe references or generate with them; the references and the model are kept.", undefined, "unsupported_reference");
+  if (strictQueue(execution) && (extras?.vibeImages?.length ?? 0) > 0) {
+    throw generationRefusal("generation.queue_references", "Queued generation does not send Vibe Transfer references (they need a separate paid encode request); remove them. Precise references are sent.", undefined, "unsupported_reference");
   }
 }
 

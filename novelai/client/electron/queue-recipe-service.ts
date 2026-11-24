@@ -4,7 +4,8 @@ import { constants } from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID, randomInt } from 'node:crypto';
 import { renameReplace, syncDirectory } from './platform-fs';
-import { DEFAULT_PARAMS, DEFAULT_I2I_PARAMS, DEFAULT_AUGMENT_OPTIONS, type HistoryItem } from '../src/types';
+import { DEFAULT_PARAMS, DEFAULT_I2I_PARAMS, DEFAULT_AUGMENT_OPTIONS, MAX_NAI_PRECISE_REFERENCES, MAX_PRECISE_REFERENCE_STRENGTH, PRECISE_REFERENCE_TYPES, isPreciseReferenceType, naiPreciseReferenceCapability, type HistoryItem, type PreciseReferenceType } from '../src/types';
+import { queuedPreciseReferenceProblem, QUEUE_VIBE_REFUSAL } from '../src/workspace/generation-input';
 import { readSavedGenerationResult } from './generation-result';
 import { record, validatePatch, type CreativeState } from '../src/workspace/state';
 import { authoredPromptReview, type PromptReviewPreparation, type PromptReviewInput } from '../src/workspace/prompt-review';
@@ -35,7 +36,8 @@ export interface QueueHistoryReference { kind: 'history'; id: string; revision: 
 /** A study has exactly one registered original, so its reference carries no assetId. */
 export interface QueueStudyReference { kind: 'study'; id: string; revision: number }
 export type QueueLibraryReference = QueueHistoryReference | QueueStudyReference;
-export interface QueueReferenceAsset { role: 'source'; mimeType: string; ref: QueueLibraryReference; sha256: string; byteLength: number }
+/** role: "source", or "preciseReferences:N" for the image of the recipe's N-th precise reference. */
+export interface QueueReferenceAsset { role: string; mimeType: string; ref: QueueLibraryReference; sha256: string; byteLength: number }
 export type QueueAsset = QueueInlineAsset | QueueReferenceAsset;
 export interface QueuePreparation { mode: PromptReviewPreparation['mode']; authored: Record<string, any>; assets: QueueAsset[] }
 /** The host library reader (asset-library-image createHistoryImageReader); it reads history and study originals. */
@@ -100,15 +102,58 @@ const FROZEN_RECLAIM_LIMIT = 8;
 /** Room kept beyond the estimate for in-flight batches that save progress between this precheck and the
  * frozen create (one maximal state revision; typical saves are a few KiB, so this covers hundreds). */
 export const FROZEN_PRECHECK_SAVE_MARGIN = FROZEN_QUEUE_LIMITS.state;
+const PRECISE_REFERENCE_ROLE = /^preciseReferences:(0|[1-9]\d?)$/;
+const isPreciseReferenceRole = (role: unknown): role is string => typeof role === 'string' && PRECISE_REFERENCE_ROLE.test(role);
+/** The largest request image of one precise reference as base64: an RGBA PNG of the model's largest request size
+ * (V5: a 1024×1024 bucket; V4.5: 1472×1472) is never larger than its raw scanlines plus a little framing. */
+const requestReferenceUpperBound = (model: unknown) => {
+  const capability = naiPreciseReferenceCapability(typeof model === 'string' ? model : '');
+  const pixels = capability?.preprocess === 'pad' ? 1472 * 1472 : 1024 * 1024;
+  return Math.ceil((pixels * 4 * 1.002 + 8192) / 3) * 4 + 256;
+};
+const referenceIdentity = (asset: QueueAsset, model: unknown) => `${naiPreciseReferenceCapability(typeof model === 'string' ? model : '')?.preprocess ?? 'none'}:${isReferenceAsset(asset) ? asset.sha256 : createHash('sha256').update(asset.data).digest('hex')}`;
 /** Upper bound of one frozen snapshot from a stored preparation, before anything is built: the snapshot
- * carries a subset of the normalized authored fields plus the source/mask base64; 1 KiB covers its small extras. */
-const frozenSnapshotUpperBound = (preparation: QueuePreparation) => Buffer.byteLength(JSON.stringify(preparation.authored)) + 1024
-  + preparation.assets.reduce((sum, asset) => sum + (Object.hasOwn(asset, 'ref') ? Math.ceil((asset as QueueReferenceAsset).byteLength / 3) * 4 : Buffer.byteLength((asset as QueueInlineAsset).data)), 0);
+ * carries a subset of the normalized authored fields plus the source/mask base64; 1 KiB covers its small extras.
+ * A precise reference is frozen as its request image, not its original. `shared` (a batch of several recipes, which
+ * stores each request image once) holds the references already counted: a repeat costs only its hash. */
+const frozenSnapshotUpperBound = (preparation: QueuePreparation, shared?: Set<string>) => Buffer.byteLength(JSON.stringify(preparation.authored)) + 1024
+  + preparation.assets.reduce((sum, asset) => {
+    if (isPreciseReferenceRole(asset.role)) {
+      const model = preparation.authored?.params?.model, identity = shared ? referenceIdentity(asset, model) : '';
+      if (shared?.has(identity)) return sum + 256;
+      shared?.add(identity);
+      return sum + requestReferenceUpperBound(model);
+    }
+    return sum + (Object.hasOwn(asset, 'ref') ? Math.ceil((asset as QueueReferenceAsset).byteLength / 3) * 4 : Buffer.byteLength((asset as QueueInlineAsset).data));
+  }, 0);
+const withoutReferenceTable = (snapshot: GenerationSnapshot): GenerationSnapshot => { if (!snapshot.referenceImages) return snapshot; const { referenceImages: _table, ...own } = snapshot; return own; };
+/**
+ * The snapshots of a batch of several recipes with each precise reference's request image stored once: every
+ * reference keeps its sha256 and an empty base64, and the first snapshot carries the table (referenceImages, by
+ * sha256). The batch service puts the bytes back when it submits an image (batch-service inflateReferenceImages).
+ * Snapshots without references are returned as they are.
+ */
+export function shareReferenceImages(snapshots: GenerationSnapshot[]): GenerationSnapshot[] {
+  if (!snapshots.some(snapshot => snapshot.extras?.preciseReferences?.length)) return snapshots;
+  const table: Record<string, string> = {};
+  const shared = snapshots.map(snapshot => {
+    const references = snapshot.extras?.preciseReferences;
+    if (!references?.length) return snapshot;
+    return { ...snapshot, extras: { ...snapshot.extras, preciseReferences: references.map(reference => {
+      const sha256 = reference.sha256 ?? createHash('sha256').update(Buffer.from(reference.base64, 'base64')).digest('hex');
+      table[sha256] ??= reference.base64;
+      return { ...reference, base64: '', sha256 };
+    }) } };
+  });
+  shared[0] = { ...shared[0], referenceImages: table };
+  return shared;
+}
 /** Conservative upper bound of what the frozen queue adds for one submission (one item per entry, in order):
  * stored input (snapshots — one when every item is the same recipe — request, fingerprint, initial job),
  * its current state, the first history state and the create transaction. */
 export function estimateFrozenBatchBytes(requestKey: string, items: Array<{ recipe: string; preparation: QueuePreparation }>) {
-  const single = new Set(items.map(entry => entry.recipe)).size === 1, snapshots = (single ? items.slice(0, 1) : items).reduce((sum, entry) => sum + frozenSnapshotUpperBound(entry.preparation), 0);
+  const single = new Set(items.map(entry => entry.recipe)).size === 1, shared = single ? undefined : new Set<string>();
+  const snapshots = (single ? items.slice(0, 1) : items).reduce((sum, entry) => sum + frozenSnapshotUpperBound(entry.preparation, shared), 0);
   const key = Buffer.byteLength(JSON.stringify(requestKey)), count = items.length;
   const job = 1024 + 2 * key + count * 320, request = 256 + key + count * 12;
   const input = snapshots + 3 * request + job + 512;
@@ -142,6 +187,24 @@ const preflight = (value: unknown, maximum = MAX_BYTES) => {
   }
 };
 
+/**
+ * The authored settings of a recipe's precise references, without bytes (each image is the asset
+ * preciseReferences:N): type (NovelAI's wire name), strength 0–5 (the request clamps it to the model: V4.5 takes at
+ * most 1) and fidelity 0–1 (V4.5 only; default 1). name and informationExtracted are kept as a canvas wrote them.
+ */
+function authoredPreciseReferences(raw: unknown) {
+  if (!Array.isArray(raw) || raw.length > 64) fail('invalid_argument', 'preciseReferences must be an array of reference settings.');
+  const finite = (value: unknown, minimum: number, maximum: number, name: string) => { if (typeof value !== 'number' || !Number.isFinite(value) || value < minimum || value > maximum) fail('invalid_argument', `A precise reference ${name} must be a number from ${minimum} to ${maximum}.`); return value as number; };
+  return (raw as unknown[]).map(item => {
+    const reference = record(item, 'precise reference'); keys(reference, ['name', 'type', 'strength', 'fidelity', 'informationExtracted']);
+    if (!isPreciseReferenceType(reference.type)) fail('invalid_argument', `Invalid precise reference type; use one of: ${PRECISE_REFERENCE_TYPES.join(', ')}.`);
+    if (reference.name !== undefined && (typeof reference.name !== 'string' || reference.name.length > 1000)) fail('invalid_argument', 'A precise reference name must be at most 1000 characters.');
+    return { ...(reference.name !== undefined ? { name: reference.name as string } : {}), type: reference.type as PreciseReferenceType,
+      strength: finite(reference.strength, 0, MAX_PRECISE_REFERENCE_STRENGTH, 'strength'), fidelity: reference.fidelity === undefined ? 1 : finite(reference.fidelity, 0, 1, 'fidelity'),
+      ...(reference.informationExtracted !== undefined ? { informationExtracted: finite(reference.informationExtracted, 0, 1, 'informationExtracted') } : {}) };
+  });
+}
+
 /** Uses the editor's allowlist/normalizer with explicit defaults, never its store.
  * authoredAssembly (canvas captures): every prompt recipe (params, inpaintRecipe) keeps its promptAssemblyVersion
  * exactly as authored, so a canvas still on the historical assembly (no marker) is frozen as read_prompt_review shows it. */
@@ -164,20 +227,26 @@ export function normalizeQueuePreparation(raw: unknown, options: { newRecipe?: b
     if (!allowed.includes(patch[field])) fail('invalid_argument', `Invalid ${field}.`);
     defaults[field as keyof CreativeState] = patch[field]; delete patch[field];
   }
-  // Sources are bytes with roles, not renderer paths or IDs. Reference transport is deferred.
+  // Sources are bytes with roles, not renderer paths or IDs.
   if ('inpaintMask' in patch) fail('invalid_argument', 'Supply mask bytes in preparation.assets.');
-  for (const field of ['vibeImages', 'preciseReferences']) {
-    if (field in patch && (!Array.isArray(patch[field]) || patch[field].length)) fail('unsupported_reference', 'Queued reference encoding is not implemented.');
-  }
+  // Vibe Transfer needs a separate paid encode request, so a queued recipe (one request per image) never has it.
+  if ('vibeImages' in patch && (!Array.isArray(patch.vibeImages) || patch.vibeImages.length)) fail('unsupported_reference', QUEUE_VIBE_REFUSAL);
+  delete patch.vibeImages;
+  // Precise references: the settings are authored here and each image is the asset preciseReferences:N (below).
+  const preciseReferences = 'preciseReferences' in patch ? authoredPreciseReferences(patch.preciseReferences) : [];
+  delete patch.preciseReferences;
   const state = Object.keys(patch).length ? { ...defaults, ...validatePatch(patch, defaults) } : defaults;
+  (state as Record<string, any>).preciseReferences = preciseReferences;
+  const referenceProblem = queuedPreciseReferenceProblem(preciseReferences, input.mode, String(state.params?.model ?? ''));
+  if (referenceProblem) fail('unsupported_reference', referenceProblem);
   // An independent inpaint recipe is merged over the base defaults; without its own marker it stays on the historical assembly.
   if (authoredAssembly && state.inpaintRecipe && authored.inpaintRecipe && typeof authored.inpaintRecipe === 'object' && !Object.hasOwn(authored.inpaintRecipe, 'promptAssemblyVersion')) {
     state.inpaintRecipe = { ...state.inpaintRecipe }; delete state.inpaintRecipe.promptAssemblyVersion;
   }
-  if (!Array.isArray(input.assets) || input.assets.length > 2) fail('invalid_argument', 'Provide assets:[] or source/mask image bytes.');
+  if (!Array.isArray(input.assets) || input.assets.length > 2 + MAX_NAI_PRECISE_REFERENCES) fail('invalid_argument', 'Provide assets:[] or source/mask image bytes and one image per precise reference.');
   for (const asset of input.assets) {
     if (asset && typeof asset === 'object' && Object.hasOwn(asset, 'ref')) {
-      const refusal = 'A referenced source needs role "source", a PNG/JPEG/WebP mimeType, ref {kind:"history", id, revision, assetId} or {kind:"study", id, revision}, sha256 and byteLength (at most 20 MiB).';
+      const refusal = 'A referenced image needs role "source" or "preciseReferences:N", a PNG/JPEG/WebP mimeType, ref {kind:"history", id, revision, assetId} or {kind:"study", id, revision}, sha256 and byteLength (at most 20 MiB).';
       keys(asset, ['role', 'mimeType', 'ref', 'sha256', 'byteLength']); const ref = record(asset.ref, 'source reference');
       // Exact key sets: a study (issue #2) is a study UUID and revision, no assetId (it has one registered original).
       const study = ref.kind === 'study';
@@ -185,16 +254,20 @@ export function normalizeQueuePreparation(raw: unknown, options: { newRecipe?: b
       else if (Object.keys(ref).some(key => !['kind', 'id', 'revision'].includes(key))) fail('invalid_argument', refusal);
       const validRef = study ? typeof ref.id === 'string' && UUID.test(ref.id) && Number.isSafeInteger(ref.revision) && ref.revision >= 1
         : ref.kind === 'history' && libraryIdentifier(ref.id) && Number.isSafeInteger(ref.revision) && ref.revision >= 0 && libraryIdentifier(ref.assetId);
-      if (asset.role !== 'source' || !IMAGE_TYPES.includes(asset.mimeType) || !validRef
+      if ((asset.role !== 'source' && !isPreciseReferenceRole(asset.role)) || !IMAGE_TYPES.includes(asset.mimeType) || !validRef
         || typeof asset.sha256 !== 'string' || !HASH.test(asset.sha256) || !Number.isSafeInteger(asset.byteLength) || asset.byteLength < 1 || asset.byteLength > RECIPE_ASSET_LIMITS.referenceBytes)
         fail('invalid_argument', refusal);
       continue;
     }
     keys(asset, ['role', 'mimeType', 'data', 'provenance']);
-    if (!['source', 'mask'].includes(asset.role) || !IMAGE_TYPES.includes(asset.mimeType) || typeof asset.data !== 'string') fail('invalid_argument', 'Invalid queue image asset.');
+    if ((!['source', 'mask'].includes(asset.role) && !isPreciseReferenceRole(asset.role)) || !IMAGE_TYPES.includes(asset.mimeType) || typeof asset.data !== 'string') fail('invalid_argument', 'Invalid queue image asset.');
     if (asset.provenance !== undefined && Buffer.byteLength(JSON.stringify(record(asset.provenance, 'asset provenance'))) > RECIPE_ASSET_LIMITS.provenanceBytes) fail('invalid_argument', 'Asset provenance exceeds 32 KiB.');
   }
   if (new Set(input.assets.map((asset: any) => asset.role)).size !== input.assets.length) fail('invalid_argument', 'Invalid or duplicate review image role.');
+  // Exactly one image per authored precise reference, numbered from 0 in the order of the references.
+  const referenceRoles = input.assets.map((asset: any) => asset.role).filter(isPreciseReferenceRole);
+  if (referenceRoles.length !== preciseReferences.length || preciseReferences.some((_, index) => !referenceRoles.includes(`preciseReferences:${index}`)))
+    fail('invalid_argument', `Every precise reference needs exactly one image asset: ${preciseReferences.length} reference(s) take the roles preciseReferences:0 … preciseReferences:${Math.max(0, preciseReferences.length - 1)}, and no other preciseReferences asset.`);
   const normalizedAuthored = authoredPromptReview(state), characters = Array.isArray(state.charCaptions) ? state.charCaptions : [];
   normalizedAuthored.charCaptions = (normalizedAuthored.charCaptions ?? []).map((character: any, index: number) => typeof characters[index]?.id === 'string' && characters[index].id ? { id: characters[index].id, ...character } : character);
   return { mode: input.mode, authored: normalizedAuthored, assets: structuredClone(input.assets) };
@@ -519,18 +592,26 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
     const bytes = Object.fromEntries(preparation.assets.map(asset => [asset.role, isReferenceAsset(asset) ? asset.byteLength : Buffer.byteLength(asset.data.replace(/^data:image\/(?:png|jpeg|webp|gif);base64,/, ''), 'base64')]));
     return { ...(refs.length ? { assetRefs: refs } : {}), ...(preparation.assets.length ? { assetBytes: bytes } : {}), ...(Object.keys(provenance).length ? { assetProvenance: provenance } : {}) };
   };
+  /** assetDetails plus the byte size of each precise reference's request image (request-reference:N), which is what
+   * a frozen batch stores for it; like the other sizes it stays outside reviewInput and inputHash. */
+  const reviewedAssetDetails = (preparation: QueuePreparation, reviewInput: PromptReviewInput) => {
+    const details = assetDetails(preparation);
+    const requests = Object.fromEntries(reviewInput.assets.filter(asset => asset.role.startsWith('request-reference:') && typeof asset.data === 'string').map(asset => [asset.role, Buffer.byteLength(asset.data, 'base64')]));
+    return Object.keys(requests).length ? { ...details, assetBytes: { ...details.assetBytes, ...requests } } : details;
+  };
   const snapshotFor = (entry: RecipeRecord, reviewInput: PromptReviewInput) => ({
     recipeId: entry.recipeId, recipeRevision: entry.recipeRevision, inputHash: inputHash(reviewInput),
     characterIds: characterIdsFor(entry.preparation),
     ...(entry.canvasOrigin ? { canvasOrigin: structuredClone(entry.canvasOrigin) } : {}),
     snapshot: { schemaVersion: 1 as const, workspaceId: `recipe:${entry.recipeId}`, revision: entry.recipeRevision, draftId: null, mode: entry.preparation.mode, reviewInput },
-    ...assetDetails(entry.preparation) });
+    ...reviewedAssetDetails(entry.preparation, reviewInput) });
   const assetDataOmitted = (value: unknown) => { if (value !== undefined && value !== 'omit' && value !== 'include') fail('invalid_argument', 'assetData must be "omit" or "include".'); return value === 'omit'; };
   const withoutAssetData = <T extends { snapshot: { reviewInput: PromptReviewInput } }>(result: T) => ({ ...result, snapshot: { ...result.snapshot, reviewInput: { ...result.snapshot.reviewInput, assets: result.snapshot.reviewInput.assets.map(({ data: _data, ...asset }) => asset) } } });
   type SourceOwner = { recipeId: string; recipeRevision: number } | null;
   const sourceFailure = (code: 'recipe_source_unavailable' | 'recipe_source_changed' | 'recipe_source_busy', asset: QueueReferenceAsset, owner: SourceOwner, detail: string, readerCode?: string): never => {
     const ref = asset.ref, identity = ref.kind === 'study' ? `study ${ref.id} revision ${ref.revision}` : `history ${ref.id} revision ${ref.revision}, asset ${ref.assetId}`;
-    const label = `${owner ? `Recipe ${owner.recipeId} revision ${owner.recipeRevision}` : 'The recipe'} source (${identity})`;
+    const what = isPreciseReferenceRole(asset.role) ? `precise reference #${Number(asset.role.slice('preciseReferences:'.length)) + 1}` : 'source';
+    const label = `${owner ? `Recipe ${owner.recipeId} revision ${owner.recipeRevision}` : 'The recipe'} ${what} (${identity})`;
     throw new WorkspaceError(code, `${label} ${detail}`, { ...(owner ? { recipeId: owner.recipeId, recipeRevision: owner.recipeRevision } : {}), ref: { ...asset.ref }, sha256: asset.sha256, byteLength: asset.byteLength, ...(readerCode ? { readerCode } : {}) });
   };
   /** Rereads one history or study original through the host reader and binds it to the recorded sha256/byteLength. */
@@ -548,7 +629,7 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
     if (typeof image?.data !== 'string') return sourceFailure('recipe_source_unavailable', asset, owner, `was not returned by the ${reader} reader. Nothing was saved or queued.`, 'invalid_reader_response');
     const bytes = Buffer.from(image.data, 'base64');
     if (bytes.length !== asset.byteLength || createHash('sha256').update(bytes).digest('hex') !== asset.sha256) return sourceFailure('recipe_source_changed', asset, owner, 'differs from the sha256/byteLength recorded for it. Nothing was saved or queued; prepare a new recipe from the current image.');
-    if (sniffImageType(bytes) !== asset.mimeType) fail('invalid_argument', 'The referenced source mimeType does not match the registered original.');
+    if (sniffImageType(bytes) !== asset.mimeType) fail('invalid_argument', 'The referenced image mimeType does not match the registered original.');
     return bytes;
   };
   /** Builder input with bytes: inline assets as stored, references reread and verified. */
@@ -1151,9 +1232,15 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
       // repeated recipe gets its own copy there, as if frozen separately (per-item noise seeds stay per item).
       const frozenPayload = (() => {
         if (frozenItems.length > 1 && checked.size === 1) return { snapshot: checked.get(frozenItems[0])!.frozen };
-        const firstUse = new Set<string>(), snapshots = frozenItems.map(identity => firstUse.has(identity) ? structuredClone(checked.get(identity)!.frozen) : (firstUse.add(identity), checked.get(identity)!.frozen));
-        const first = recipeHash(snapshots[0]);
-        return snapshots.length > 1 && snapshots.every(snapshot => recipeHash(snapshot) === first) ? { snapshot: snapshots[0] } : { snapshots };
+        // Several recipes: each request image of a precise reference is stored once for the batch (a set of recipes
+        // that share a character reference would otherwise hold one copy per image).
+        const shared = shareReferenceImages([...new Set(frozenItems)].map(identity => checked.get(identity)!.frozen));
+        const hoisted = new Map([...new Set(frozenItems)].map((identity, index) => [identity, shared[index]]));
+        const firstUse = new Set<string>(), snapshots = frozenItems.map(identity => firstUse.has(identity) ? structuredClone(withoutReferenceTable(hoisted.get(identity)!)) : (firstUse.add(identity), hoisted.get(identity)!));
+        const first = recipeHash(withoutReferenceTable(snapshots[0]));
+        if (snapshots.length > 1 && snapshots.every(snapshot => recipeHash(withoutReferenceTable(snapshot)) === first)) return { snapshot: checked.get(frozenItems[0])!.frozen };
+        // The table stays on the first image's snapshot, whichever recipe that is.
+        return { snapshots };
       })();
       let accepted: BatchJob;
       try { accepted = await options.batch.enqueue({ ...submit, ...frozenPayload, ...(context.source ? { source: context.source } : {}) }); }
@@ -1185,7 +1272,7 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
     const omitAssetData = assetDataOmitted(args.assetData);
     const preparation = normalizeQueuePreparation(args.preparation, { newRecipe: true, authoredAssembly: canvas });
     const reviewInput = await buildPromptReview(await materialize(preparation, null));
-    return queueRecipePreviewResult({ inputHash: inputHash(reviewInput), characterIds: characterIdsFor(preparation), reviewInput, assetDetails: assetDetails(preparation), omitAssetData });
+    return queueRecipePreviewResult({ inputHash: inputHash(reviewInput), characterIds: characterIdsFor(preparation), reviewInput, assetDetails: reviewedAssetDetails(preparation, reviewInput), omitAssetData });
   }
   const api = {
     put_queue_recipe(raw: unknown) { return exclusive(async () => {

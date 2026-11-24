@@ -121,7 +121,7 @@ function fileToSource(file: File) {
   });
 }
 
-const PRECISE_TYPE_KEYS: Record<PreciseReferenceType, UiStringKey> = { character: 'rp.character', style: 'rp.style', 'character&style': 'rp.both' };
+const PRECISE_TYPE_KEYS: Record<PreciseReferenceType, UiStringKey> = { character: 'rp.character', character_mainoutfit: 'rp.characterSameOutfit', style: 'rp.style', costume: 'rp.outfit', 'character&style': 'rp.both', 'character&style_anyoutfit': 'rp.bothAnyOutfit' };
 const preciseTypeLabel = (t: UiText, type: PreciseReferenceType) => PRECISE_TYPE_KEYS[type] ? t(PRECISE_TYPE_KEYS[type]) : String(type);
 
 /** A preset's values as the card shows them. */

@@ -2,19 +2,44 @@ import { createHash } from "node:crypto";
 import { buildT2iReviewEffective } from './t2i-review-effective';
 import sharp from "sharp";
 import { PNG } from "pngjs";
-import { buildPayload, applyI2IParameters, applyOfficialInpaintParameters, prepareInpaintAssets, resizeImageBufferToPng, prepareLimitedImage, buildUpscalePayload, buildDirectorPayload } from "./ipc/nai";
-import { MAX_NAI_DIRECTOR_INPUT_PIXELS, MAX_NAI_UPSCALE_INPUT_PIXELS, NAI_INPAINT_MODELS } from "../src/types";
-import { freezeGenerationInput } from "../src/workspace/generation-input";
+import { buildPayload, applyI2IParameters, applyOfficialInpaintParameters, prepareInpaintAssets, resizeImageBufferToPng, prepareLimitedImage, buildUpscalePayload, buildDirectorPayload, prepareDirectorReference } from "./ipc/nai";
+import { MAX_NAI_DIRECTOR_INPUT_PIXELS, MAX_NAI_UPSCALE_INPUT_PIXELS, NAI_INPAINT_MODELS, isPreciseReferenceType, naiPreciseReferenceCapability } from "../src/types";
+import { freezeGenerationInput, queuedPreciseReferenceProblem, QUEUE_VIBE_REFUSAL } from "../src/workspace/generation-input";
 import { isSeededGeneration, GENERATION_MODES } from "../src/workspace/generation-types";
 import { authoredPromptReview, type PromptReviewPreparation, type PromptReviewInput, type PromptReviewAsset } from "../src/workspace/prompt-review";
 import { imageBase64, imageMime, type CreativeState } from "../src/workspace/state";
 import { WorkspaceError } from "../src/workspace/protocol";
 import { ImageConversionError, nativeImageInput } from "./ipc/image-codec";
 
-/** One state adapter for both reviewed requests and independent queued recipes. */
+/** A precise reference of the review: the original the recipe names, and the request image prepared from it. */
+export const referenceAssetRole = (index: number) => `preciseReferences:${index}`;
+export const requestReferenceAssetRole = (index: number) => `request-reference:${index}`;
+
+/**
+ * Request images of precise references by original sha256 and preprocessing. Preparing is deterministic, and one
+ * enqueue reviews every recipe of a set that shares a character reference, so each image is prepared once.
+ */
+const preparedReferences = new Map<string, string>();
+const PREPARED_REFERENCE_CACHE = 24;
+async function preparedReference(original: PromptReviewAsset, index: number, preprocess: "pad" | "bucket") {
+  const key = `${preprocess}:${original.sha256}`, cached = preparedReferences.get(key);
+  if (cached !== undefined) { preparedReferences.delete(key); preparedReferences.set(key, cached); return cached; }
+  const prepared = await prepareDirectorReference(original.data, index, preprocess);
+  preparedReferences.set(key, prepared);
+  while (preparedReferences.size > PREPARED_REFERENCE_CACHE) preparedReferences.delete(preparedReferences.keys().next().value as string);
+  return prepared;
+}
+
+/** One state adapter for both reviewed requests and independent queued recipes. A precise reference whose request
+ * image the review already holds (request-reference:N) is the prepared image the queue sends as it is. */
 function reviewState(authored: Record<string, any>, assets: PromptReviewAsset[]): CreativeState {
   const source = assets.find(asset => asset.role === "source"), mask = assets.find(asset => asset.role === "mask");
   const state = structuredClone(authored) as CreativeState;
+  state.vibeImages = Array.isArray(state.vibeImages) ? state.vibeImages : [];
+  state.preciseReferences = (Array.isArray(state.preciseReferences) ? state.preciseReferences : []).map((reference: any, index: number) => {
+    const request = assets.find(asset => asset.role === requestReferenceAssetRole(index));
+    return request ? { ...reference, base64: request.data, prepared: true, sha256: request.sha256 } : reference;
+  });
   state.workbenchImage = source ? { width: source.width, height: source.height } : null;
   state.i2iOriginalImage = state.workbenchImage;
   state.inpaintMask = mask?.data ?? null;
@@ -52,14 +77,42 @@ export async function buildPromptReview(preparation: PromptReviewPreparation): P
   for (const asset of preparation.assets ?? []) {
     if (!asset || typeof asset.role !== "string" || !/^(?:source|mask|(?:vibeImages|preciseReferences):\d+)$/.test(asset.role) || roles.has(asset.role)) throw new WorkspaceError("invalid_argument", "Invalid or duplicate review image role.");
     roles.add(asset.role);
-    await addAsset(asset.role, asset.data, (asset.role === "source" && mode !== "t2i") || (asset.role === "mask" && mode === "inpaint"));
+    await addAsset(asset.role, asset.data, (asset.role === "source" && mode !== "t2i") || (asset.role === "mask" && mode === "inpaint") || (asset.role.startsWith("preciseReferences:") && ["t2i", "i2i", "enhance"].includes(mode)));
   }
   const source = result.assets.find(asset => asset.role === "source"), mask = result.assets.find(asset => asset.role === "mask");
   const state = reviewState(authored, result.assets);
-  if (isSeededGeneration(mode) && (state.vibeImages.length || state.preciseReferences.length)) {
-    issue("unsupported_reference", "Queue generation does not encode Precise/Vibe references. Their authored settings and images are retained for review only.");
-    state.vibeImages = []; state.preciseReferences = [];
+  if (isSeededGeneration(mode) && state.vibeImages.length) issue("unsupported_reference", QUEUE_VIBE_REFUSAL);
+  state.vibeImages = [];
+  // Precise references (t2i, i2i, enhance on V4.5 and V5) are prepared here exactly as the request sends them, so
+  // the review, its inputHash and the queued request name the same bytes. Upscale and director never use them.
+  let referencesSent = false;
+  if (!isSeededGeneration(mode)) state.preciseReferences = [];
+  else if (state.preciseReferences.length) {
+    const references = state.preciseReferences as any[], model = String(state.params?.model ?? "");
+    const originals = references.map((_, index) => result.assets.find(asset => asset.role === referenceAssetRole(index)));
+    const problem = references.some(reference => !isPreciseReferenceType(reference?.type)) ? "A precise reference has an invalid type."
+      : originals.some(asset => !asset) ? "A precise reference has no image; every reference needs its preciseReferences:N asset."
+      : queuedPreciseReferenceProblem(references, mode, model);
+    if (problem) { issue(originals.some(asset => !asset) ? "missing_reference" : "unsupported_reference", problem); state.preciseReferences = []; }
+    else {
+      const preprocess = naiPreciseReferenceCapability(model)!.preprocess;
+      try {
+        for (const [index, original] of originals.entries()) {
+          const request = await addAsset(requestReferenceAssetRole(index), await preparedReference(original!, index, preprocess), true);
+          references[index] = { ...references[index], base64: request.data, prepared: true, sha256: request.sha256 };
+        }
+        referencesSent = true;
+      } catch (error: any) {
+        issue("invalid_reference", typeof error?.message === "string" ? error.message : "A precise reference could not be prepared.");
+        state.preciseReferences = [];
+      }
+    }
   }
+  /** The request names each reference image by its review asset, like the source: never bytes inside the request. */
+  const referenceRoles = (request: Record<string, any>) => {
+    if (Array.isArray(request.parameters?.director_reference_images)) request.parameters.director_reference_images = request.parameters.director_reference_images.map((_: unknown, index: number) => ({ assetRole: requestReferenceAssetRole(index) }));
+    return request;
+  };
   if (mode === "inpaint" && !independent && state.charCaptions.length) {
     issue("unsupported_configuration", "Legacy inpaint cannot transmit character captions. They are retained in authored context only.");
     state.charCaptions = [];
@@ -74,7 +127,7 @@ export async function buildPromptReview(preparation: PromptReviewPreparation): P
   if (mode === "t2i") unused.add("source");
   if (mode !== "inpaint") unused.add("mask");
   if (mode === "inpaint") { unused.add("inpaintNoise"); unused.add("modelMode"); unused.add("charCaptions"); if (independent) { unused.add("params"); unused.add("inpaintPositivePrompt"); } else unused.add("params.positivePrompt"); }
-  unused.add("vibeImages"); unused.add("preciseReferences");
+  unused.add("vibeImages"); if (!referencesSent) unused.add("preciseReferences");
   result.unusedInputs = [...unused].sort();
   if (mode !== "t2i" && !source) { issue("missing_source", "This mode requires a source image; no effective request can be constructed."); return result; }
   if (mode === "inpaint" && !mask) { issue("missing_mask", "Inpaint requires a mask; no effective request can be constructed."); return result; }
@@ -95,6 +148,7 @@ export async function buildPromptReview(preparation: PromptReviewPreparation): P
     if (["t2i", "i2i", "inpaint"].includes(mode) && scoped?.effort === "medium" && snapshot.params.effort !== "medium") unused.add(independent ? "inpaintRecipe.effort" : "params.effort");
     if (mode === 't2i') {
       result.effective = buildT2iReviewEffective(snapshot);
+      referenceRoles(result.effective.request);
       result.unusedInputs = [...unused].sort();
       return result;
     }
@@ -132,6 +186,7 @@ export async function buildPromptReview(preparation: PromptReviewPreparation): P
       }
     }
     if (isSeededGeneration(mode) && randomSeed) request.parameters.seed = null;
+    if (mode === "i2i" || mode === "enhance") referenceRoles(request);
     result.effective = { request, sourceRole, maskRole, sampling: {
       sampleCount: 1,
       seedPolicy: isSeededGeneration(mode) ? randomSeed ? "random_on_submit" : "fixed" : "unused",

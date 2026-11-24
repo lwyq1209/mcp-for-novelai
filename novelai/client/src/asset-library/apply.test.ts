@@ -75,7 +75,7 @@ describe('explicit use of unified assets', () => {
     const {store,apply}=context();
     const refusals:unknown[]=[];
     for (const run of [()=>apply(item('artist_favorite',{basePrompt:'x',prompt:'y'})),()=>apply(item('positive_preset',{prompt:'x'}),'inpaint',{field:'character',characterId:'left'})]) { try { await run(); } catch (error) { refusals.push(error); } }
-    store.params.model='nai-diffusion-5-full';try{await apply(item('reference_preset',{kind:'precise'}));}catch(error){refusals.push(error);}
+    store.params.model='nai-diffusion-4-full';try{await apply(item('reference_preset',{kind:'precise'}));}catch(error){refusals.push(error);}
     expect(refusals.map(error=>(error as {reason?:string}).reason)).toEqual(['library.apply_no_recipe','library.apply_inpaint_no_character','library.apply_model_no_precise']);
     for (const error of refusals) { expect(hostErrorText(error,'en-US')).not.toMatch(/[\u4e00-\u9fff]/); expect(hostErrorText(error,'zh-CN')).toMatch(/[\u4e00-\u9fff]/); }
   });

@@ -4,7 +4,7 @@ import {
   MAX_NAI_UPSCALE_INPUT_PIXELS,
   isNAIV4PlusModel,
   isNAIV5Model,
-  supportsNAIPreciseReference,
+  resolveNAIPreciseReferences,
   supportsNAIVibeTransfer,
   type AccountSummary,
   type AnlasQuoteFeature,
@@ -161,16 +161,14 @@ export function calculateImageGenerationAnlas({
     }
   }
 
-  // Precise / Director references (V4.5/V5): the official docs charge "an additional
-  // cost of 5 Anlas to each image generation" — a FLAT 5 per generated image when
-  // the feature is used, NOT per reference. So it scales with the request/batch
-  // count only, regardless of how many references are attached.
-  // Only charge models whose current frontend capability map exposes the feature.
-  const preciseCount = extras?.preciseReferences?.length ?? 0;
-  if (v4Plus && supportsNAIPreciseReference(params.model) && preciseCount > 0) {
-    const preciseCost = 5 * samples;
+  // Precise / Director references (V4.5 and V5): 5 Anlas per reference per image. This is the official client's own
+  // sum (`5 * references * n_samples`, build fac57e6) and NovelAI's statement of 2026-11-24 ("5 Anlas per reference
+  // image", with V4.5 now charged what the UI shows). Only the references the model takes count (V4.5 skips Outfit).
+  const preciseCount = v4Plus ? resolveNAIPreciseReferences(extras?.preciseReferences, params.model).length : 0;
+  if (preciseCount > 0) {
+    const preciseCost = 5 * preciseCount * samples;
     total += preciseCost;
-    details.push(`Precise reference: 5 Anlas x ${samples} image(s) = ${preciseCost} (flat per image, ${preciseCount} ref attached).`);
+    details.push(`Precise reference: 5 Anlas x ${preciseCount} reference(s) x ${samples} image(s) = ${preciseCost}.`);
   }
 
   return finalizeQuote(action === "generate" ? "generate" : action === "img2img" ? "i2i" : "inpaint", total, account, details, "estimate-formula");

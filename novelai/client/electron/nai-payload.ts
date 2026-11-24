@@ -1,7 +1,7 @@
 /** The actual client payload assembler. Pure: no settings, accounts, files, network or random seed draws. */
 import crypto from "node:crypto";
 import { assertPromptAssemblyVersion, isNAIV4PlusModel, isNAIV5Model, maxNAICharacterPrompts, MAX_NAI_SEED,
-  normalizeGenerateParams, NAI_INPAINT_MODELS, supportsNAIPreciseReference, supportsNAIVibeTransfer, supportsNAIVariety,
+  normalizeGenerateParams, NAI_INPAINT_MODELS, naiPreciseReferenceCapability, resolveNAIPreciseReferences, supportsNAIVibeTransfer, supportsNAIVariety,
   type GenerateParams, type GenerateExtras } from "../src/types";
 import { applyNAIEffort, naiMediumUndesiredContent, naiRequestModel, NAI_MEDIUM_UC_PRESET_HINT } from "../src/nai-effort";
 
@@ -370,11 +370,13 @@ export function buildPayload(
     );
   }
 
-  // Precise / Director Reference — V4.5 only. Distinct from Vibe Transfer: uses
-  // the director_reference_* fields with a type (character/style/character&style),
-  // strength, and secondary strength derived from fidelity (1 - fidelity).
-  const preciseRefs = extras?.preciseReferences ?? [];
-  if (v4Plus && supportsNAIPreciseReference(params.model) && preciseRefs.length > 0) {
+  // Precise / Director Reference — V4.5 and V5. Distinct from Vibe Transfer: uses the director_reference_* fields
+  // with a type as base_caption, a strength and a secondary strength (1 - fidelity). What differs per model comes
+  // from the official client's capability table (naiPreciseReferenceCapability): V5 adds the Outfit type and the two
+  // outfit variants, takes strengths up to 5 and has no Fidelity (its client sends fidelity 1, so secondary 0).
+  const preciseCapability = naiPreciseReferenceCapability(params.model);
+  const preciseRefs = resolveNAIPreciseReferences(extras?.preciseReferences, params.model);
+  if (v4Plus && preciseCapability && preciseRefs.length > 0) {
     // Confirmed against the official client's real request (F12 HAR): V4.5 precise
     // references are uploaded as multipart BINARY parts named director_ref_N (done
     // in postGenerateImage); the JSON references them via
@@ -401,7 +403,7 @@ export function buildPayload(
       legacy_uc: false,
     }));
     parameters.director_reference_strength_values = preciseRefs.map((r) =>
-      round2(clamp01(r.strength, 1)),
+      round2(Number.isFinite(r.strength) ? Math.min(preciseCapability.strengthMax, Math.max(0, r.strength)) : 1),
     );
     parameters.director_reference_secondary_strength_values = preciseRefs.map(
       (r) => round2(clamp01(1 - r.fidelity, 0)),

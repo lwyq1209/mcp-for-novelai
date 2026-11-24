@@ -10,14 +10,14 @@ vi.mock('../store', async (importOriginal) => {
 });
 
 import { useAppStore } from '../store';
-import { DEFAULT_PARAMS } from '../types';
+import { DEFAULT_PARAMS, type PreciseReferenceType } from '../types';
 import { uiText } from '../ui/i18n';
 import { getToasts, dismissToast } from '../ui';
 import type { MaterialComponent } from '../workspace/material-library-types';
 import { planCombo, readComboFields } from './combo-apply';
 import { applyArtistRecipe, applyComboByUse, defaultComboCharacter, pickerTabs } from './LibraryPicker';
 import { adoptPromptAssemblyV1 } from './sections/params';
-import { ReferencesSection } from './sections/references';
+import { ReferencesSection, recommendPreciseSize } from './sections/references';
 import { CharactersSection } from './sections/characters';
 import { sameValues, undoStep, showStepToast } from './guarded-undo';
 import { applyTrayToCanvas } from '../library/ComboTray';
@@ -174,6 +174,40 @@ describe('guarded undo and the clears (review rework)', () => {
     expect(renderToStaticMarkup(<ReferencesSection />)).not.toContain('data-testid="cv-ref-clear"');
     useAppStore.setState({ vibeImages: [{ id: 'v', base64: 'x', previewUrl: '', infoExtracted: 1, strength: 1 }] });
     expect(renderToStaticMarkup(<ReferencesSection />)).toContain('data-testid="cv-ref-clear"');
+  });
+  it('a Precise reference offers what the model has: V5 the Outfit type, the same-outfit switch and strength to 5; V4.5 fidelity', () => {
+    const reference = (type: PreciseReferenceType, strength = 1) => ({ id: type, base64: 'x', previewUrl: '', type, strength, fidelity: 1, srcWidth: 1000, srcHeight: 1500 });
+    const render = (model: string, type: PreciseReferenceType) => {
+      useAppStore.setState({ params: { ...useAppStore.getState().params, model: model as typeof DEFAULT_PARAMS.model }, vibeImages: [], preciseReferences: [reference(type)] });
+      return renderToStaticMarkup(<ReferencesSection />);
+    };
+    let html = render('nai-diffusion-5-full', 'character');
+    expect(html).toContain(t('cv.refs.type.outfit'));
+    expect(html).toContain(t('cv.refs.sameOutfit'));
+    expect(html).not.toContain(t('cv.refs.fidelity'));
+    expect(html).toMatch(/type="range"[^>]*max="5"[^>]*step="0.05"/);
+    expect(html).toContain(t('cv.refs.cropped', { source: '1000×1500', target: '832×1216', pad: '3' }));
+    expect(html).not.toContain(t('cv.refs.preciseNo'));
+    // Style and Outfit have no outfit switch.
+    expect(render('nai-diffusion-5-full', 'style')).not.toContain(t('cv.refs.sameOutfit'));
+    expect(render('nai-diffusion-5-curated', 'costume')).not.toContain(t('cv.refs.sameOutfit'));
+    html = render('nai-diffusion-4-5-full', 'character_mainoutfit');
+    expect(html).not.toContain(t('cv.refs.type.outfit'));
+    expect(html).not.toContain(t('cv.refs.sameOutfit'));
+    expect(html).toContain(t('cv.refs.fidelity'));
+    expect(html).toMatch(/type="range"[^>]*max="1"[^>]*step="0.01"/);
+    expect(html).toContain(t('cv.refs.padded', { source: '1000×1500', target: '1024×1536', pad: '0' }));
+    // An Outfit reference kept from V5 says that V4.5 skips it.
+    html = render('nai-diffusion-4-5-full', 'costume');
+    expect(html).toContain('data-testid="cv-precise-skipped"');
+    expect(html).toContain(t('cv.refs.type.outfit'));
+    expect(render('nai-diffusion-4-full', 'character')).toContain(t('cv.refs.preciseNo'));
+  });
+  it('the request size of a reference: padded into three sizes on V4.5, cropped to a bucket on V5', () => {
+    expect(recommendPreciseSize(1920, 1080)).toEqual({ preprocess: 'pad', target: { width: 1536, height: 1024 }, exact: false, lostPercent: 16 });
+    expect(recommendPreciseSize(1920, 1080, 'bucket')).toEqual({ preprocess: 'bucket', target: { width: 1344, height: 768 }, exact: false, lostPercent: 2 });
+    expect(recommendPreciseSize(832, 1216, 'bucket')?.exact).toBe(true);
+    expect(recommendPreciseSize(undefined, 10)).toBeNull();
   });
   it('each reference button has its own file input in its own paste area (image-paste picks exactly one)', () => {
     const html = renderToStaticMarkup(<ReferencesSection />);

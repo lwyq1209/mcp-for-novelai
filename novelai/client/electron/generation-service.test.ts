@@ -145,16 +145,46 @@ describe('process-owned queue generation jobs', () => {
     expect(state.service.read({ workspaceId: 'workspace', jobId: job.jobId })).toMatchObject({ status: 'cancelled', quote: { source: 'unavailable', amount: null }, providerOutcome: 'not_submitted' });
   });
 
-  it('rejects every reference and inpaint character configuration before costing or execution', () => {
+  it('rejects Vibe references, precise references that cannot be sent and inpaint character configuration before costing or execution', () => {
     const state = setup();
     const reference = submission(); reference.snapshot.extras.vibeImages = [{ base64: IMAGE.toString('base64') }] as any;
-    expect(() => state.service.submit(reference)).toThrow(/Precise\/Vibe references/);
-    const precise = submission(); precise.snapshot.extras.preciseReferences = [{ base64: IMAGE.toString('base64') }] as any;
-    expect(() => state.service.submit(precise)).toThrow(/Precise\/Vibe references/);
+    expect(() => state.service.submit(reference)).toThrow(/Vibe Transfer/);
+    const precise = (extra: Record<string, unknown> = {}, model = 'nai-diffusion-5-full', mode: 't2i' | 'inpaint' = 't2i') => {
+      const value = submission({ mode }); value.snapshot.params.model = model as any;
+      value.snapshot.extras.preciseReferences = [{ base64: IMAGE.toString('base64'), type: 'character', strength: 1, fidelity: 1, ...extra }] as any;
+      return value;
+    };
+    // Malformed, without bytes (a shared image the batch could not put back), a model without the feature, an Outfit
+    // reference on V4.5 (it would be skipped), more than 16, and a mode that sends none.
+    expect(() => state.service.submit(precise({ type: 'outfit' }))).toThrow(expect.objectContaining({ code: 'invalid_arguments', message: 'Invalid precise reference.' }));
+    expect(() => state.service.submit(precise({ base64: '', sha256: 'a'.repeat(64) }))).toThrow(expect.objectContaining({ code: 'invalid_arguments', message: expect.stringContaining('no image bytes') }));
+    expect(() => state.service.submit(precise({}, 'nai-diffusion-4-full'))).toThrow(expect.objectContaining({ code: 'unsupported_reference', message: expect.stringContaining('has no Precise Reference') }));
+    expect(() => state.service.submit(precise({ type: 'costume' }, 'nai-diffusion-4-5-full'))).toThrow(expect.objectContaining({ code: 'unsupported_reference', message: expect.stringContaining('Outfit') }));
+    const many = precise(); many.snapshot.extras.preciseReferences = Array.from({ length: 17 }, () => many.snapshot.extras.preciseReferences![0]);
+    expect(() => state.service.submit(many)).toThrow(expect.objectContaining({ code: 'unsupported_reference', message: expect.stringContaining('at most 16') }));
+    expect(() => state.service.submit(precise({}, 'nai-diffusion-5-full', 'inpaint'))).toThrow(expect.objectContaining({ code: 'unsupported_reference' }));
     const characters = submission({ mode: 'inpaint' }); characters.snapshot.extras.charCaptions = [{ prompt: 'a gardener' }];
     expect(() => state.service.submit(characters)).toThrow(/character prompts/);
     expect(state.execute).not.toHaveBeenCalled();
     expect(state.service.list({ workspaceId: 'workspace' }).jobs).toEqual([]);
+  });
+
+  it('runs a queued image with its precise references and drops their bytes when it ends', async () => {
+    const state = setup(); const args = submission();
+    const references = [
+      { base64: IMAGE.toString('base64'), type: 'character_mainoutfit', strength: 1, fidelity: 1, prepared: true, sha256: 'b'.repeat(64) },
+      { base64: IMAGE.toString('base64'), type: 'costume', strength: 2.5, fidelity: 1, prepared: true, sha256: 'c'.repeat(64) },
+    ];
+    args.snapshot.extras.preciseReferences = structuredClone(references) as any;
+    const job = state.service.submit(args);
+    (args.snapshot.extras.preciseReferences as any)[0].type = 'style'; // a later edit never reaches the frozen job
+    await running(state);
+    expect(state.execute.mock.calls[0][1].extras.preciseReferences).toEqual(references);
+    expect(state.execute.mock.calls[0][2].singleRequest).toBe(true);
+    expect(state.service.heldInputs({ workspaceId: 'workspace', jobId: job.jobId }).references).toBeGreaterThan(IMAGE.length);
+    state.execution.resolve(success()); await finished(state, job.jobId);
+    expect(state.service.heldInputs({ workspaceId: 'workspace', jobId: job.jobId }).references).toBe(0);
+    expect(state.service.read({ workspaceId: 'workspace', jobId: job.jobId })).toMatchObject({ status: 'succeeded' });
   });
 
   it('freezes source bytes and actual i2i noise seed independently of later image selection', async () => {
@@ -246,7 +276,7 @@ describe('process-owned queue generation jobs', () => {
   it.each([
     [{ charCaptions: [{ prompt: 'an adult gardener' }] }, 'unsupported_configuration'],
     [{ vibeImages: [{ base64: IMAGE.toString('base64') }] }, 'unsupported_reference'],
-    [{ preciseReferences: [{ base64: IMAGE.toString('base64') }] }, 'unsupported_reference'],
+    [{ preciseReferences: [{ base64: IMAGE.toString('base64'), type: 'character', strength: 1, fidelity: 1 }] }, 'unsupported_reference'],
     [{ modelMode: 'furry' }, 'unsupported_configuration'],
   ])('does not use independent scope to discard unsupported configuration %j', (extras, code) => {
     const quote = vi.fn(); const reserve = vi.fn(); const state = setup({ quote, reserve });
@@ -355,7 +385,7 @@ describe('manual batch items (step 4a)', () => {
   it('run with the manual options: references and Furry pass, the item streams its frames and hands its saved images over', async () => {
     const previews: unknown[] = [], settled: any[] = [];
     const state = setup({ onPreview: (_job, origin, preview) => previews.push({ origin, preview }), onManualSettled: outcome => settled.push(outcome) });
-    expect(() => state.service.submit(submission({ requestKey: 'queued-ref', snapshot: withReferences(), queue }))).toThrow(/Precise\/Vibe/);
+    expect(() => state.service.submit(submission({ requestKey: 'queued-ref', snapshot: withReferences(), queue }))).toThrow(/Vibe Transfer/);
     const job = state.service.submit(submission({ requestKey: 'manual-ref', snapshot: withReferences(), queue, manual: true }));
     await running(state);
     const options = state.execute.mock.calls[0][2];

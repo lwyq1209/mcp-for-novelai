@@ -1,9 +1,10 @@
 import { useRef, useState } from 'react';
 import clsx from 'clsx';
-import { Icon, Seg, showToast } from '../../ui';
+import { Icon, Seg, showToast, Toggle } from '../../ui';
 import { useUiText } from '../../ui/i18n';
 import { useAppStore } from '../../store';
-import { supportsNAIPreciseReference, supportsNAIVibeTransfer, type PreciseReferenceType } from '../../types';
+import { naiPreciseReferenceCapability, preciseReferenceBaseType, preciseReferenceSameOutfit, preciseReferenceTypeOf, supportsNAIVibeTransfer, type NAIPreciseReferenceCapability, type PreciseReferenceBaseType } from '../../types';
+import { naiReferenceBucket, naiReferencePadSize } from '../../nai-dimensions';
 import { ReferencePresetQuickSaveDialog, type QuickPresetSource } from '../ReferenceQuickSave';
 import { HeadAction, Section, SliderField } from '../controls';
 import { useDraftGroups } from '../draft-model';
@@ -11,26 +12,33 @@ import { DraftBadge } from '../DraftBadge';
 import { showStepToast } from '../guarded-undo';
 import { ReferencePresetPicker } from '../LibraryPicker';
 
-/** The three official precise-reference sizes (the old dialog's recommendPreciseSize, unchanged). */
-const PRECISE_SIZES = [{ width: 1024, height: 1536 }, { width: 1472, height: 1472 }, { width: 1536, height: 1024 }];
-export function recommendPreciseSize(w?: number, h?: number) {
+/**
+ * What a reference of this size becomes in the request, as the official client prepares it for the model:
+ * "pad" (V4.5) fits it into the nearest of three sizes and pads the rest; "bucket" (V5) covers the nearest ~1 MP
+ * bucket and crops around the centre. `lostPercent` is the padded border, or the cropped part, of the target.
+ */
+export function recommendPreciseSize(w?: number, h?: number, preprocess: NAIPreciseReferenceCapability['preprocess'] = 'pad') {
   if (!w || !h) return null;
-  const aspect = w / h;
-  const target = PRECISE_SIZES.reduce((best, c) => Math.abs(c.width / c.height - aspect) < Math.abs(best.width / best.height - aspect) ? c : best, PRECISE_SIZES[0]);
-  const exact = w === target.width && h === target.height;
-  const scale = Math.min(target.width / w, target.height / h);
-  const padPercent = Math.round((1 - (Math.round(w * scale) * Math.round(h * scale)) / (target.width * target.height)) * 100);
-  return { target, exact, padPercent };
+  if (preprocess === 'bucket') {
+    const bucket = naiReferenceBucket(w, h);
+    const lostPercent = Math.round((1 - (bucket.width * bucket.height) / (bucket.resizeWidth * bucket.resizeHeight)) * 100);
+    return { preprocess, target: { width: bucket.width, height: bucket.height }, exact: bucket.unchanged, lostPercent };
+  }
+  const pad = naiReferencePadSize(w, h);
+  const lostPercent = Math.round((1 - (pad.fitWidth * pad.fitHeight) / (pad.width * pad.height)) * 100);
+  return { preprocess, target: { width: pad.width, height: pad.height }, exact: pad.unchanged, lostPercent };
 }
 
-const TYPE_OPTIONS: Array<{ value: PreciseReferenceType; key: 'cv.refs.type.character' | 'cv.refs.type.style' | 'cv.refs.type.both' }> = [
-  { value: 'character', key: 'cv.refs.type.character' }, { value: 'style', key: 'cv.refs.type.style' }, { value: 'character&style', key: 'cv.refs.type.both' },
+const TYPE_OPTIONS: Array<{ value: PreciseReferenceBaseType; key: 'cv.refs.type.character' | 'cv.refs.type.style' | 'cv.refs.type.both' | 'cv.refs.type.outfit' }> = [
+  { value: 'character', key: 'cv.refs.type.character' }, { value: 'style', key: 'cv.refs.type.style' }, { value: 'character&style', key: 'cv.refs.type.both' }, { value: 'costume', key: 'cv.refs.type.outfit' },
 ];
 
 /**
  * Vibe and Precise references, edited in place (prototype 13; it replaces the old reference dialog): add from a file,
  * tune each one, save one as a reference preset, open the reference presets. The images and values the store keeps
  * are those of the old dialog (same defaults: information 1, strength 1; Precise as character, fidelity 1).
+ * What a Precise reference offers follows the model (naiPreciseReferenceCapability): V5 adds the Outfit type and the
+ * "same outfit" switch, takes strengths up to 5 and has no fidelity; V4.5 keeps strength 0–1 and fidelity.
  */
 export function ReferencesSection() {
   const { t } = useUiText();
@@ -38,7 +46,9 @@ export function ReferencesSection() {
   const precise = useAppStore(state => state.preciseReferences);
   const model = useAppStore(state => state.params.model);
   const store = useAppStore.getState;
-  const vibeOk = supportsNAIVibeTransfer(model), preciseOk = supportsNAIPreciseReference(model);
+  const vibeOk = supportsNAIVibeTransfer(model), preciseCapability = naiPreciseReferenceCapability(model), preciseOk = preciseCapability !== null;
+  // Without the feature the cards keep the V4.5 controls (the values stay editable while the model is changed).
+  const strengthMax = preciseCapability?.strengthMax ?? 1, showFidelity = preciseCapability?.fidelity ?? true, outfits = preciseCapability?.outfit ?? false;
   const vibeInput = useRef<HTMLInputElement>(null), preciseInput = useRef<HTMLInputElement>(null);
   const [presetsOpen, setPresetsOpen] = useState(false);
   const presetsButton = useRef<HTMLButtonElement>(null);
@@ -94,17 +104,24 @@ export function ReferencesSection() {
       </div>
     </div>)}
     {precise.map(image => {
-      const fit = recommendPreciseSize(image.srcWidth, image.srcHeight);
+      const fit = recommendPreciseSize(image.srcWidth, image.srcHeight, preciseCapability?.preprocess);
+      const base = preciseReferenceBaseType(image.type), sameOutfit = preciseReferenceSameOutfit(image.type);
+      // An Outfit reference on a model without them is skipped by the request (as the official client does).
+      const skipped = preciseOk && !outfits && base === 'costume';
+      const size = `${image.srcWidth}×${image.srcHeight}`;
       return <div key={image.id} className="cv-ref" data-testid="cv-precise">
         <img src={image.previewUrl} alt={t('cv.refs.thumb')} />
         <div className="cv-ref-body">
-          <div className="cv-ref-title"><span className="ui-tag ui-tag--accent">{t('cv.refs.precise')}</span>{!preciseOk && <span className="cv-ref-warn">{t('cv.refs.preciseNo')}</span>}</div>
-          <Seg<PreciseReferenceType> full size="sm" label={t('cv.refs.type')} value={image.type} onChange={type => store().updatePreciseReference(image.id, { type })} options={TYPE_OPTIONS.map(option => ({ value: option.value, label: t(option.key) }))} />
-          <SliderField label={t('cv.refs.strength')} value={image.strength} min={0} max={1} step={0.01} onChange={value => store().updatePreciseReference(image.id, { strength: value })} />
-          <SliderField label={t('cv.refs.fidelity')} value={image.fidelity} min={0} max={1} step={0.01} onChange={value => store().updatePreciseReference(image.id, { fidelity: value })} />
+          <div className="cv-ref-title"><span className="ui-tag ui-tag--accent">{t('cv.refs.precise')}</span>{!preciseOk && <span className="cv-ref-warn">{t('cv.refs.preciseNo')}</span>}{skipped && <span className="cv-ref-warn" data-testid="cv-precise-skipped">{t('cv.refs.outfitNo')}</span>}</div>
+          <Seg<PreciseReferenceBaseType> full size="sm" label={t('cv.refs.type')} value={base} onChange={next => { if (next !== base) store().updatePreciseReference(image.id, { type: preciseReferenceTypeOf(next) }); }}
+            options={TYPE_OPTIONS.filter(option => outfits || option.value !== 'costume' || base === 'costume').map(option => ({ value: option.value, label: t(option.key) }))} />
+          {outfits && sameOutfit !== null && <label className="cv-inline-toggle cv-inline-toggle--row" title={t('cv.refs.sameOutfitTip')}><span>{t('cv.refs.sameOutfit')}</span>
+            <Toggle checked={sameOutfit} label={t('cv.refs.sameOutfit')} onChange={value => store().updatePreciseReference(image.id, { type: preciseReferenceTypeOf(base, value) })} /></label>}
+          <SliderField label={t('cv.refs.strength')} value={image.strength} min={0} max={strengthMax} step={strengthMax > 1 ? 0.05 : 0.01} onChange={value => store().updatePreciseReference(image.id, { strength: value })} />
+          {showFidelity && <SliderField label={t('cv.refs.fidelity')} value={image.fidelity} min={0} max={1} step={0.01} onChange={value => store().updatePreciseReference(image.id, { fidelity: value })} />}
           {fit && <small className={clsx('cv-ref-size', fit.exact && 'is-ok')}>{fit.exact
-            ? t('cv.refs.fits', { source: `${image.srcWidth}×${image.srcHeight}` })
-            : t('cv.refs.padded', { source: `${image.srcWidth}×${image.srcHeight}`, target: `${fit.target.width}×${fit.target.height}`, pad: String(fit.padPercent) })}</small>}
+            ? t('cv.refs.fits', { source: size })
+            : t(fit.preprocess === 'bucket' ? 'cv.refs.cropped' : 'cv.refs.padded', { source: size, target: `${fit.target.width}×${fit.target.height}`, pad: String(fit.lostPercent) })}</small>}
         </div>
         <div className="cv-ref-acts">
           <button type="button" className="cv-iconbtn" aria-label={t('cv.refs.save')} title={t('cv.refs.save')} onClick={() => setQuickSave({ kind: 'precise', previewUrl: image.previewUrl, base64: image.base64, preciseType: image.type, strength: image.strength, fidelity: image.fidelity, informationExtracted: image.informationExtracted ?? 1, width: image.srcWidth, height: image.srcHeight })}><Icon name="star" size={14} /></button>

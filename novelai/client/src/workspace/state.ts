@@ -1,5 +1,5 @@
 import type { GenerateParams, NAIInpaintModel, I2IParams, VibeTransferImage, PreciseReferenceImage, CharCaption, AugmentOptions, DirectorTool } from "../types";
-import { DEFAULT_PARAMS, baseModelForInpaint, NAI_MODELS, NAI_SAMPLERS, NAI_INPAINT_MODELS, DIRECTOR_TOOLS, EMOTION_OPTIONS, normalizeGenerateParams } from "../types";
+import { DEFAULT_PARAMS, MAX_PRECISE_REFERENCE_STRENGTH, PRECISE_REFERENCE_TYPES, isPreciseReferenceType, baseModelForInpaint, NAI_MODELS, NAI_SAMPLERS, NAI_INPAINT_MODELS, DIRECTOR_TOOLS, EMOTION_OPTIONS, normalizeGenerateParams } from "../types";
 import { generationProvenance, imageActualSeed } from "./generation-provenance";
 import { normalizeMetadataReplay } from "../metadata-replay";
 import { WorkspaceError, type WorkspaceAsset, type WorkspaceDocument } from "./protocol";
@@ -238,9 +238,9 @@ export function validatePatch(input: unknown, current: CreativeState): EditableP
       usedIds.add(id);
       const base64 = imageBase64(ref.base64, `${role}.base64`);
       if (ref.name !== undefined && (typeof ref.name !== "string" || ref.name.length > 1000)) throw new WorkspaceError("invalid_argument", "Reference name must be at most 1000 characters.");
-      const common = { id, ...(ref.name !== undefined ? { name: ref.name } : {}), base64, previewUrl: `data:${imageMime(base64)};base64,${base64}`, strength: number(ref.strength, `${role}.strength`, 0, 1) };
+      const common = { id, ...(ref.name !== undefined ? { name: ref.name } : {}), base64, previewUrl: `data:${imageMime(base64)};base64,${base64}`, strength: number(ref.strength, `${role}.strength`, 0, role === "vibeImages" ? 1 : MAX_PRECISE_REFERENCE_STRENGTH) };
       if (role === "vibeImages") return { ...common, infoExtracted: number(ref.infoExtracted, "infoExtracted", 0, 1) };
-      if (!["character", "style", "character&style"].includes(ref.type)) throw new WorkspaceError("invalid_argument", "Invalid precise reference type.");
+      if (!isPreciseReferenceType(ref.type)) throw new WorkspaceError("invalid_argument", `Invalid precise reference type; use one of: ${PRECISE_REFERENCE_TYPES.join(", ")}.`);
       return { ...common, type: ref.type, fidelity: number(ref.fidelity, "fidelity", 0, 1), ...(ref.informationExtracted !== undefined ? { informationExtracted: number(ref.informationExtracted, "informationExtracted", 0, 1) } : {}), ...(ref.srcWidth !== undefined ? { srcWidth: number(ref.srcWidth, "srcWidth", 1, 32768), srcHeight: number(ref.srcHeight, "srcHeight", 1, 32768) } : {}) };
     });
     (patch as Record<string, unknown>)[role] = values;

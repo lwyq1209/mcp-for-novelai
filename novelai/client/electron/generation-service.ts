@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { createHash, randomInt, randomUUID } from 'node:crypto';
-import { NAI_MODELS, NAI_INPAINT_MODELS, normalizeGenerateParams, type GenerateResult, type HistoryItem } from '../src/types';
+import { NAI_MODELS, NAI_INPAINT_MODELS, isPreciseReferenceType, normalizeGenerateParams, type GenerateResult, type HistoryItem } from '../src/types';
+import { queuedPreciseReferenceProblem, QUEUE_VIBE_REFUSAL } from '../src/workspace/generation-input';
 import { applyNAIEffort, naiEffortOf, naiRequestModel } from '../src/nai-effort';
 import { GENERATION_MODES, isSeededGeneration } from "../src/workspace/generation-types";
 import { QUEUE_UPSCALE_MODEL, resolvePostprocessRecipe } from "../src/workspace/generation-postprocess";
@@ -220,7 +221,17 @@ export function createGenerationService(deps: Dependencies) {
         snapshot.unusedInputs = ['params', 'charCaptions', 'inpaintPositivePrompt'];
       }
       if (!NAI_MODELS.some(item => item.value === snapshot.params.model)) return fail('invalid_arguments', 'Invalid generation model.', 'generation.invalid_model');
-      if (!manual && isSeededGeneration(args.mode) && ((snapshot.extras.vibeImages?.length ?? 0) || (snapshot.extras.preciseReferences?.length ?? 0))) return fail('unsupported_reference', 'Queued generation does not encode Precise/Vibe references or generate with them; the references and the model are kept.');
+      // A queued image is one request: Vibe Transfer (a separate paid encode first) is refused; precise references
+      // are sent in t2i, i2i and enhance on the models that have them, each with its image bytes.
+      if (!manual && isSeededGeneration(args.mode)) {
+        if (snapshot.extras.vibeImages?.length) return fail('unsupported_reference', QUEUE_VIBE_REFUSAL);
+        const references = snapshot.extras.preciseReferences ?? [];
+        if (!Array.isArray(references) || references.some(reference => !reference || typeof reference !== 'object' || !isPreciseReferenceType(reference.type) || typeof reference.strength !== 'number' || typeof reference.fidelity !== 'number'))
+          return fail('invalid_arguments', 'Invalid precise reference.');
+        const referenceProblem = queuedPreciseReferenceProblem(references, args.mode, snapshot.params.model);
+        if (referenceProblem) return fail('unsupported_reference', referenceProblem);
+        if (references.some(reference => typeof reference.base64 !== 'string' || !reference.base64)) return fail('invalid_arguments', 'A precise reference has no image bytes; nothing was sent.');
+      }
       if (!Array.isArray(snapshot.extras.charCaptions)) return fail('invalid_arguments', 'Invalid character prompt structure.', 'generation.characters');
       // Manual inpaint sends neither characters nor the Furry mode (it never did); the request below takes none.
       if (manual && args.mode === 'inpaint') snapshot.extras = { ...snapshot.extras, charCaptions: [] };

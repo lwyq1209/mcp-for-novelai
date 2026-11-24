@@ -6,6 +6,11 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
 
 ### Added
 
+- **Precise Reference on V5** (NovelAI released it on 2026-11-24): the canvas's precise references now work on V5
+  Curated, V5 Full and V5 Full Medium as in NovelAI's own client. V5 adds the **Outfit** reference and the "Prefer same
+  outfit" switch of the Character and Character & Style references, takes strengths up to 5 and has no fidelity; a
+  reference image is cropped to the ~1 MP bucket nearest its aspect instead of padded into three sizes. V4.5 is
+  unchanged (it skips an Outfit reference and says so on its card). At most 16 references per request.
 - **Censor and export** (library): an image's detail and a selection of images open an editor that covers what you
   paint (brush, lasso, eraser, undo, zoom) with a mosaic, a blur, black or white, shown as it will be saved, and writes
   JPGs with no metadata at all (no prompt, settings, EXIF or NovelAI's hidden data; JPG quality 70–100, full-resolution
@@ -49,6 +54,11 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
 
 ### Changed
 
+- The Anlas estimate charges precise references as NovelAI does: 5 Anlas per reference per image (before: 5 per image
+  whatever the number of references). NovelAI's own notice of 2026-11-24 says V4.5 is now charged what its client
+  shows.
+- A queued image is refused with its Vibe references only; precise references are sent. The message of that refusal
+  names Vibe Transfer.
 - **Compact reads** (less of an agent's context per call). The `prepare_recipe` readback returns only what the caller
   does not already know: the recipe's identity (`recipeId`, `recipeRevision`, `inputHash`; a preview says
   `preview: true`), `ready`, `warnings`, and in `effective` only what the app decided, changed or appended. A value

@@ -177,6 +177,7 @@ export const LIBRARY_ERROR_TEXTS: HostErrorTexts = {
   "library.unknown_action": { "zh-CN": "未知素材操作。", "en-US": "Unknown library action." },
   "library.unsupported_fields": { "zh-CN": "含有不支持的字段：{fields}。", "en-US": "Unsupported fields: {fields}." },
   "library.update_fields": { "zh-CN": "{kind} 的 update 仅允许字段：{fields}。", "en-US": "{kind} update only allows fields: {fields}." },
+  "library.update_vibe_strength": { "zh-CN": "氛围（Vibe）参考预设的强度只能在 0 到 1 之间；只有精准参考预设可以到 {max}。", "en-US": "A Vibe reference preset takes a strength from 0 to 1; only a precise reference preset goes up to {max}." },
   "library.update_fields_history": { "zh-CN": "{kind} 的 update 仅允许字段：{fields}。历史不能修改 name/group；归入混合收藏夹请用 add-to-collection 和返回的 collectionId。", "en-US": "{kind} update only allows fields: {fields}. History cannot change name/group; to put it in a mixed collection use add-to-collection with the returned collectionId." },
   "library.update_fields_notes": { "zh-CN": "{kind} 的 update 仅允许字段：{fields}。心得正文请用 notes；完整正文与来源修改使用对应素材编辑入口。", "en-US": "{kind} update only allows fields: {fields}. Put note prose in notes; edit the full content and source in the editor of the item." },
   "library.update_no_fields": { "zh-CN": "{kind} 的 update 仅允许字段：无（请使用对应编辑入口）。", "en-US": "{kind} update allows no fields (use its own editor)." },

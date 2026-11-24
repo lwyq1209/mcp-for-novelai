@@ -171,3 +171,59 @@ export function maxEnhanceOutputSize(width: number, height: number): NAIImageSiz
   }
   return { width: Math.max(32, outWidth), height: Math.max(32, outHeight) };
 }
+
+/** The three sizes a V4.5 Precise Reference is fitted into and padded to (docs.novelai.net/en/image/precisereference). */
+export const NAI_REFERENCE_PAD_SIZES: readonly NAIImageSize[] = [{ width: 1024, height: 1536 }, { width: 1472, height: 1472 }, { width: 1536, height: 1024 }];
+
+/** How a V4.5 Precise Reference is sent: the pad size with the closest aspect ratio and the scaled image inside it. */
+export function naiReferencePadSize(width: number, height: number): NAIImageSize & { fitWidth: number; fitHeight: number; unchanged: boolean } {
+  const aspect = width / height;
+  const target = NAI_REFERENCE_PAD_SIZES.reduce((best, candidate) => Math.abs(candidate.width / candidate.height - aspect) < Math.abs(best.width / best.height - aspect) ? candidate : best, NAI_REFERENCE_PAD_SIZES[0]);
+  const scale = Math.min(target.width / width, target.height / height);
+  return { ...target, fitWidth: Math.max(1, Math.round(width * scale)), fitHeight: Math.max(1, Math.round(height * scale)), unchanged: width === target.width && height === target.height };
+}
+
+/**
+ * The buckets a V5 Precise Reference is cropped to, [width, height] in multiples of 64 at about 1 MP, from 1:16 to
+ * 16:1. Copied from the official web client (build fac57e6, 2026-11-24; its bucketCharacterReferences table).
+ */
+export const NAI_REFERENCE_BUCKETS: ReadonlyArray<readonly [number, number]> = [
+  [256, 4096], [256, 4032], [256, 3968], [256, 3904], [256, 3840], [256, 3776], [256, 3712], [256, 3648], [256, 3584], [256, 3520],
+  [256, 3456], [256, 3392], [256, 3328], [320, 3264], [320, 3200], [320, 3136], [320, 3072], [320, 3008], [320, 2944], [320, 2880],
+  [320, 2816], [320, 2752], [384, 2688], [384, 2624], [384, 2560], [384, 2496], [384, 2432], [384, 2368], [448, 2304], [448, 2240],
+  [448, 2176], [448, 2112], [512, 2048], [512, 1984], [512, 1920], [512, 1856], [576, 1792], [576, 1728], [576, 1664], [640, 1600],
+  [640, 1536], [704, 1472], [704, 1408], [768, 1344], [768, 1280], [832, 1216], [896, 1152], [960, 1088], [1024, 1024], [1088, 960],
+  [1152, 896], [1216, 832], [1280, 768], [1344, 768], [1408, 704], [1472, 704], [1536, 640], [1600, 640], [1664, 576], [1728, 576],
+  [1792, 576], [1856, 512], [1920, 512], [1984, 512], [2048, 512], [2112, 448], [2176, 448], [2240, 448], [2304, 448], [2368, 384],
+  [2432, 384], [2496, 384], [2560, 384], [2624, 384], [2688, 384], [2752, 320], [2816, 320], [2880, 320], [2944, 320], [3008, 320],
+  [3072, 320], [3136, 320], [3200, 320], [3264, 320], [3328, 256], [3392, 256], [3456, 256], [3520, 256], [3584, 256], [3648, 256],
+  [3712, 256], [3776, 256], [3840, 256], [3904, 256], [3968, 256], [4032, 256], [4096, 256],
+];
+
+export interface NAIReferenceBucket extends NAIImageSize {
+  /** The size the image is resized to before the crop (it covers the bucket). */
+  resizeWidth: number;
+  resizeHeight: number;
+  /** The crop's corner in the resized image (the crop is centred). */
+  left: number;
+  top: number;
+  /** The image already is the bucket's size and is sent as it is. */
+  unchanged: boolean;
+}
+
+/**
+ * How a V5 Precise Reference is sent, as the official client computes it: the bucket whose aspect ratio is closest in
+ * log space (the first one on a tie), the image resized to cover it and cropped around its centre. Nothing is padded.
+ */
+export function naiReferenceBucket(width: number, height: number): NAIReferenceBucket {
+  const aspect = Math.log(Math.max(width, 1) / Math.max(height, 1));
+  let bucket = NAI_REFERENCE_BUCKETS[0], distance = Math.abs(aspect - Math.log(bucket[0] / bucket[1]));
+  for (const candidate of NAI_REFERENCE_BUCKETS) {
+    const next = Math.abs(aspect - Math.log(candidate[0] / candidate[1]));
+    if (next < distance) { bucket = candidate; distance = next; }
+  }
+  const [bucketWidth, bucketHeight] = bucket;
+  const scale = Math.max(bucketWidth / width, bucketHeight / height);
+  const resizeWidth = Math.max(Math.floor(width * scale + 0.5), bucketWidth), resizeHeight = Math.max(Math.floor(height * scale + 0.5), bucketHeight);
+  return { width: bucketWidth, height: bucketHeight, resizeWidth, resizeHeight, left: Math.floor((resizeWidth - bucketWidth) / 2), top: Math.floor((resizeHeight - bucketHeight) / 2), unchanged: width === bucketWidth && height === bucketHeight };
+}

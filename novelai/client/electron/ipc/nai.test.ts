@@ -30,6 +30,7 @@ import { frameNaiStreamMessage } from "./nai-stream";
 import {
   DEFAULT_PARAMS,
   normalizeGenerateParams,
+  naiPreciseReferenceCapability,
   supportsNAIModelMode,
   supportsNAIPreciseReference,
 } from "../../src/types";
@@ -603,28 +604,87 @@ describe("V4 character prompt payload", () => {
     expect(payload.parameters.dynamic_thresholding).toBe(false);
     expect(payload.parameters.skip_cfg_above_sigma).toBeNull();
     expect(payload.parameters.reference_image_multiple).toBeUndefined();
-    expect(payload.parameters.director_reference_images).toBeUndefined();
+    expect(payload.parameters.director_reference_images).toHaveLength(1);
     expect(payload.parameters.v4_negative_prompt.legacy_uc).toBe(false);
     expect(prompt.caption.char_captions).toHaveLength(32);
   });
 
-  it("keeps Precise Reference limited to V4.5 while V5 remains a structured-prompt model", () => {
+  it("has Precise Reference on V4.5 and V5 with each model's own capabilities (official table, build fac57e6)", () => {
     expect(supportsNAIPreciseReference("nai-diffusion-4-5-full")).toBe(true);
     expect(supportsNAIPreciseReference("nai-diffusion-4-5-curated-inpainting")).toBe(true);
-    expect(supportsNAIPreciseReference("nai-diffusion-5-full")).toBe(false);
-    expect(supportsNAIPreciseReference("nai-diffusion-5-curated")).toBe(false);
+    expect(supportsNAIPreciseReference("nai-diffusion-5-full")).toBe(true);
+    expect(supportsNAIPreciseReference("nai-diffusion-5-curated")).toBe(true);
+    expect(supportsNAIPreciseReference("nai-diffusion-5-full-medium")).toBe(true);
+    for (const model of ["nai-diffusion-4-full", "nai-diffusion-4-curated-preview", "nai-diffusion-3", "nai-diffusion-furry-3"]) expect(supportsNAIPreciseReference(model)).toBe(false);
+    expect(naiPreciseReferenceCapability("nai-diffusion-4-5-full")).toEqual({ strengthMax: 1, fidelity: true, outfit: false, preprocess: "pad", inpainting: true });
+    expect(naiPreciseReferenceCapability("nai-diffusion-5-curated")).toEqual({ strengthMax: 5, fidelity: false, outfit: true, preprocess: "bucket", inpainting: false });
+    expect(naiPreciseReferenceCapability("nai-diffusion-5-full-inpainting")).toEqual(naiPreciseReferenceCapability("nai-diffusion-5-full"));
   });
 
-  it("rejects V5 Precise Reference before building or posting a generation request", async () => {
-    await expect(
-      prepareExtras(DEFAULT_PARAMS, {
-        vibeImages: [],
-        charCaptions: [],
-        preciseReferences: [
-          { base64: b64("precise"), type: "character", strength: 1, fidelity: 1 },
-        ],
-      }),
-    ).rejects.toMatchObject({ reason: "generation.precise_model" });
+  const allTypes = (["character", "character_mainoutfit", "style", "costume", "character&style", "character&style_anyoutfit"] as const)
+    .map((type, index) => ({ base64: b64(`precise ${index}`), type, strength: 1, fidelity: 0.4 }));
+  const directorFields = (model: string, preciseReferences: Array<{ base64: string; type: any; strength: number; fidelity: number }>) => {
+    const parameters = buildPayload({ ...DEFAULT_PARAMS, model: model as any, positivePrompt: "1girl" }, 1, { vibeImages: [], charCaptions: [], preciseReferences }).parameters as Record<string, any>;
+    return {
+      types: parameters.director_reference_descriptions?.map((item: any) => item.caption.base_caption),
+      strengths: parameters.director_reference_strength_values,
+      secondary: parameters.director_reference_secondary_strength_values,
+      images: parameters.director_reference_images?.length,
+      cached: parameters.director_reference_images_cached?.map((item: any) => item.data),
+    };
+  };
+
+  it("sends every V5 reference type as its own base_caption, with no fidelity and strengths up to 5", () => {
+    expect(directorFields("nai-diffusion-5-full", allTypes)).toEqual({
+      types: ["character", "character_mainoutfit", "style", "costume", "character&style", "character&style_anyoutfit"],
+      strengths: [1, 1, 1, 1, 1, 1],
+      secondary: [0, 0, 0, 0, 0, 0],
+      images: 6,
+      cached: ["director_ref_0", "director_ref_1", "director_ref_2", "director_ref_3", "director_ref_4", "director_ref_5"],
+    });
+    const strengths = [0, 1.25, 5, 7, -1, Number.NaN].map((strength, index) => ({ base64: b64(`s${index}`), type: "style" as const, strength, fidelity: 1 }));
+    expect(directorFields("nai-diffusion-5-curated", strengths).strengths).toEqual([0, 1.25, 5, 5, 0, 1]);
+    expect(directorFields("nai-diffusion-5-full-medium", strengths.slice(0, 2)).types).toEqual(["style", "style"]);
+  });
+
+  it("sends V4.5 only what it has: no Outfit reference, the outfit variants as their plain type, strength 0–1 and fidelity", () => {
+    expect(directorFields("nai-diffusion-4-5-full", allTypes)).toEqual({
+      types: ["character", "character", "style", "character&style", "character&style"],
+      strengths: [1, 1, 1, 1, 1],
+      secondary: [0.6, 0.6, 0.6, 0.6, 0.6],
+      images: 5,
+      cached: ["director_ref_0", "director_ref_1", "director_ref_2", "director_ref_3", "director_ref_4"],
+    });
+    expect(directorFields("nai-diffusion-4-5-curated", [{ base64: b64("x"), type: "style", strength: 3, fidelity: 1 }]).strengths).toEqual([1]);
+    // An Outfit reference alone leaves a V4.5 request without any director field.
+    expect(directorFields("nai-diffusion-4-5-full", [allTypes[3]]).images).toBeUndefined();
+    expect(directorFields("nai-diffusion-4-full", allTypes).images).toBeUndefined();
+  });
+
+  it("crops a V5 reference to its bucket (cover, centre crop, alpha kept) and sends a bucket-sized PNG unchanged", async () => {
+    const png = async (width: number, height: number) => (await sharp({ create: { width, height, channels: 4, background: { r: 200, g: 30, b: 30, alpha: 0.5 } } }).png().toBuffer());
+    const prepared = async (bytes: Buffer, model = "nai-diffusion-5-full") => {
+      const extras = await prepareExtras({ ...DEFAULT_PARAMS, model: model as any }, { vibeImages: [], charCaptions: [], preciseReferences: [{ base64: bytes.toString("base64"), type: "costume", strength: 2, fidelity: 1 }] });
+      return Buffer.from(extras!.preciseReferences![0].base64, "base64");
+    };
+    const cropped = await sharp(await prepared(await png(1000, 1500))).metadata();
+    expect([cropped.format, cropped.width, cropped.height, cropped.hasAlpha]).toEqual(["png", 832, 1216, true]);
+    const wide = await sharp(await prepared(await sharp({ create: { width: 1920, height: 1080, channels: 3, background: "#336699" } }).jpeg().toBuffer())).metadata();
+    expect([wide.format, wide.width, wide.height]).toEqual(["png", 1344, 768]);
+    const exact = await png(832, 1216);
+    expect((await prepared(exact)).equals(exact)).toBe(true);
+    // The Medium model prepares references as V5 Full does.
+    expect((await sharp(await prepared(await png(512, 512), "nai-diffusion-5-full-medium")).metadata()).width).toBe(1024);
+  });
+
+  it("refuses precise references on a model without them, more than 16 of them, and undecodable bytes", async () => {
+    const reference = { base64: b64("precise"), type: "character" as const, strength: 1, fidelity: 1 };
+    await expect(prepareExtras({ ...DEFAULT_PARAMS, model: "nai-diffusion-4-full" }, { vibeImages: [], charCaptions: [], preciseReferences: [reference] }))
+      .rejects.toMatchObject({ reason: "generation.precise_model" });
+    await expect(prepareExtras(DEFAULT_PARAMS, { vibeImages: [], charCaptions: [], preciseReferences: [reference] }))
+      .rejects.toMatchObject({ reason: "generation.precise_undecodable", params: { index: 1 } });
+    await expect(prepareExtras(DEFAULT_PARAMS, { vibeImages: [], charCaptions: [], preciseReferences: Array.from({ length: 17 }, () => reference) }))
+      .rejects.toMatchObject({ reason: "generation.precise_limit", params: { limit: 16, count: 17 } });
   });
 
   it("uses the current V5 checkpoint in Furry mode and prefixes the official dataset tag once", () => {

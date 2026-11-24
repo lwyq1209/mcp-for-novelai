@@ -86,13 +86,35 @@ export function supportsNAIModelMode(model: string, mode: ModelMode): boolean {
   return normalized === "nai-diffusion-furry-3" || isNAIV4PlusModel(normalized);
 }
 
-export function supportsNAIPreciseReference(model: string): boolean {
+/**
+ * What Precise Reference is on a model, from the official web client's capability table (build fac57e6, 2026-11-24,
+ * the day V5 got the feature): its characterReferenceStrengthMax, characterReferenceFidelity, outfitReferences,
+ * resizeCharacterReferences ("pad") / bucketCharacterReferences ("bucket") and charRefInpainting. Kept apart from the
+ * V4+/structured-prompt capability so a new base model never sends Director Reference fields to a backend without them.
+ */
+export interface NAIPreciseReferenceCapability {
+  /** The Strength slider's upper end (the request clamps to 0…strengthMax). */
+  strengthMax: number;
+  /** Whether the model has the Fidelity slider; without it the secondary strength sent is always 0. */
+  fidelity: boolean;
+  /** Outfit references and the "Prefer same outfit" variants of the character types. */
+  outfit: boolean;
+  /** "pad": fit into one of three sizes and pad; "bucket": cover the nearest ~1 MP bucket and centre-crop. */
+  preprocess: "pad" | "bucket";
+  /** Whether a request with a mask keeps its references (the official client drops them where this is false). */
+  inpainting: boolean;
+}
+
+export function naiPreciseReferenceCapability(model: string): NAIPreciseReferenceCapability | null {
   const normalized = normalizeNAIBaseModel(model);
-  // NovelAI's V5 launch does not include Precise Reference. Keep this
-  // capability separate from the V4+/structured-prompt capability so adding a
-  // new base model cannot accidentally send Director Reference fields to an
-  // unsupported backend again.
-  return normalized.startsWith("nai-diffusion-4-5-");
+  if (normalized.startsWith("nai-diffusion-4-5-")) return { strengthMax: 1, fidelity: true, outfit: false, preprocess: "pad", inpainting: true };
+  // V5 Curated, V5 Full and V5 Full Medium (the Medium model inherits V5 Full's table).
+  if (normalized.startsWith("nai-diffusion-5-")) return { strengthMax: 5, fidelity: false, outfit: true, preprocess: "bucket", inpainting: false };
+  return null;
+}
+
+export function supportsNAIPreciseReference(model: string): boolean {
+  return naiPreciseReferenceCapability(model) !== null;
 }
 
 export function supportsNAICharacterPrompts(model: string): boolean {
@@ -361,15 +383,73 @@ export interface VibeTransferImage extends VibeTransferItem {
 
 /** NovelAI V4.5/V5 Precise (Director) Reference — distinct from Vibe Transfer.
  * Sent over IPC; the main process emits director_reference_* fields. */
-export type PreciseReferenceType = "character" | "style" | "character&style";
+/**
+ * The reference types as NovelAI names them on the wire (director_reference_descriptions[].caption.base_caption).
+ * `costume` is the Outfit reference. "Prefer same outfit" is not a field but the type itself: on is
+ * `character_mainoutfit` / `character&style`, off is `character` / `character&style_anyoutfit`. The three values
+ * V4.5 has (`character`, `style`, `character&style`) are the ones saved before V5 got the feature.
+ */
+export const PRECISE_REFERENCE_TYPES = ["character", "character_mainoutfit", "style", "costume", "character&style", "character&style_anyoutfit"] as const;
+export type PreciseReferenceType = (typeof PRECISE_REFERENCE_TYPES)[number];
+/** The four kinds a user picks; the two outfit variants are a toggle on `character` and `character&style`. */
+export type PreciseReferenceBaseType = "character" | "style" | "character&style" | "costume";
+/** Enabled references one request may carry (the official client refuses more). */
+export const MAX_NAI_PRECISE_REFERENCES = 16;
+/** The largest strength any model takes (V5); a stored reference may hold up to this, and the request clamps to its model. */
+export const MAX_PRECISE_REFERENCE_STRENGTH = 5;
+
+export function isPreciseReferenceType(value: unknown): value is PreciseReferenceType {
+  return typeof value === "string" && (PRECISE_REFERENCE_TYPES as readonly string[]).includes(value);
+}
+
+export function preciseReferenceBaseType(type: PreciseReferenceType): PreciseReferenceBaseType {
+  return type === "character_mainoutfit" ? "character" : type === "character&style_anyoutfit" ? "character&style" : type;
+}
+
+/** "Prefer same outfit" of a type: null where the type has no such toggle (style, outfit). */
+export function preciseReferenceSameOutfit(type: PreciseReferenceType): boolean | null {
+  if (type === "character" || type === "character_mainoutfit") return type === "character_mainoutfit";
+  if (type === "character&style" || type === "character&style_anyoutfit") return type === "character&style";
+  return null;
+}
+
+/** The type for a kind and its toggle; picking a kind alone gives the official defaults (character: off, both: on). */
+export function preciseReferenceTypeOf(base: PreciseReferenceBaseType, sameOutfit?: boolean): PreciseReferenceType {
+  if (base === "character") return sameOutfit === true ? "character_mainoutfit" : "character";
+  if (base === "character&style") return sameOutfit === false ? "character&style_anyoutfit" : "character&style";
+  return base;
+}
+
+/**
+ * The references a model's request carries, as the official client filters them before sending: a model without
+ * outfit references skips Outfit ones and turns the two outfit variants back into their plain type; a model without
+ * the Fidelity slider sends every reference at fidelity 1. Empty for a model without the feature. Idempotent.
+ */
+export function resolveNAIPreciseReferences<T extends Pick<PreciseReferenceItem, "type" | "fidelity">>(references: readonly T[] | undefined, model: string): T[] {
+  const capability = naiPreciseReferenceCapability(model);
+  if (!capability || !references?.length) return [];
+  return references
+    .filter((reference) => capability.outfit || reference.type !== "costume")
+    .map((reference) => ({
+      ...reference,
+      type: capability.outfit ? reference.type : preciseReferenceBaseType(reference.type),
+      fidelity: capability.fidelity ? reference.fidelity : 1,
+    }));
+}
 export interface PreciseReferenceItem {
   base64: string; // pure base64 (resized to an official reference resolution in main)
   type: PreciseReferenceType; // -> director_reference_descriptions[].caption.base_caption
-  strength: number; // 0.0 – 1.0 -> director_reference_strength_values
-  fidelity: number; // 0.0 – 1.0 -> secondary = round(1 - fidelity, 2)
+  strength: number; // 0 – the model's strengthMax (V4.5: 1, V5: 5) -> director_reference_strength_values
+  fidelity: number; // 0.0 – 1.0 -> secondary = round(1 - fidelity, 2); V4.5 only (V5 always sends 0)
   /** Legacy persisted compatibility field. NovelAI's Precise Reference UI only
    * exposes Strength and Fidelity; the main process always sends 1.0. */
   informationExtracted?: number;
+  /** Queued recipes only: base64 already is the request image (prepared and hashed when the recipe was reviewed),
+   * so the main process sends it without preparing it again. Never set by the window. */
+  prepared?: boolean;
+  /** Queued recipes only: sha256 of the request image bytes. A frozen batch stores each such image once
+   * (FrozenBatchInput.referenceImages) and its snapshots carry this hash with an empty base64. */
+  sha256?: string;
 }
 
 /** Renderer store representation of a precise reference (adds id + preview) */

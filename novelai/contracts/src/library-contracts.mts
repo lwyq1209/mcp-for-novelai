@@ -8,6 +8,8 @@ const strings = Type.Array(text);
 const nullableText = Type.Union([text, Type.Null()]);
 const optional = Type.Optional;
 const values = <const T extends (string | number)[]>(items: T) => Type.Enum<T>(items);
+/** Precise reference types as NovelAI names them (client/src/types.ts PRECISE_REFERENCE_TYPES; a client test pins the two lists). `costume` is the Outfit reference; the two outfit variants and `costume` are V5-only. */
+const preciseReferenceType = () => values(['character', 'character_mainoutfit', 'style', 'costume', 'character&style', 'character&style_anyoutfit']);
 const closed = <T extends Record<string, TSchema>>(properties: T) => Type.Object(properties, { additionalProperties: false });
 
 export const LibraryKindSchema = values(['tag', 'combo', 'note', 'study', 'history', 'artist_favorite', 'style_preset', 'positive_preset', 'prompt_chunk', 'reference_preset']);
@@ -154,7 +156,7 @@ export const PromptChunkPayloadSchema = Type.Object({ id: nonempty, name: text, 
 const localizedNames = Type.Object({ 'zh-CN': optional(text), 'zh-TW': optional(text), 'en-US': optional(text), 'ja-JP': optional(text), 'ko-KR': optional(text) });
 export const ReferencePresetPayloadSchema = Type.Object({
   id: nonempty, name: text, group: text, kind: values(['vibe', 'precise']), filePath: text, fileUrl: text, createdAt: text,
-  infoExtracted: Type.Number(), strength: Type.Number(), preciseType: values(['character', 'style', 'character&style']),
+  infoExtracted: Type.Number(), strength: Type.Number(), preciseType: preciseReferenceType(),
   fidelity: Type.Number(), informationExtracted: Type.Number(), width: Type.Number(), height: Type.Number(),
   sourceId: optional(text), sourceNames: optional(localizedNames), sourceGameNames: optional(localizedNames), sourceGameId: optional(text), sourceCategory: optional(text),
 });
@@ -233,7 +235,7 @@ export type AssetThumbnail = Static<typeof AssetThumbnailSchema>;
 const assetSelection = Type.Array(closed({kind:LibraryKindSchema,id:nonempty,expectedRevision:revision}),{minItems:1,maxItems:500});
 /** Recently Deleted entry identities (recently-deleted lists them). */
 const trashIds = Type.Array(Type.String({pattern:'^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$'}),{minItems:1,maxItems:500,uniqueItems:true});
-const assetUpdateDescription = 'Allowed update fields by kind: history: groupId only (existing history-group raw ID; never name or group); tag/combo/note: name, group, notes; study: name, notes; style_preset: name, group, prompt; positive_preset: name, prompt; prompt_chunk: name, content, updatedAt; reference_preset: name, group, strength, infoExtracted, preciseType, fidelity, informationExtracted; artist_favorite: none. Note prose belongs in notes; do not invent fields. To collect history and notes together, create-collection then add-to-collection with its returned collectionId, not update.';
+const assetUpdateDescription = 'Allowed update fields by kind: history: groupId only (existing history-group raw ID; never name or group); tag/combo/note: name, group, notes; study: name, notes; style_preset: name, group, prompt; positive_preset: name, prompt; prompt_chunk: name, content, updatedAt; reference_preset: name, group, strength (precise 0–5, V4.5 uses at most 1; vibe 0–1), infoExtracted, preciseType (character, character_mainoutfit, style, costume = outfit, character&style, character&style_anyoutfit; the outfit ones are V5-only), fidelity (V4.5 only), informationExtracted; artist_favorite: none. Note prose belongs in notes; do not invent fields. To collect history and notes together, create-collection then add-to-collection with its returned collectionId, not update.';
 // Internal/manual list and read retain their original limits and complete records.
 const assetHostList = closed({action:Type.Literal('list'),query:optional(text),kinds:optional(Type.Array(LibraryKindSchema,{maxItems:10,uniqueItems:true})),collectionId:optional(nonempty),includeArchived:optional(Type.Boolean()),offset:optional(integer),limit:optional(Type.Integer({minimum:1,maximum:100})),sortBy:optional(values(['updatedAt','createdAt','name'])),sortDirection:optional(values(['asc','desc'])),historyTags:optional(Type.Array(Type.String({minLength:1,maxLength:256}),{maxItems:30})),historyTagMatch:optional(values(['all','any'])),historyTagSources:optional(Type.Array(HistoryTagSourceSchema,{minItems:1,maxItems:4,uniqueItems:true})),
   // History images a queued batch saved (2026-10-14, issue #1): queueOrigin.requestKey (namespaced host key) / batchId.
@@ -254,8 +256,8 @@ const assetRequestVariants = [
     notes:optional(Type.String({description:'Note prose for tag/combo/note/study. Keep user feedback and AI observations attributed; do not add invented fields.'})),
     groupId:optional(Type.String({description:'History only: existing history-group raw ID from collections; empty string clears that history group. Never a user collection name or encoded user collectionId.'})),
     prompt:optional(text),content:optional(text),updatedAt:optional(text),
-    strength:optional(Type.Number({minimum:0,maximum:1})),infoExtracted:optional(Type.Number({minimum:0,maximum:1})),
-    preciseType:optional(values(['character','style','character&style'])),fidelity:optional(Type.Number({minimum:0,maximum:1})),informationExtracted:optional(Type.Number({minimum:0,maximum:1})),
+    strength:optional(Type.Number({minimum:0,maximum:5})),infoExtracted:optional(Type.Number({minimum:0,maximum:1})),
+    preciseType:optional(preciseReferenceType()),fidelity:optional(Type.Number({minimum:0,maximum:1})),informationExtracted:optional(Type.Number({minimum:0,maximum:1})),
   }, {additionalProperties:false,description:assetUpdateDescription})}),
   closed({action:Type.Literal('mutate'),command:values(['add-to-collection','remove-from-collection']),items:assetSelection,collectionId:nonempty}),
   // Recently Deleted (step 3c, 2026-11-02): delete moves items, or one user collection, there even when they are

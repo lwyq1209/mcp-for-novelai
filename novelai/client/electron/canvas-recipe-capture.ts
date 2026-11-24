@@ -10,9 +10,10 @@ import type { CanvasOrigin } from './queue-recipe-service';
  *    stroke after reading the source image.
  * 2. The host stores it as a new recipe (put_canvas_recipe) or dry-runs it (preview_queue_recipe), so a canvas
  *    recipe passes the same normalization, source checks and builder as any other recipe.
- * Only the images the chosen mode uses are kept (no source in t2i, no mask outside inpaint); references are kept
- * for the seeded modes, where the recipe refuses them (unsupported_reference), and dropped for upscale/director,
- * which never send them. Every renderer refusal comes back with its own code and message, and nothing was saved.
+ * Only the images the chosen mode uses are kept (no source in t2i, no mask outside inpaint). Precise references are
+ * kept with their images for the seeded modes: t2i, i2i and enhance send them on V4.5 and V5, and the recipe store
+ * refuses what cannot send them (inpaint, another model, an Outfit reference on V4.5) and every Vibe reference
+ * (unsupported_reference). Upscale and director never send references, so theirs are dropped. Every renderer refusal comes back with its own code and message, and nothing was saved.
  * Captured without draftId while the canvas holds an unapplied draft, the reply names that draft (unappliedDraftId):
  * the recipe is the visible state (or its detached patch), not the draft. The notice is not stored with the recipe.
  */
@@ -47,12 +48,15 @@ export function parseCanvasCapture(raw: unknown) {
     ...(raw.draftId !== undefined ? { draftId: raw.draftId as string } : {}), ...(raw.patch !== undefined ? { patch: structuredClone(raw.patch) } : {}), preview: raw.preview === true };
 }
 
-/** Keeps the images the mode uses; post-processing modes never send references, so their authored copies go too. */
+/** Keeps the images the mode uses: the source, the mask and, for a generation mode, the image of each precise
+ * reference (the recipe store refuses a mode or model that cannot send them, and every Vibe reference). Post-processing
+ * modes never send references, so their authored copies go too. */
 export function canvasPreparation(mode: GenerationMode, raw: unknown): Preparation {
   if (!record(raw) || raw.mode !== mode || !record(raw.authored) || !Array.isArray(raw.assets)) return fail('canvas_capture_mismatch', 'The canvas returned an incomplete preparation; nothing was saved. Read the workspace and capture again.');
   const authored = structuredClone(raw.authored);
   if (!isSeededGeneration(mode)) { authored.vibeImages = []; authored.preciseReferences = []; }
-  const assets = (raw.assets as Preparation['assets']).filter(asset => record(asset) && ((asset.role === 'source' && mode !== 't2i') || (asset.role === 'mask' && mode === 'inpaint')))
+  const assets = (raw.assets as Preparation['assets']).filter(asset => record(asset) && ((asset.role === 'source' && mode !== 't2i') || (asset.role === 'mask' && mode === 'inpaint')
+    || (isSeededGeneration(mode) && typeof asset.role === 'string' && /^preciseReferences:\d+$/.test(asset.role))))
     .map(asset => ({ role: asset.role, mimeType: asset.mimeType, data: asset.data }));
   return { mode, authored, assets };
 }

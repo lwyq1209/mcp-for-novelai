@@ -57,6 +57,12 @@ export interface GenerationSnapshot extends PostprocessRecipe {
   batchCount?: number;
   /** Manual upscale only: the source file name at the click (the manual upscale file is named after it). */
   sourceName?: string;
+  /**
+   * Only on the first snapshot of a frozen batch of several recipes: the request images of the batch's precise
+   * references, base64 by sha256, each stored once. The snapshots' own references then carry that sha256 and an empty
+   * base64, and the batch service puts the bytes back for the image it submits. Never reaches the generation service.
+   */
+  referenceImages?: Record<string, string>;
 }
 export interface GenerationRequest {
   workspaceId: string; expectedRevision: number; requestKey: string; mode: GenerationMode;

@@ -19,6 +19,7 @@ import type {
   ReferencePresetSaveRequest,
   ReferenceImportCommitRequest,
 } from "../../src/types";
+import { MAX_PRECISE_REFERENCE_STRENGTH, isPreciseReferenceType } from "../../src/types";
 import { hostText } from "../host-language";
 
 /** Results the window renders in its language (step 4a): failures and the export receipt carry a code, an English message and params. */
@@ -78,10 +79,7 @@ function serializablePreset(preset: ReferencePreset | Omit<ReferencePreset, "fil
 
 export function normalizePreset(raw: Record<string, unknown>, filePath: string) {
   const kind = raw.kind === "precise" ? "precise" : "vibe";
-  const preciseType: PreciseReferenceType =
-    raw.preciseType === "style" || raw.preciseType === "character&style"
-      ? raw.preciseType
-      : "character";
+  const preciseType: PreciseReferenceType = isPreciseReferenceType(raw.preciseType) ? raw.preciseType : "character";
   const name = cleanText(raw.name);
   if (!name) return null;
   return publicPreset({
@@ -92,7 +90,7 @@ export function normalizePreset(raw: Record<string, unknown>, filePath: string) 
     filePath,
     createdAt: cleanText(raw.createdAt, 64) || new Date().toISOString(),
     infoExtracted: numberIn(raw.infoExtracted, 1),
-    strength: numberIn(raw.strength, 1),
+    strength: kind === "precise" ? numberIn(raw.strength, 1, 0, MAX_PRECISE_REFERENCE_STRENGTH) : numberIn(raw.strength, 1),
     preciseType,
     fidelity: numberIn(raw.fidelity, 1),
     informationExtracted: numberIn(raw.informationExtracted, 1),
