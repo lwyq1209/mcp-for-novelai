@@ -63,12 +63,12 @@ export default { get: forbidden, post: forbidden, request: forbidden, create: fo
   const load = file => jiti.import(fileURLToPath(new URL(`../client/${file}`, import.meta.url)));
   // Loaded one after another: concurrent jiti imports can instantiate a shared module twice (two BatchInputError classes).
   // queue-bridge-error.ts shares this module cache, so its instanceof checks see the classes the services throw.
-  let service, batch, storage, dimensions, types, bridgeError, effort;
+  let service, batch, storage, dimensions, types, bridgeError, effort, generationInput;
   const modules = [];
-  for (const file of ['electron/queue-recipe-service.ts', 'electron/batch-service.ts', 'electron/batch-storage.ts', 'src/nai-dimensions.ts', 'src/types.ts', 'electron/queue-bridge-error.ts', 'src/nai-effort.ts']) modules.push(await load(file));
-  [service, batch, storage, dimensions, types, bridgeError, effort] = modules;
+  for (const file of ['electron/queue-recipe-service.ts', 'electron/batch-service.ts', 'electron/batch-storage.ts', 'src/nai-dimensions.ts', 'src/types.ts', 'electron/queue-bridge-error.ts', 'src/nai-effort.ts', 'src/workspace/generation-input.ts']) modules.push(await load(file));
+  [service, batch, storage, dimensions, types, bridgeError, effort, generationInput] = modules;
   host = { createQueueRecipeService: service.createQueueRecipeService, RECIPE_ASSET_LIMITS: service.RECIPE_ASSET_LIMITS, RECIPE_STORE_LIMITS: service.RECIPE_STORE_LIMITS, queueBridgeError: bridgeError.queueBridgeError,
-    createBatchService: batch.createBatchService, queuedExtraNoiseSeed: batch.queuedExtraNoiseSeed, createBatchStorage: storage.createBatchStorage, BatchInputError: storage.BatchInputError, dimensions, types, effort };
+    createBatchService: batch.createBatchService, queuedExtraNoiseSeed: batch.queuedExtraNoiseSeed, createBatchStorage: storage.createBatchStorage, BatchInputError: storage.BatchInputError, dimensions, types, effort, generationInput };
 });
 after(async () => {
   globalThis.fetch = originalFetch;
@@ -1627,6 +1627,234 @@ test('parity: the Medium constants and the Max✨ size ports mirror the client',
     assert.ok(input.width * input.height < recipeQueue.MAX_ENHANCE_INPUT_LIMIT && input.width % 64 === 0 && input.height % 64 === 0, `${width}×${height} → ${input.width}×${input.height}`);
     assert.deepEqual(recipeQueue.maxEnhanceOutputSize(input.width, input.height), dimensions.maxEnhanceOutputSize(input.width, input.height));
   }
+});
+
+// ------------------------------------------------------------------------------------------------ precise references
+// NovelAI V5 got Precise Reference on 2026-11-24 (with the Outfit reference, "Prefer same outfit", strength up to 5 and
+// no fidelity). prepare_recipe takes references for t2i, i2i and enhance on V4.5 and V5: library images by identity,
+// prepared by the host as the official client prepares them, sent inside the one request of each queued image.
+const requestOf = recipe => recipe.effectiveRequest.parameters;
+const referenceSizes = recipe => recipe.effective.references.map(({ original, request, fit, percent }) => [`${original.width}×${original.height}`, `${request.width}×${request.height}`, fit, percent ?? 0]);
+test('references: a V5 t2i recipe takes character, style and outfit images by library identity; the readback gives what is sent, the request sizes and the cost', async t => {
+  const h = await realHost(t);
+  const { call } = await connect(t, h.bridge), { call: agent } = await connect(t, h.bridge, { compact: true });
+  const sheetBytes = gradient(1000, 1500), sheet = h.addHistory('history-sheet', sheetBytes, { width: 1000, height: 1500 });
+  const outfitBytes = gradient(512, 512), outfit = h.addStudy(outfitBytes, { width: 512, height: 512 });
+  const references = [{ image: sheet, type: 'character' }, { image: outfit, type: 'outfit', strength: 1.5 }, { image: sheet, type: 'character_style', sameOutfit: false, strength: 9, fidelity: 0.5 }];
+  const args = { mode: 't2i', ...V5_GEN, width: 832, height: 1216, references };
+  const reads = h.count('asset_library');
+  const full = ok(await call('prepare_recipe', args));
+  assert.equal(h.count('asset_library') - reads, 2, 'one metadata read per distinct image');
+  assert.equal(full.ready, true); assert.equal(full.saved, true);
+  // The put names every image by library reference (no bytes) and the settings by NovelAI's own type names.
+  const put = h.calls.findLast(entry => entry.method === 'put_queue_recipe').args;
+  assert.equal(put.assetData, 'omit');
+  assert.deepEqual(put.preparation.authored.preciseReferences, [{ type: 'character', strength: 1, fidelity: 1 }, { type: 'costume', strength: 1.5, fidelity: 1 }, { type: 'character&style_anyoutfit', strength: 5, fidelity: 1 }]);
+  assert.deepEqual(put.preparation.assets.map(asset => [asset.role, asset.ref.kind, asset.sha256, 'data' in asset]),
+    [['preciseReferences:0', 'history', sha256(sheetBytes), false], ['preciseReferences:1', 'study', sha256(outfitBytes), false], ['preciseReferences:2', 'history', sha256(sheetBytes), false]]);
+  // Corrections and the cost.
+  const clamp = full.warnings.find(warning => warning.code === 'value_clamped');
+  assert.deepEqual([clamp.field, clamp.from, clamp.to], ['references[2].strength', 9, 5]);
+  const dropped = full.warnings.find(warning => warning.code === 'value_dropped');
+  assert.equal(dropped.field, 'references[2].fidelity'); assert.match(dropped.message, /has no fidelity/);
+  const paid = full.warnings.find(warning => warning.code === 'precise_reference_paid');
+  assert.deepEqual([paid.references, paid.anlasPerImage], [3, 15]); assert.match(paid.message, /5 Anlas per reference per image.*15 Anlas more, on Opus too/);
+  // What is sent: types, strengths, no fidelity on V5, and each request image (a V5 bucket) by review asset.
+  assert.deepEqual(full.effective.references.map(({ index, type, sameOutfit, strength, fidelity }) => [index, type, sameOutfit, strength, fidelity]),
+    [[0, 'character', false, 1, undefined], [1, 'outfit', undefined, 1.5, undefined], [2, 'character_style', false, 5, undefined]]);
+  assert.deepEqual(referenceSizes(full), [['1000×1500', '832×1216', 'cropped', 3], ['512×512', '1024×1024', 'resized', 0], ['1000×1500', '832×1216', 'cropped', 3]]);
+  assert.equal(full.effective.references[0].request.sha256, full.effective.references[2].request.sha256, 'the same image prepares to the same bytes');
+  const request = requestOf(full);
+  assert.deepEqual(request.director_reference_descriptions.map(entry => entry.caption.base_caption), ['character', 'costume', 'character&style_anyoutfit']);
+  assert.deepEqual(request.director_reference_strength_values, [1, 1.5, 5]);
+  assert.deepEqual(request.director_reference_secondary_strength_values, [0, 0, 0]);
+  assert.deepEqual(request.director_reference_images, [0, 1, 2].map(index => ({ assetRole: `request-reference:${index}` })));
+  assert.deepEqual(request.director_reference_images_cached.map(entry => entry.cache_secret_key), full.effective.references.map(reference => reference.request.sha256));
+  assert.ok(!JSON.stringify(full).includes(sheetBytes.toString('base64').slice(0, 80)), 'no image bytes in the readback');
+  assert.ok(!full.unusedInputs.includes('preciseReferences'));
+  assert.deepEqual(full.authored.references, [{ type: 'character', sameOutfit: false, strength: 1, fidelity: 1 }, { type: 'outfit', strength: 1.5, fidelity: 1 }, { type: 'character_style', sameOutfit: false, strength: 5, fidelity: 1 }]);
+  assert.match(full.next, /references/);
+  // The agent's readback: the request image of each reference, and of the settings only what the call left to the
+  // host (strength 1, NovelAI's own sameOutfit default) or what was corrected.
+  const compact = ok(await agent('prepare_recipe', { ...args, preview: true }));
+  assert.deepEqual(compact.effective.references, [
+    { index: 0, sameOutfit: false, strength: 1, original: { width: 1000, height: 1500 }, request: { width: 832, height: 1216 }, fit: 'cropped', percent: 3 },
+    { index: 1, original: { width: 512, height: 512 }, request: { width: 1024, height: 1024 }, fit: 'resized' },
+    { index: 2, strength: 5, original: { width: 1000, height: 1500 }, request: { width: 832, height: 1216 }, fit: 'cropped', percent: 3 },
+  ]);
+  assert.ok(compact.warnings.some(warning => warning.code === 'precise_reference_paid'));
+  // The stored revision reads back the same; the references and their images are part of the identity.
+  const other = ok(await call('prepare_recipe', { ...args, references: [{ ...references[0], sameOutfit: true }, ...references.slice(1)] }));
+  const without = ok(await call('prepare_recipe', { mode: 't2i', ...V5_GEN, width: 832, height: 1216 }));
+  assert.equal(new Set([full.inputHash, other.inputHash, without.inputHash]).size, 3);
+  assert.equal(requestOf(other).director_reference_descriptions[0].caption.base_caption, 'character_mainoutfit');
+  assert.equal(without.effective.references, undefined); assert.ok(!without.warnings.some(warning => warning.code === 'precise_reference_paid'));
+  assert.equal(h.calls.findLast(entry => entry.method === 'put_queue_recipe').args.preparation.authored.preciseReferences, undefined, 'a recipe without references is sent as before');
+  // An image far from every bucket is cropped a lot, and the readback says so.
+  const strip = h.addHistory('history-strip', gradient(64, 2048), { width: 64, height: 2048 });
+  const cropped = ok(await call('prepare_recipe', { ...args, references: [{ image: strip, type: 'style' }], preview: true }));
+  const notice = cropped.warnings.find(warning => warning.code === 'reference_cropped');
+  assert.deepEqual([notice.field, notice.from, notice.to], ['references[0]', { width: 64, height: 2048 }, { width: 256, height: 4096 }]); assert.match(notice.message, /about 50% of it is cut off/);
+});
+
+test('references: i2i and enhance send them too; V4.5 keeps strength 0–1 and fidelity and pads into its three sizes', async t => {
+  const h = await realHost(t);
+  const { call } = await connect(t, h.bridge), { call: agent } = await connect(t, h.bridge, { compact: true });
+  const source = h.addHistory('history-source', gradient(832, 1216), { width: 832, height: 1216 });
+  const sheet = h.addHistory('history-sheet', gradient(640, 640), { width: 640, height: 640 });
+  const references = [{ image: sheet, type: 'character_style', strength: 0.8, fidelity: 0.6 }, { image: sheet, type: 'style', strength: 3 }];
+  for (const args of [recipes(source).i2i({ references }), recipes(source).enhance({ references })]) {
+    const recipe = ok(await call('prepare_recipe', args)), mode = args.mode;
+    assert.equal(recipe.ready, true, mode);
+    assert.deepEqual(recipe.effective.references.map(({ type, sameOutfit, strength, fidelity }) => [type, sameOutfit, strength, fidelity]), [['character_style', undefined, 0.8, 0.6], ['style', undefined, 1, 1]], mode);
+    assert.deepEqual(referenceSizes(recipe), [['640×640', '1472×1472', 'resized', 0], ['640×640', '1472×1472', 'resized', 0]], mode);
+    assert.deepEqual(requestOf(recipe).director_reference_descriptions.map(entry => entry.caption.base_caption), ['character&style', 'style'], mode);
+    assert.deepEqual(requestOf(recipe).director_reference_strength_values, [0.8, 1], mode);
+    assert.deepEqual(requestOf(recipe).director_reference_secondary_strength_values, [0.4, 0], mode);
+    assert.deepEqual(requestOf(recipe).image, { assetRole: 'request-source' }, mode);
+    assert.deepEqual(recipe.warnings.filter(warning => warning.code === 'value_clamped').map(warning => [warning.field, warning.from, warning.to]), [['references[1].strength', 3, 1]], mode);
+    assert.equal(recipe.warnings.find(warning => warning.code === 'precise_reference_paid').anlasPerImage, 10, mode);
+    assert.equal(recipe.source.historyId, 'history-source', mode);
+  }
+  // V4.5 has no sameOutfit; fidelity 1 is the default and is listed when the call left it out.
+  const compact = ok(await agent('prepare_recipe', recipes(source).i2i({ references: [{ image: sheet, type: 'character' }], preview: true })));
+  assert.deepEqual(compact.effective.references, [{ index: 0, strength: 1, fidelity: 1, original: { width: 640, height: 640 }, request: { width: 1472, height: 1472 }, fit: 'resized' }]);
+  // A tall sheet is padded into 1024×1536.
+  const tall = h.addHistory('history-tall', gradient(512, 1024), { width: 512, height: 1024 });
+  const padded = ok(await call('prepare_recipe', recipes(source).i2i({ references: [{ image: tall, type: 'character' }], preview: true })));
+  assert.deepEqual(referenceSizes(padded), [['512×1024', '1024×1536', 'padded', 25]]);
+});
+
+test('references: what cannot be sent is refused before anything is saved, each with its reason; nothing is dropped silently', async t => {
+  const h = await realHost(t);
+  const { call } = await connect(t, h.bridge);
+  const image = h.addHistory('history-ref', gradient(512, 512), { width: 512, height: 512 }), source = h.addHistory('history-source', gradient(832, 1216), { width: 832, height: 1216 });
+  const t2i = (model, references) => ({ mode: 't2i', ...GEN, model, width: 832, height: 1216, references });
+  const one = { image, type: 'character' };
+  const refused = async (args, pattern, reason) => {
+    const error = errorOf(await call('prepare_recipe', args));
+    assert.equal(error.code, 'invalid_arguments', JSON.stringify(error)); assert.match(error.message, pattern);
+    if (reason) assert.equal(error.details?.reason, reason);
+  };
+  const before = h.calls.length;
+  // Models and modes without the feature.
+  for (const model of ['nai-diffusion-4-full', 'nai-diffusion-4-curated', 'nai-diffusion-3', 'nai-diffusion-furry-3']) await refused(t2i(model, [one]), /exist on NovelAI V4\.5 and V5 only/, 'references_unsupported_model');
+  const mask = { units: 'fraction', layers: [{ op: 'add', shape: { type: 'rect', x: 0.2, y: 0.2, width: 0.4, height: 0.4 } }] };
+  for (const args of [recipes(source).inpaint(mask, { references: [one] }), recipes(source).upscale({ references: [one] }), recipes(source).director({ references: [one] })]) await refused(args, /does not accept: references/, 'field_not_in_mode');
+  // V5-only kinds on V4.5.
+  await refused(t2i('nai-diffusion-4-5-full', [{ image, type: 'outfit' }]), /Outfit references exist on NovelAI V5 only/, 'reference_outfit_unsupported');
+  await refused(t2i('nai-diffusion-4-5-curated', [{ ...one, sameOutfit: true }]), /sameOutfit .* exists on NovelAI V5 only/, 'reference_same_outfit_unsupported');
+  // Malformed references.
+  const v5 = references => t2i('nai-diffusion-5-full', references);
+  await refused(v5([{ image, type: 'style', sameOutfit: false }]), /sameOutfit belongs to the types character and character_style/);
+  await refused(v5([{ image, type: 'costume' }]), /references\[0\]\.type|type/);
+  await refused(v5([{ image }]), /type/);
+  await refused(v5([{ type: 'style' }]), /image/);
+  await refused(v5([{ image: { kind: 'history', historyId: 'x', historyRevision: 1, assetId: 'a', data: 'AAAA' }, type: 'style' }]), /additional properties|does not accept/);
+  await refused(v5([{ ...one, strength: 'strong' }]), /strength/);
+  await refused(v5([{ ...one, weight: 1 }]), /additional properties|weight/);
+  await refused(v5(Array.from({ length: 17 }, () => one)), /16|references/);
+  assert.equal(h.calls.length, before, 'none of them reached the host');
+  // An image that does not exist is refused after its metadata read, before any put.
+  const missing = errorOf(await call('prepare_recipe', v5([one, { image: { kind: 'history', historyId: 'nope', historyRevision: 1, assetId: 'nope-original' }, type: 'style' }])));
+  assert.equal(missing.code, 'library_not_found'); assert.match(missing.message, /references\[1\]\.image/);
+  assert.equal(h.count('put_queue_recipe'), 0); assert.equal(h.count('preview_queue_recipe'), 0);
+  // Empty and absent are the same recipe.
+  const empty = ok(await call('prepare_recipe', v5([]))), absent = ok(await call('prepare_recipe', { mode: 't2i', ...V5_GEN, width: 832, height: 1216 }));
+  assert.equal(empty.inputHash, absent.inputHash);
+  // A client from before queued references answers "not implemented": reported as an outdated client, nothing saved.
+  h.faults.put_queue_recipe = { reply: () => { throw new BridgeError('unsupported_reference', 'Queued reference encoding is not implemented.'); } };
+  assert.equal(errorOf(await call('prepare_recipe', v5([one]))).code, 'host_outdated');
+});
+
+test('references: a put reply that stored other references or another image is never adopted', async t => {
+  const h = await realHost(t);
+  const { call } = await connect(t, h.bridge);
+  const image = h.addHistory('history-ref', gradient(512, 512), { width: 512, height: 512 });
+  const args = { mode: 't2i', ...V5_GEN, width: 832, height: 1216, references: [{ image, type: 'character', strength: 1.5 }] };
+  for (const [name, mutate, code, field] of [
+    ['a changed strength', snapshot => { snapshot.reviewInput.authored.preciseReferences[0].strength = 2; }, 'recipe_input_mismatch', 'preciseReferences.0.strength'],
+    ['a changed type', snapshot => { snapshot.reviewInput.authored.preciseReferences[0].type = 'style'; }, 'recipe_input_mismatch', 'preciseReferences.0.type'],
+    ['an added field', snapshot => { snapshot.reviewInput.authored.preciseReferences[0].name = 'x'; }, 'recipe_input_mismatch', 'preciseReferences.0.name'],
+    ['a dropped reference', snapshot => { snapshot.reviewInput.authored.preciseReferences = []; }, 'recipe_input_mismatch', 'preciseReferences.length'],
+    ['another image', snapshot => { snapshot.reviewInput.assets.find(asset => asset.role === 'preciseReferences:0').sha256 = 'f'.repeat(64); }, 'recipe_identity_unconfirmed', 'references.0.sha256'],
+    ['another reference', (_snapshot, reply) => { reply.assetRefs[0].ref.id = 'history-other'; }, 'recipe_identity_unconfirmed', 'references.0.ref'],
+    ['a missing image', snapshot => { snapshot.reviewInput.assets = snapshot.reviewInput.assets.filter(asset => asset.role !== 'preciseReferences:0'); }, 'recipe_identity_unconfirmed', 'references.0.sha256'],
+  ]) {
+    h.faults.put_queue_recipe = reply => retamper(reply, mutate);
+    const error = errorOf(await call('prepare_recipe', args));
+    assert.equal(error.code, code, name);
+    // The reply's own consistency check catches an image that no longer matches its reference (a reason, no field list).
+    assert.ok(error.details.fields?.includes(field) || /inconsistent recipe source reference/.test(error.details.reason ?? ''), `${name}: ${JSON.stringify(error.details)}`);
+  }
+});
+
+test('references through the real host batch service: every image of a set gets the prepared reference image; the receipt states the cost', async t => {
+  const h = await realHost(t, { realBatch: true });
+  const { call } = await connect(t, h.bridge);
+  const sheet = h.addHistory('history-sheet', gradient(1000, 1500), { width: 1000, height: 1500 });
+  const prompts = ['1girl, garden', '1girl, kitchen', '1girl, rooftop'], prepared = [];
+  for (const positivePrompt of prompts) prepared.push(ok(await call('prepare_recipe', { mode: 't2i', ...V5_GEN, positivePrompt, width: 832, height: 1216, references: [{ image: sheet, type: 'character', sameOutfit: false, strength: 1.2 }] })));
+  const plain = ok(await call('prepare_recipe', { mode: 't2i', ...V5_GEN, positivePrompt: 'landscape', width: 832, height: 1216 }));
+  const receipt = ok(await call('enqueue_recipes', { requestKey: 'reference-set', items: [ref(prepared[0]), ref(prepared[1]), ref(plain), ref(prepared[2])] }));
+  assert.equal(receipt.status, 'enqueued');
+  assert.equal(receipt.warnings.filter(warning => warning.code === 'precise_reference_paid').length, 3);
+  await waitFor(() => h.submitted.length === 4, 'the four submissions');
+  const requestSha = prepared[0].effective.references[0].request.sha256;
+  for (const [index, submission] of h.submitted.entries()) {
+    const references = submission.snapshot.extras.preciseReferences;
+    assert.equal(submission.snapshot.referenceImages, undefined, String(index));
+    if (index === 2) { assert.deepEqual(references, []); continue; }
+    assert.equal(references.length, 1, String(index));
+    assert.deepEqual({ ...references[0], base64: undefined }, { base64: undefined, type: 'character', strength: 1.2, fidelity: 1, prepared: true, sha256: requestSha }, String(index));
+    assert.equal(sha256(Buffer.from(references[0].base64, 'base64')), requestSha, `image ${index} carries the bytes the readback named`);
+  }
+  assert.deepEqual(h.submitted.map(submission => submission.snapshot.params.positivePrompt), [...prompts.slice(0, 2), 'landscape', prompts[2]]);
+  // One recipe for several images: one snapshot with the image inline, each image with the bytes.
+  const again = ok(await call('enqueue_recipes', { requestKey: 'reference-one', items: [{ ...ref(prepared[0]), seeds: [5, 6] }] }));
+  assert.equal(again.status, 'enqueued');
+  await waitFor(() => h.submitted.length === 6, 'the two further submissions');
+  for (const submission of h.submitted.slice(4)) assert.equal(sha256(Buffer.from(submission.snapshot.extras.preciseReferences[0].base64, 'base64')), requestSha);
+});
+
+test('references: the frozen-input estimate counts a request image once per batch of several recipes', () => {
+  const item = id => ({ recipeId: id, recipeRevision: 1 }), bytes = new Map(), image = (sha256, size) => ({ sha256, bytes: size });
+  const shared = new Map([['a:1', [image('x', 300)]], ['b:1', [image('x', 300)]], ['c:1', []]]);
+  assert.equal(recipeQueue.frozenInputEstimate([item('a'), item('b'), item('c'), item('a')], bytes, shared), 400);
+  assert.equal(recipeQueue.frozenInputEstimate([item('a'), item('b')], bytes, new Map([['a:1', [image('x', 300)]], ['b:1', [image('y', 300), image('x', 300)]]])), 800);
+  assert.equal(recipeQueue.frozenInputEstimate([item('a'), item('a'), item('a')], bytes, new Map([['a:1', [image('x', 300), image('x', 300)]]])), 800, 'one recipe keeps its images inline');
+  assert.equal(recipeQueue.frozenInputEstimate([item('a'), item('b')], new Map([['a:1', { source: 3 }], ['b:1', { source: 3, mask: 3 }]]), shared), 412);
+  assert.equal(recipeQueue.frozenInputEstimate([item('a'), item('b')], new Map([['a:1', { source: 3 }]])), 4, 'no references: as before');
+  // A read recipe's request images, with the sizes the host reports (an older host: an uncompressed upper bound).
+  const recipe = { snapshot: { reviewInput: { assets: [{ role: 'preciseReferences:0', sha256: 'o' }, { role: 'request-reference:0', sha256: 'r', width: 832, height: 1216 }] } }, assetBytes: { 'preciseReferences:0': 9, 'request-reference:0': 1234 } };
+  assert.deepEqual(recipeQueue.recipeReferenceImages(recipe), [{ sha256: 'r', bytes: 1234 }]);
+  assert.deepEqual(recipeQueue.recipeReferenceImages({ ...recipe, assetBytes: {} }), [{ sha256: 'r', bytes: 832 * 1216 * 4 }]);
+});
+
+test('parity: the reference rules mirror the client (models, types, the same-outfit names, the limit and the modes)', () => {
+  const { types, generationInput } = host;
+  for (const model of [...recipeQueue.T2I_MODELS, ...recipeQueue.MEDIUM_MODELS, 'nai-diffusion-5-curated-inpainting']) {
+    const client = types.naiPreciseReferenceCapability(model), server = recipeQueue.referenceCapability(model);
+    assert.deepEqual(server && { ...server }, client && { strengthMax: client.strengthMax, fidelity: client.fidelity, outfit: client.outfit, preprocess: client.preprocess }, model);
+  }
+  assert.equal(recipeQueue.MAX_REFERENCES, types.MAX_NAI_PRECISE_REFERENCES);
+  assert.deepEqual([...recipeQueue.REFERENCE_MODES], [...generationInput.PRECISE_REFERENCE_QUEUE_MODES]);
+  const base = { character: 'character', style: 'style', character_style: 'character&style', outfit: 'costume' };
+  assert.deepEqual([...recipeQueue.REFERENCE_TYPES].sort(), Object.keys(base).sort());
+  const wires = new Set();
+  for (const type of recipeQueue.REFERENCE_TYPES) for (const sameOutfit of [undefined, true, false]) {
+    const wire = recipeQueue.referenceWireType(type, sameOutfit);
+    assert.equal(wire, types.preciseReferenceTypeOf(base[type], sameOutfit), `${type} ${sameOutfit}`);
+    wires.add(wire);
+  }
+  assert.deepEqual([...wires].sort(), [...types.PRECISE_REFERENCE_TYPES].sort());
+  for (const wire of types.PRECISE_REFERENCE_TYPES) {
+    const [type, sameOutfit] = recipeQueue.referenceKindOf(wire);
+    assert.equal(base[type], types.preciseReferenceBaseType(wire), wire);
+    assert.equal(sameOutfit, types.preciseReferenceSameOutfit(wire), wire);
+  }
+  // The largest strength any model takes is what the host stores at most.
+  assert.equal(Math.max(...recipeQueue.T2I_MODELS.map(model => recipeQueue.referenceCapability(model)?.strengthMax ?? 0)), types.MAX_PRECISE_REFERENCE_STRENGTH);
 });
 
 test('every host method observed across this file is declared by the recipe and queue tools', () => {

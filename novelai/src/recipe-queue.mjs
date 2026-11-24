@@ -85,6 +85,26 @@ const EFFORT_MODES = Object.freeze(['t2i', 'i2i', 'inpaint']);
  * costs Anlas on Opus too. A test pins parity with the client.
  */
 export const MAX_ENHANCE_INPUT_LIMIT = 0.8 * 3_145_728;
+/**
+ * Precise Reference (NovelAI V4.5; V5 since 2026-11-24). Mirrors client/src/types.ts (naiPreciseReferenceCapability,
+ * the wire types and MAX_NAI_PRECISE_REFERENCES), from the official web client (build fac57e6, read 2026-11-24):
+ * V4.5 has the Character, Style and Character & Style references with strength 0–1 and fidelity 0–1; V5 adds the
+ * Outfit reference and "Prefer same outfit", takes strength 0–5 and has no fidelity. Every reference costs 5 Anlas
+ * per image. A recipe's types are the four kinds below with sameOutfit; NovelAI's own names are the wire types.
+ * A test pins parity with the client.
+ */
+export const REFERENCE_TYPES = Object.freeze(['character', 'style', 'character_style', 'outfit']);
+export const MAX_REFERENCES = 16;
+export const REFERENCE_ANLAS = 5;
+export const REFERENCE_MODES = Object.freeze(['t2i', 'i2i', 'enhance']);
+export const referenceCapability = model => /^nai-diffusion-4-5-/.test(model ?? '') ? Object.freeze({ strengthMax: 1, fidelity: true, outfit: false, preprocess: 'pad' })
+  : /^nai-diffusion-5-/.test(model ?? '') ? Object.freeze({ strengthMax: 5, fidelity: false, outfit: true, preprocess: 'bucket' }) : null;
+/** NovelAI's name of a reference kind on a model that has outfits (V5): sameOutfit is the type itself; its default is NovelAI's (character: off, character_style: on). */
+export const referenceWireType = (type, sameOutfit) => type === 'outfit' ? 'costume' : type === 'style' ? 'style'
+  : type === 'character' ? (sameOutfit === true ? 'character_mainoutfit' : 'character') : (sameOutfit === false ? 'character&style_anyoutfit' : 'character&style');
+/** The recipe's kind and sameOutfit of one of NovelAI's names (sameOutfit null where the kind has none). */
+export const referenceKindOf = wire => ({ character: ['character', false], character_mainoutfit: ['character', true], style: ['style', null], costume: ['outfit', null],
+  'character&style': ['character_style', true], 'character&style_anyoutfit': ['character_style', false] })[wire] ?? [wire ?? null, null];
 // MAX_QUEUE_ITEMS (200, defined with the queue tools in src/queue-control.mjs): the hard bound of one enqueue.
 export { MAX_QUEUE_ITEMS };
 /**
@@ -183,9 +203,9 @@ const GENERATION_FIELDS = ['model', 'steps', 'cfgScale', 'sampler', 'noiseSchedu
  * leave out width/height (sized from the source, 0.1.4); upscale's only scale is 2, so it may be left out.
  */
 export const MODE_FIELDS = Object.freeze({
-  t2i: { required: [...GENERATION_FIELDS, 'width', 'height'], optional: ['cfgRescale', 'characters', 'transparentBackground', 'effort'] },
-  i2i: { required: ['source', ...GENERATION_FIELDS, 'strength'], optional: ['width', 'height', 'cfgRescale', 'characters', 'extraNoiseSeed', 'effort'] },
-  enhance: { required: ['source', ...GENERATION_FIELDS, 'magnitude', 'scale'], optional: ['cfgRescale', 'characters', 'extraNoiseSeed', 'effort'] },
+  t2i: { required: [...GENERATION_FIELDS, 'width', 'height'], optional: ['cfgRescale', 'characters', 'transparentBackground', 'effort', 'references'] },
+  i2i: { required: ['source', ...GENERATION_FIELDS, 'strength'], optional: ['width', 'height', 'cfgRescale', 'characters', 'extraNoiseSeed', 'effort', 'references'] },
+  enhance: { required: ['source', ...GENERATION_FIELDS, 'magnitude', 'scale'], optional: ['cfgRescale', 'characters', 'extraNoiseSeed', 'effort', 'references'] },
   inpaint: { required: ['source', 'mask', ...GENERATION_FIELDS, 'strength'], optional: ['cfgRescale', 'effort'] },
   upscale: { required: ['source'], optional: ['scale', 'acceptDownscale', 'effort'] },
   director: { required: ['source', 'tool'], optional: ['defry', 'colorizePrompt', 'emotion', 'emotionLevel', 'acceptDownscale', 'effort'] },
@@ -250,6 +270,8 @@ const invalid = (message, details) => { throw new BridgeError('invalid_arguments
 const valueAt = (value, path) => path.split('.').reduce((node, key) => record(node) ? node[key] : undefined, value);
 /** The host refused a field or method only a newer client knows (assetData, preview_queue_recipe). */
 const outdatedHost = error => error instanceof BridgeError && (error.code === 'unsupported_method' || (['invalid_argument', 'invalid_arguments'].includes(error.code) && /Unknown queue field/.test(error.message)));
+/** A client from before queued precise references refuses every one of them with this text (its normalizeQueuePreparation). */
+const referencesOutdatedHost = error => error instanceof BridgeError && error.code === 'unsupported_reference' && /Queued reference encoding is not implemented/.test(error.message ?? '');
 const hostOutdated = (error, details = {}) => new BridgeError('host_outdated', HOST_OUTDATED_MESSAGE, { hostCode: error.code, saved: false, enqueueSent: false, ...details });
 const invalidResponse = message => { throw new BridgeError('invalid_response', message); };
 /**
@@ -397,6 +419,43 @@ function characterCaptions(args, model, warnings) {
   });
 }
 
+const REFERENCE_KEYS = ['image', 'type', 'sameOutfit', 'strength', 'fidelity'];
+/**
+ * references of a t2i, i2i or enhance recipe: [{image, type, sameOutfit?, strength?, fidelity?}], at most 16. What
+ * cannot be sent is refused (a paid image without its reference is never what was asked for): a model without Precise
+ * Reference, an Outfit reference or sameOutfit on V4.5, sameOutfit on a kind that has none. A number out of range is
+ * clamped and a fidelity on V5 (which has none) is dropped, each with a warning. Returns the references as the host
+ * stores them: {image (the library identity), type (NovelAI's name), strength, fidelity}.
+ */
+function referenceFields(args, model, warnings) {
+  if (args.references === undefined) return [];
+  if (!Array.isArray(args.references)) invalid('references must be an array of {image, type, sameOutfit?, strength?, fidelity?}.');
+  if (!args.references.length) return [];
+  const capability = referenceCapability(model);
+  if (!capability) invalid(`references (Precise Reference) exist on NovelAI V4.5 and V5 only; ${model} has none. Use a V4.5 or V5 model or leave references out.`, { reason: 'references_unsupported_model', model });
+  if (args.references.length > MAX_REFERENCES) invalid(`A request takes at most ${MAX_REFERENCES} references; this recipe has ${args.references.length}.`, { reason: 'references_too_many', limit: MAX_REFERENCES });
+  return args.references.map((reference, index) => {
+    const label = `references[${index}]`;
+    exactKeys(reference, REFERENCE_KEYS, label);
+    const image = sourceIdentity(reference.image, `${label}.image`);
+    if (!REFERENCE_TYPES.includes(reference.type)) invalid(`${label}.type must be one of ${REFERENCE_TYPES.join(', ')}.`);
+    if (reference.type === 'outfit' && !capability.outfit) invalid(`${label}: Outfit references exist on NovelAI V5 only; ${model} would skip it. Use a V5 model or remove this reference.`, { reason: 'reference_outfit_unsupported', model });
+    if (reference.sameOutfit !== undefined) {
+      boolean(reference.sameOutfit, `${label}.sameOutfit`);
+      if (reference.type !== 'character' && reference.type !== 'character_style') invalid(`${label}.sameOutfit belongs to the types character and character_style, not ${reference.type}.`);
+      if (!capability.outfit) invalid(`${label}.sameOutfit ("Prefer same outfit") exists on NovelAI V5 only; leave it out on ${model}.`, { reason: 'reference_same_outfit_unsupported', model });
+    }
+    const strength = reference.strength === undefined ? 1 : clamped(reference.strength, 0, capability.strengthMax, `${label}.strength`, warnings);
+    let fidelity = 1;
+    if (reference.fidelity !== undefined) {
+      if (typeof reference.fidelity !== 'number' || !Number.isFinite(reference.fidelity)) invalid(`${label}.fidelity must be a number.`);
+      fidelity = capability.fidelity ? clamped(reference.fidelity, 0, 1, `${label}.fidelity`, warnings)
+        : corrected(warnings, 'value_dropped', `${label}.fidelity`, reference.fidelity, null, `${model} has no fidelity (NovelAI removed it in V5; only strength applies); ${label}.fidelity was dropped.`) ?? 1;
+    }
+    return { image, type: capability.outfit ? referenceWireType(reference.type, reference.sameOutfit) : referenceWireType(reference.type), strength, fidelity };
+  });
+}
+
 /**
  * Pure validation of prepare_recipe arguments, before any host call. Returns the plan that, with the source
  * metadata (and the built mask for inpaint), becomes the exact preparation sent to the host. plan.warnings lists the
@@ -433,6 +492,7 @@ export function recipePlan(args) {
     plan.transparentBackground = args.transparentBackground ?? false;
     if (plan.transparentBackground && !isV5(generation.model)) plan.transparentBackground = corrected(warnings, 'value_dropped', 'transparentBackground', true, false, `transparentBackground exists only for V5 models; ${generation.model} makes a normal background (as the host would turn it off).`);
     if (mode !== 'inpaint') plan.charCaptions = characterCaptions(args, generation.model, warnings).map(character => effort === 'medium' ? (({ negativePrompt: _dropped, ...rest }) => rest)(character) : character);
+    if (REFERENCE_MODES.includes(mode)) plan.references = referenceFields(args, generation.model, warnings);
   }
   if (mode === 'i2i') plan.i2i = { strength: clamped(args.strength, 0, 1, 'strength', warnings), extraNoiseSeed: seedOf(args.extraNoiseSeed, 'extraNoiseSeed', warnings, { zeroRandom: true }) };
   if (mode === 'enhance') {
@@ -635,12 +695,18 @@ const hostReference = source => source.kind === 'study' ? { kind: 'study', id: s
  * study reference bound to the registered original's sha256 and byteLength; the inpaint mask is inline with its
  * spec as provenance.
  */
-export function recipePreparation(plan, { source = null, size = null, mask = null } = {}) {
+export function recipePreparation(plan, { source = null, size = null, mask = null, references = [] } = {}) {
   const { mode } = plan;
   const assets = source ? [{ role: 'source', mimeType: source.mimeType, ref: hostReference(source), sha256: source.sha256, byteLength: source.byteLength }] : [];
-  if (mode === 't2i') return { mode, authored: { params: generationParams(plan, plan.size), charCaptions: plan.charCaptions }, assets };
-  if (mode === 'i2i') return { mode, authored: { params: generationParams(plan, size), charCaptions: plan.charCaptions, i2iParams: { strength: plan.i2i.strength, noise: 0, extraNoiseSeed: plan.i2i.extraNoiseSeed ?? 0 }, i2iSizeMode: 'manual' }, assets };
-  if (mode === 'enhance') return { mode, authored: { params: generationParams(plan, size), charCaptions: plan.charCaptions, i2iParams: { extraNoiseSeed: plan.enhance.extraNoiseSeed ?? 0 }, enhanceMagnitude: plan.enhance.magnitude, enhanceScale: plan.enhance.scale }, assets };
+  // Precise references: the settings are authored, each image is a library reference under the role preciseReferences:N.
+  // A recipe without references is sent exactly as before they existed (no field, no asset).
+  const planned = plan.references ?? [];
+  if (planned.length !== references.length) invalid('Every reference needs the metadata of its image.');
+  const referenced = planned.length ? { preciseReferences: planned.map(({ type, strength, fidelity }) => ({ type, strength, fidelity })) } : {};
+  const referenceAssets = references.map((image, index) => ({ role: `preciseReferences:${index}`, mimeType: image.mimeType, ref: hostReference(image), sha256: image.sha256, byteLength: image.byteLength }));
+  if (mode === 't2i') return { mode, authored: { params: generationParams(plan, plan.size), charCaptions: plan.charCaptions, ...referenced }, assets: [...assets, ...referenceAssets] };
+  if (mode === 'i2i') return { mode, authored: { params: generationParams(plan, size), charCaptions: plan.charCaptions, i2iParams: { strength: plan.i2i.strength, noise: 0, extraNoiseSeed: plan.i2i.extraNoiseSeed ?? 0 }, i2iSizeMode: 'manual', ...referenced }, assets: [...assets, ...referenceAssets] };
+  if (mode === 'enhance') return { mode, authored: { params: generationParams(plan, size), charCaptions: plan.charCaptions, i2iParams: { extraNoiseSeed: plan.enhance.extraNoiseSeed ?? 0 }, enhanceMagnitude: plan.enhance.magnitude, enhanceScale: plan.enhance.scale, ...referenced }, assets: [...assets, ...referenceAssets] };
   if (mode === 'inpaint') return { mode, authored: { params: {}, inpaintModel: inpaintModelFor(plan.generation.model), inpaintStrength: plan.inpaint.strength, inpaintRecipe: generationParams(plan, size) },
     assets: [...assets, { role: 'mask', mimeType: 'image/png', data: mask.png.toString('base64'), provenance: mask.provenance }] };
   if (mode === 'upscale') return { mode, authored: { params: {}, upscaleScale: 2 }, assets };
@@ -672,7 +738,14 @@ export function authoredDifferences(preparation, snapshot) {
     });
   }
   if ((stored.modelMode ?? 'anime') !== 'anime') differences.push('modelMode');
-  for (const key of ['vibeImages', 'preciseReferences']) if (Array.isArray(stored[key]) && stored[key].length) differences.push(key);
+  if (Array.isArray(stored.vibeImages) && stored.vibeImages.length) differences.push('vibeImages');
+  // Precise references: exactly the ones sent, in order, with nothing added (a name, an information value).
+  const references = sent.preciseReferences ?? [], storedReferences = Array.isArray(stored.preciseReferences) ? stored.preciseReferences : [];
+  if (storedReferences.length !== references.length) differences.push('preciseReferences.length');
+  else references.forEach((reference, index) => {
+    for (const field of ['type', 'strength', 'fidelity']) if (!sameValue(storedReferences[index]?.[field], reference[field])) differences.push(`preciseReferences.${index}.${field}`);
+    for (const field of Object.keys(storedReferences[index] ?? {})) if (!['type', 'strength', 'fidelity'].includes(field)) differences.push(`preciseReferences.${index}.${field}`);
+  });
   for (const path of MODE_SCALARS[mode] ?? []) if (!sameValue(valueAt(stored, path), valueAt(sent, path))) differences.push(path);
   return differences;
 }
@@ -707,7 +780,7 @@ const referenceShape = ref => record(ref) && typeof ref.id === 'string' && Numbe
 function validateAssetDetails(result) {
   const assets = result.snapshot.reviewInput.assets;
   if (result.assetRefs !== undefined) {
-    if (!Array.isArray(result.assetRefs) || result.assetRefs.some(item => !record(item) || item.role !== 'source' || !referenceShape(item.ref)
+    if (!Array.isArray(result.assetRefs) || result.assetRefs.some(item => !record(item) || (item.role !== 'source' && !/^preciseReferences:\d+$/.test(item.role ?? '')) || !referenceShape(item.ref)
       || !HASH.test(item.sha256 ?? '') || !Number.isSafeInteger(item.byteLength) || item.byteLength < 1 || assets.find(asset => asset.role === item.role)?.sha256 !== item.sha256))
       invalidResponse('The host returned an inconsistent recipe source reference.');
   }
@@ -783,8 +856,16 @@ const oneSample = snapshot => {
  * Identity problems of a put/preview reply against what was sent: the stored source must be the registered
  * original (same reference, sha256) and the stored mask the one built here.
  */
-function imageIdentityProblems(result, source, mask) {
+function imageIdentityProblems(result, source, mask, references = []) {
   const problems = [], assets = result.snapshot.reviewInput.assets;
+  // Every reference image must be the registered original that was named, under its own role, and nothing more.
+  references.forEach((image, index) => {
+    const role = `preciseReferences:${index}`, stored = assets.find(asset => asset.role === role), ref = result.assetRefs?.find(item => item.role === role);
+    if (stored?.sha256 !== image.sha256) problems.push(`references.${index}.sha256`);
+    if (stored && (stored.width !== image.width || stored.height !== image.height)) problems.push(`references.${index}.size`);
+    if (!ref || !sameValue(ref.ref, hostReference(image)) || ref.sha256 !== image.sha256 || ref.byteLength !== image.byteLength) problems.push(`references.${index}.ref`);
+  });
+  if (assets.filter(asset => /^preciseReferences:\d+$/.test(asset.role)).length !== references.length) problems.push('references.length');
   if (source) {
     const stored = assets.find(asset => asset.role === 'source'), ref = result.assetRefs?.find(item => item.role === 'source');
     if (stored?.sha256 !== source.sha256) problems.push('source.sha256');
@@ -814,6 +895,19 @@ function withoutTrailing(full, segment) {
 
 const sizeOf = asset => asset ? { width: asset.width ?? null, height: asset.height ?? null } : null;
 const sameSize = (a, b) => a && b && a.width === b.width && a.height === b.height;
+/**
+ * How an original became its request image: unchanged; resized (only scaled); cropped (V5: resized to cover its
+ * bucket, the rest cut off around the centre; percent is the share of the image that was cut off); or padded (V4.5:
+ * fitted into one of three sizes; percent is the share of the request image that is padding).
+ */
+function referenceFit(original, request, preprocess) {
+  if (!original?.width || !original?.height || !request?.width || !request?.height) return {};
+  if (original.width === request.width && original.height === request.height) return { fit: 'unchanged' };
+  const crop = preprocess === 'bucket', scale = (crop ? Math.max : Math.min)(request.width / original.width, request.height / original.height);
+  const scaled = original.width * scale * original.height * scale, area = request.width * request.height;
+  const percent = Math.max(0, Math.round((1 - (crop ? area / scaled : scaled / area)) * 100));
+  return percent ? { fit: crop ? 'cropped' : 'padded', percent } : { fit: 'resized' };
+}
 
 /** The generation view (t2i, i2i, enhance, inpaint): prompts and sampling read off the builder's own request. */
 function generationView(input) {
@@ -835,6 +929,21 @@ function generationView(input) {
   const asset = role => role ? input.assets.find(item => item.role === role) : undefined;
   const sourceAsset = asset('source'), requestSource = asset(effectiveInput?.sourceRole), requestMask = asset(effectiveInput?.maskRole);
   const i2iLike = mode === 'i2i' || mode === 'enhance';
+  // Precise references as the request sends them (types, strengths and, on V4.5, fidelity = 1 − secondary), with each
+  // original's size and the request image the host prepared from it.
+  const referenceModel = referenceCapability(request?.model ?? '');
+  const descriptions = Array.isArray(parameters.director_reference_descriptions) ? parameters.director_reference_descriptions : [];
+  const references = descriptions.map((entry, index) => {
+    const [type, sameOutfit] = referenceKindOf(entry?.caption?.base_caption), secondary = parameters.director_reference_secondary_strength_values?.[index];
+    const original = asset(`preciseReferences:${index}`), sent = asset(`request-reference:${index}`);
+    return { index, type, ...(referenceModel?.outfit && sameOutfit !== null ? { sameOutfit } : {}), strength: parameters.director_reference_strength_values?.[index] ?? null,
+      ...(referenceModel?.fidelity ? { fidelity: typeof secondary === 'number' ? Math.round((1 - secondary) * 100) / 100 : null } : {}),
+      original: sizeOf(original), request: sent ? { ...sizeOf(sent), sha256: sent.sha256 } : null, ...referenceFit(sizeOf(original), sizeOf(sent), referenceModel?.preprocess) };
+  });
+  const authoredReferences = (Array.isArray(authored.preciseReferences) ? authored.preciseReferences : []).map(reference => {
+    const [type, sameOutfit] = referenceKindOf(reference?.type);
+    return { type, ...(sameOutfit !== null ? { sameOutfit } : {}), strength: reference?.strength ?? null, fidelity: reference?.fidelity ?? null };
+  });
   const effective = request && {
     model: request.model, width: parameters.width, height: parameters.height, steps: parameters.steps, cfgScale: parameters.scale, cfgRescale: parameters.cfg_rescale,
     sampler: parameters.sampler, noiseSchedule: parameters.noise_schedule, seed: parameters.seed ?? null, seedPolicy: effectiveInput.sampling?.seedPolicy ?? null, nSamples: parameters.n_samples,
@@ -856,6 +965,8 @@ function generationView(input) {
     ...(mode === 'inpaint' ? { inpaint: { model: request.model, strength: parameters.inpaintImg2ImgStrength ?? null, width: parameters.width, height: parameters.height } } : {}),
     ...(mode !== 't2i' && requestSource ? { requestSource: { ...sizeOf(requestSource), sha256: requestSource.sha256 }, sourceResized: sameSize(sizeOf(sourceAsset), sizeOf(requestSource)) ? null : { from: sizeOf(sourceAsset), to: sizeOf(requestSource) } } : {}),
     ...(requestMask ? { requestMask: { ...sizeOf(requestMask), sha256: requestMask.sha256 } } : {}),
+    ...(references.length ? { references } : {}),
+    ...(authoredReferences.length > references.length ? { referencesNotSent: authoredReferences.length - references.length } : {}),
   };
   const extraNoiseSeed = authored.i2iParams?.extraNoiseSeed > 0 ? authored.i2iParams.extraNoiseSeed : null;
   const modeAuthored = mode === 'i2i' ? { strength: authored.i2iParams?.strength ?? null, extraNoiseSeed }
@@ -869,6 +980,7 @@ function generationView(input) {
       effort: source.effort === 'medium' ? 'medium' : 'high',
       stylePrompt: source.stylePrompt, positivePrompt: source.positivePrompt, negativePrompt: source.negativePrompt,
       characters: authoredCharacters.map(({ prompt, negativePrompt, useCoords, x, y }) => ({ prompt, negativePrompt: negativePrompt ?? '', useCoords, x, y })),
+      ...(authoredReferences.length ? { references: authoredReferences } : {}),
       ...modeAuthored,
     },
   };
@@ -948,7 +1060,19 @@ const seedAsWritten = (seed, policy, written, { zeroIsRandom = false } = {}) => 
  * themselves, not with the warnings, so a difference is listed even where no warning names it.
  */
 function compactEffective(effective, written, mode, known) {
-  const { positivePrompt, negativePrompt, automaticQuality, ucPreset, transparentBackground, characters, requestSource, requestMask, sourceResized, i2i, enhance, processing } = effective;
+  const { positivePrompt, negativePrompt, automaticQuality, ucPreset, transparentBackground, characters, requestSource, requestMask, sourceResized, i2i, enhance, processing, references } = effective;
+  // References: what the request image is (the host prepared it), and of the settings only what the call did not
+  // write (a default: strength 1, NovelAI's own sameOutfit, V4.5's fidelity 1) or what was corrected.
+  const sentReferences = Array.isArray(written.references) ? written.references : null;
+  const referenceList = (references ?? []).map(({ index, type, sameOutfit, strength, fidelity, original, request, fit, percent }) => {
+    const own = sentReferences?.[index], wrote = record(own);
+    return { index,
+      ...(wrote ? unlessWritten('type', type, own.type) : { type }),
+      ...(sameOutfit === undefined ? {} : wrote ? unlessWritten('sameOutfit', sameOutfit, own.sameOutfit) : { sameOutfit }),
+      ...(wrote ? unlessWritten('strength', strength, own.strength) : { strength }),
+      ...(fidelity === undefined ? {} : wrote ? unlessWritten('fidelity', fidelity, own.fidelity) : { fidelity }),
+      original, request: request ? { width: request.width, height: request.height } : null, ...(fit ? { fit } : {}), ...(percent ? { percent } : {}) };
+  });
   // Not separable (legacy assembly or a mode prefix): the final texts are the only statement of what is sent.
   const derived = automaticQuality?.appendedText !== null && ucPreset?.text !== null;
   const sent = Array.isArray(written.characters) ? written.characters : null;
@@ -983,6 +1107,8 @@ function compactEffective(effective, written, mode, known) {
     ...(listed.length ? { characters: listed } : {}),
     ...(sent && (characters ?? []).length !== sent.length ? { charactersSent: (characters ?? []).length } : {}),
     ...(effective.charactersNotSent ? { charactersNotSent: effective.charactersNotSent } : {}),
+    ...(referenceList.length ? { references: referenceList } : {}),
+    ...(effective.referencesNotSent ? { referencesNotSent: effective.referencesNotSent } : {}),
     ...(Object.keys(i2iView).length ? { i2i: i2iView } : {}),
     // The processing sizes only where they say more than the request size above (a resized or flattened input, a larger result).
     ...(mode === 'enhance' ? { enhance: enhanceView, ...(record(processing) && (processing.resizedInput || processing.alphaFlattened || processing.upscaledEnhance || processing.outputWidth !== size.width || processing.outputHeight !== size.height) ? { processing } : {}) } : {}),
@@ -1077,6 +1203,14 @@ function readbackWarnings({ mode, input, view }) {
       if (effective.sourceResized) { const { from, to } = effective.sourceResized; warnings.push({ code: 'enhance_max_source_adjusted', from, to, message: `Max✨ sends the source at its own size, 64-aligned and under ${Math.floor(MAX_ENHANCE_INPUT_LIMIT)} pixels: ${from.width}×${from.height} is sent as ${to.width}×${to.height}.` }); }
       warnings.push({ code: 'enhance_max_paid', expectedOutput: out, message: `Enhance Max✨ sends the source at ${effective.width}×${effective.height} with upscaled_enhance and returns about ${out ? `${out.width}×${out.height}` : '2×'} (at most about 3.1 MP; the saved image has the size NovelAI returns); it costs Anlas on Opus too.` });
     }
+    if (effective.references?.length) {
+      const count = effective.references.length, perImage = count * REFERENCE_ANLAS;
+      warnings.push({ code: 'precise_reference_paid', references: count, anlasPerImage: perImage, message: `${count} precise reference${count === 1 ? '' : 's'}: NovelAI charges ${REFERENCE_ANLAS} Anlas per reference per image, so each image of this recipe costs ${perImage} Anlas more, on Opus too.` });
+      for (const reference of effective.references) if (reference.fit === 'cropped' && reference.percent >= 10 && reference.original && reference.request)
+        warnings.push({ code: 'reference_cropped', field: `references[${reference.index}]`, from: reference.original, to: { width: reference.request.width, height: reference.request.height },
+          message: `references[${reference.index}] (${reference.original.width}×${reference.original.height}) is cropped around its centre to ${reference.request.width}×${reference.request.height} for ${model}; about ${reference.percent}% of it is cut off. Use an image between 1:16 and 16:1 to keep all of it.` });
+    }
+    if (effective.referencesNotSent) warnings.push({ code: 'references_not_sent', message: `${effective.referencesNotSent} stored precise reference(s) are not in the request the builder made for ${model}.` });
     if (mode === 'i2i' && effective.sourceResized) {
       const { from, to } = effective.sourceResized;
       warnings.push({ code: 'source_resized_for_i2i', from, to, message: `The source ${from.width}×${from.height} is resized (stretched, not cropped) to ${to.width}×${to.height} for image-to-image; their aspect ratios differ by ${(aspectDeviation(to.width, to.height, from.width, from.height) * 100).toFixed(1)}%.` });
@@ -1181,13 +1315,21 @@ const adjustable = plan => plan.refs.some(ref => ref.unseeded > 1 || ref.entries
 /**
  * Estimated frozen input of one enqueue from the recipes' raw asset sizes: the host freezes one snapshot when
  * every image comes from the same recipe, otherwise one per image, each carrying source and mask as base64.
+ * A precise reference is frozen as its request image (referencesByRecipe: [{sha256, bytes}] per recipe, from the
+ * recipe's request-reference assets); a batch of several recipes stores each distinct image once.
  */
-export function frozenInputEstimate(items, assetBytesByRecipe) {
+export function frozenInputEstimate(items, assetBytesByRecipe, referencesByRecipe = new Map()) {
   const base64 = bytes => Math.ceil(bytes / 3) * 4;
   const perRecipe = key => ['source', 'mask'].reduce((sum, role) => sum + base64(assetBytesByRecipe.get(key)?.[role] ?? 0), 0);
-  const keys = items.map(item => `${item.recipeId}:${item.recipeRevision}`);
-  return new Set(keys).size === 1 ? perRecipe(keys[0]) : keys.reduce((sum, key) => sum + perRecipe(key), 0);
+  const keys = items.map(item => `${item.recipeId}:${item.recipeRevision}`), distinct = [...new Set(keys)];
+  const referenceBytes = distinct.length === 1
+    ? (referencesByRecipe.get(distinct[0]) ?? []).reduce((sum, image) => sum + base64(image.bytes), 0)
+    : [...new Map(distinct.flatMap(key => (referencesByRecipe.get(key) ?? []).map(image => [image.sha256, image.bytes]))).values()].reduce((sum, bytes) => sum + base64(bytes), 0);
+  return (distinct.length === 1 ? perRecipe(keys[0]) : keys.reduce((sum, key) => sum + perRecipe(key), 0)) + referenceBytes;
 }
+/** The request images of a read recipe's precise references: [{sha256, bytes}] (bytes from assetBytes; an older host that does not report them counts as an uncompressed 1024×1024 image). */
+export const recipeReferenceImages = recipe => (recipe?.snapshot?.reviewInput?.assets ?? []).filter(asset => /^request-reference:\d+$/.test(asset.role ?? ''))
+  .map(asset => ({ sha256: asset.sha256, bytes: Number.isSafeInteger(recipe.assetBytes?.[asset.role]) ? recipe.assetBytes[asset.role] : (asset.width ?? 1024) * (asset.height ?? 1024) * 4 }));
 
 /** Same acceptance identity as the former enqueue core's queued acceptance check, plus the requested output (absent on both sides when not asked for). */
 export function acceptanceMatches(batch, hostArgs) {
@@ -1299,14 +1441,25 @@ export function createRecipeQueue({ bridge, monotonicNow = () => performance.now
         provenance = maskProvenance(built);
       }
     }
-    const preparation = recipePreparation(plan, { source, size, mask: built && { png: built.png, provenance } });
-    if (plan.preview) return previewRecipe({ plan, preparation, source, built, provenance, signal });
+    // Precise references: the metadata of each image (one thumbnail read per distinct identity), before anything is saved.
+    const references = [];
+    if (plan.references?.length) {
+      const read = new Map();
+      for (const [index, reference] of plan.references.entries()) {
+        const key = JSON.stringify(reference.image);
+        if (!read.has(key)) read.set(key, await readSourceMetadata(bridge, reference.image, { signal, path: `references[${index}].image` }));
+        references.push(read.get(key));
+      }
+    }
+    const preparation = recipePreparation(plan, { source, size, mask: built && { png: built.png, provenance }, references });
+    if (plan.preview) return previewRecipe({ plan, preparation, source, built, provenance, references, signal });
     const receipt = { putAttempted: true, generationSubmitted: false };
     let reply;
-    // t2i keeps its original put; image recipes ask the host to omit image bytes from the reply.
-    try { reply = await bridge.call(RECIPE_HOST_METHODS.put, { preparation, ...(updating ? { recipeId: args.recipeId, expectedRevision: args.expectedRevision } : {}), ...(mode === 't2i' ? {} : { assetData: 'omit' }) }, signal); }
+    // t2i keeps its original put; recipes with images (a source, references) ask the host to omit image bytes from the reply.
+    const withImages = mode !== 't2i' || references.length > 0;
+    try { reply = await bridge.call(RECIPE_HOST_METHODS.put, { preparation, ...(updating ? { recipeId: args.recipeId, expectedRevision: args.expectedRevision } : {}), ...(withImages ? { assetData: 'omit' } : {}) }, signal); }
     catch (error) {
-      if (mode !== 't2i' && outdatedHost(error)) throw hostOutdated(error, { putAttempted: true, putOutcome: 'rejected' });
+      if ((withImages && outdatedHost(error)) || referencesOutdatedHost(error)) throw hostOutdated(error, { putAttempted: true, putOutcome: 'rejected' });
       if (error instanceof BridgeError && PUT_REJECTED.has(error.code)) throw new BridgeError(error.code, error.code === 'queue_storage_failed'
         ? putStorageRefusal(error)
         : error.code === 'recipe_source_busy' ? `${error.message} Nothing was saved; retry the same call later.` : error.message, { ...receipt, putOutcome: 'rejected', saved: false, ...hostDetailsOf(error) });
@@ -1321,7 +1474,7 @@ export function createRecipeQueue({ bridge, monotonicNow = () => performance.now
     const observedIdentity = { recipeId: observed.recipeId, recipeRevision: observed.recipeRevision, inputHash: observed.inputHash };
     if (observed.recipeRevision !== expectedIdentity.recipeRevision || (updating && observed.recipeId !== args.recipeId) || recipeLineage(observed) !== 'plain' || observed.snapshot.mode !== mode)
       throw new BridgeError('recipe_identity_unconfirmed', 'The host saved an unexpected identity or revision. Do not adopt, enqueue or retry either reference automatically.', { ...receipt, putOutcome: 'confirmed', expectedIdentity, observedIdentity });
-    const images = imageIdentityProblems(observed, source, built);
+    const images = imageIdentityProblems(observed, source, built, references);
     if (images.length) throw new BridgeError('recipe_identity_unconfirmed', `The host stored a different image than this server sent (${images.join(', ')}). Do not enqueue this revision; prepare again.`, { ...receipt, putOutcome: 'confirmed', observedIdentity, fields: images });
     const differences = storedDifferences(preparation, observed, provenance);
     if (differences.length) mismatched.set(`${observed.recipeId}:${observed.recipeRevision}`, differences);
@@ -1339,12 +1492,12 @@ export function createRecipeQueue({ bridge, monotonicNow = () => performance.now
   }
 
   /** Dry run through the host's write-free preview: nothing is saved, no revision or quota is used. */
-  async function previewRecipe({ plan, preparation, source, built, provenance, signal }) {
+  async function previewRecipe({ plan, preparation, source, built, provenance, references = [], signal }) {
     const details = { preview: true, saved: false, generationSubmitted: false };
     let reply;
     try { reply = await bridge.call(RECIPE_HOST_METHODS.preview, { preparation, assetData: 'omit' }, signal); }
     catch (error) {
-      if (outdatedHost(error)) throw hostOutdated(error, { preview: true });
+      if (outdatedHost(error) || referencesOutdatedHost(error)) throw hostOutdated(error, { preview: true });
       if (error instanceof BridgeError) throw new BridgeError(error.code, `${error.message} This was a preview: nothing was saved.`, { ...details, ...hostDetailsOf(error) });
       throw error;
     }
@@ -1352,7 +1505,7 @@ export function createRecipeQueue({ bridge, monotonicNow = () => performance.now
     try { observed = validatePreviewResult(reply); }
     catch (error) { throw new BridgeError('invalid_response', 'The host preview is not a complete, consistent dry run. Nothing was saved; preview again or prepare without preview.', { ...details, reason: error.message }); }
     if (observed.snapshot.mode !== plan.mode) throw new BridgeError('invalid_response', 'The host previewed a different mode. Nothing was saved.', details);
-    const images = imageIdentityProblems(observed, source, built);
+    const images = imageIdentityProblems(observed, source, built, references);
     if (images.length) throw new BridgeError('recipe_identity_unconfirmed', `The host previewed a different image than this server sent (${images.join(', ')}). Nothing was saved.`, { ...details, fields: images });
     const differences = storedDifferences(preparation, observed, provenance);
     if (differences.length) throw new BridgeError('recipe_input_mismatch', `The host preview used different generation inputs than requested (${differences.join(', ')}). Nothing was saved.`, { ...details, fields: differences });
@@ -1363,7 +1516,7 @@ export function createRecipeQueue({ bridge, monotonicNow = () => performance.now
   const nextStep = (observed, mode) => observed.snapshot.reviewInput.readiness.status !== 'ready' ? (recipeLineage(observed) === 'canvas'
     ? 'This canvas recipe is blocked (see readiness) and cannot be revised: change the canvas in the app, then capture it again with prepare_recipe {canvas}.'
     : 'This recipe is blocked (see readiness); fix the inputs with a new revision before enqueueing.')
-    : seeded(mode) ? `Check warnings and effective (sampling, automaticQuality, ucPreset, ${mode === 't2i' ? 'transparentBackground' : 'mode parameters, source'}, characters) against your intent, then enqueue_recipes with exactly this recipeId, recipeRevision and inputHash.`
+    : seeded(mode) ? `Check warnings and effective (sampling, automaticQuality, ucPreset, ${mode === 't2i' ? 'transparentBackground' : 'mode parameters, source'}, characters, references) against your intent, then enqueue_recipes with exactly this recipeId, recipeRevision and inputHash.`
       : `Check effective (${mode} parameters and input size) against your intent, then enqueue_recipes with exactly this recipeId, recipeRevision and inputHash, once, without seeds or count: ${mode} makes one image per recipe per enqueue.`;
 
   /**
@@ -1563,8 +1716,8 @@ export function createRecipeQueue({ bridge, monotonicNow = () => performance.now
       }
       const sentBase = { ...base, count: items.length };
       // The frozen queue keeps every image's source and mask until the batch ends; bound one enqueue's share.
-      const estimatedBytes = frozenInputEstimate(items, new Map(reads.map(({ ref, recipe }) => [`${ref.recipeId}:${ref.recipeRevision}`, recipe.assetBytes])));
-      if (estimatedBytes > RECIPE_LIMITS.frozenEnqueueBytes) throw new BridgeError('invalid_arguments', `This plan would freeze about ${estimatedBytes} bytes of source/mask images (base64) into the host queue; one enqueue takes at most ${RECIPE_LIMITS.frozenEnqueueBytes} (32 MiB). Enqueue fewer images per call or use one recipe for all of them; nothing was sent and this requestKey was not used.`, { ...notSent, estimatedBytes, limitBytes: RECIPE_LIMITS.frozenEnqueueBytes });
+      const estimatedBytes = frozenInputEstimate(items, new Map(reads.map(({ ref, recipe }) => [`${ref.recipeId}:${ref.recipeRevision}`, recipe.assetBytes])), new Map(reads.map(({ ref, recipe }) => [`${ref.recipeId}:${ref.recipeRevision}`, recipeReferenceImages(recipe)])));
+      if (estimatedBytes > RECIPE_LIMITS.frozenEnqueueBytes) throw new BridgeError('invalid_arguments', `This plan would freeze about ${estimatedBytes} bytes of source, mask and reference images (base64) into the host queue; one enqueue takes at most ${RECIPE_LIMITS.frozenEnqueueBytes} (32 MiB). Enqueue fewer images per call or use one recipe for all of them; nothing was sent and this requestKey was not used.`, { ...notSent, estimatedBytes, limitBytes: RECIPE_LIMITS.frozenEnqueueBytes });
       signal?.throwIfAborted?.();
       // 3. One dispatch; an unknown outcome is settled in this call (settle), an explicit refusal confirmed (refused).
       const withWarnings = warnings.length ? { warnings } : {};

@@ -253,6 +253,8 @@ parameters and seed) and from the queue (`read_queue` gives each image's status,
   prompts, `seed` 0–2147483646 (or `null`, or a negative number, for a random seed drawn at enqueue), optional
   characters (V4 and later: up to 6, V5 up to 32; more are dropped) and `transparentBackground` (V5 only; dropped
   elsewhere).
+- `references` (optional; t2i, i2i and enhance on V4.5 and V5 models): Precise Reference images. See
+  [Precise references](#precise-references).
 - `effort` (optional, default `high`): V5 Full's Effort toggle. `medium` runs NovelAI's distilled Medium model and
   exists only for `nai-diffusion-5-full` txt2img, img2img and inpaint; anywhere else the recipe runs on High (warning
   `effort_not_applied`). See [V5 Full Effort](#v5-full-effort-medium).
@@ -297,12 +299,70 @@ value used (`to`):
 | `value_defaulted` | A character with `useCoords: true` but no `x`/`y`; emotion without `emotionLevel` | 0.5; 0 |
 | `seed_random`, `seed_wrapped` | A negative `seed`/`extraNoiseSeed`; one above 2147483646 | Random at enqueue; the value wrapped into 0–2147483646 |
 | `effort_not_applied` | `effort: "medium"` where Medium does not exist | High |
+| `value_clamped`, `value_dropped` (references) | A reference `strength` outside 0–1 (V4.5) or 0–5 (V5), a `fidelity` outside 0–1; a `fidelity` on V5 | The nearest bound; no fidelity (V5 has none) |
 | `enhance_source_adjusted` | An enhance 1×/2× source that is not 64-aligned (or too large at 1×) | The size the app resizes it to |
 | `inpaint_source_adjusted` | An inpaint source that is not 64-aligned | The next multiples of 64 (the result has that size) |
 | `source_downscaled` | An upscale/director source over 1,048,576 pixels | The app's downscale into that limit |
 
 An exact recipe has none of these warnings. The warnings exist at prepare (and preview) time; the stored recipe holds
 the corrected values.
+
+### Precise references
+
+NovelAI's Precise Reference guides an image by example images instead of words: the look of a character, an art
+style, an outfit. V4.5 has had it since February 2026; V5 got it on 2026-11-24, with the Outfit reference, "Prefer same
+outfit", strengths above 1 and no fidelity
+([NovelAI's announcement](https://journal.novelai.net/precise-reference-v5/)). What a request sends was read from
+NovelAI's own web client (build of 2026-11-24).
+
+```json
+"references": [
+  { "image": { "kind": "history", "historyId": "…", "historyRevision": 1, "assetId": "…" },
+    "type": "character", "sameOutfit": false, "strength": 1 },
+  { "image": { "kind": "study", "studyId": "…", "studyRevision": 1 }, "type": "outfit", "strength": 1.5 }
+]
+```
+
+- `image`: a library image, written like `source` (a history image or an imported image). The same image may be used
+  by several references and by any number of recipes.
+- `type`: `character` takes the look of the character, `style` the art style, `character_style` both, `outfit` the
+  clothes only (V5).
+- `sameOutfit` (V5; `character` and `character_style` only): `true` also follows the outfit of the image, `false`
+  keeps the character and leaves the outfit to the prompt, which is what a change of clothes needs. Left out, it is
+  NovelAI's own default: `false` for `character`, `true` for `character_style`. The readback states the value used.
+- `strength`: how closely the image is followed, 0–1 on V4.5 and 0–5 on V5, default 1. Style references often need
+  more than 1 on V5. `fidelity` (0–1, default 1) exists on V4.5 only.
+- At most 16 references. They combine (for example a character, an outfit and a style); several `character`
+  references blend into one character rather than making several.
+
+| | V4.5 | V5 (Curated, Full, Full Medium) |
+| --- | --- | --- |
+| Types | `character`, `style`, `character_style` | the same and `outfit` |
+| `sameOutfit` | none (refused) | `character`, `character_style` |
+| `strength` | 0–1 | 0–5 |
+| `fidelity` | 0–1 | none (dropped with a warning) |
+| Request image | fitted into 1024×1536, 1472×1472 or 1536×1024 and padded | resized to cover the ~1 MP bucket nearest its aspect (64-pixel steps, 256×4096 to 4096×256) and cropped around the centre |
+| With a mask (inpaint) | not available in the queue | not supported by NovelAI |
+
+- **Cost**: every reference costs 5 Anlas per image, on Opus too (warning `precise_reference_paid`, with
+  `anlasPerImage`); the enqueue receipt repeats it per recipe.
+- **What is sent**: the app prepares each image exactly as NovelAI's client does and sends that request image inside
+  the one request of each queued image. `effective.references` lists each reference with its `original` size, its
+  `request` size and how it got there (`fit`: `unchanged`, `resized`, `cropped` or `padded`, with `percent`). A V5
+  crop of 10 % or more is also a warning (`reference_cropped`); a full-body sheet between 1:16 and 16:1 loses at most
+  a few percent.
+- **Refused, never dropped** (an image paid for without its reference is never what was asked for): references on a
+  model without the feature (V3, V4) or in inpaint, upscale or director; an `outfit` reference or `sameOutfit` on V4.5;
+  more than 16.
+- The references and their images are part of the recipe's identity (`inputHash`). A reference image that is deleted
+  or replaced in the library stops the recipe like a missing source (`recipe_source_unavailable`,
+  `recipe_source_changed`, naming the reference).
+- Several recipes of one enqueue that share a reference image store it once in the queue, so a set of images of one
+  character costs the image's size once.
+- A canvas capture (`canvas: {…}`) of t2i, i2i or enhance takes the canvas's precise references with it.
+- **Vibe Transfer is not available in the queue**: it needs a separate paid encoding request before the image, and a
+  queued image is one request (V5 has no Vibe Transfer at all).
+- Reference presets of the library are not a reference image source yet; use a history image or an imported image.
 
 ### V5 Full Effort (Medium)
 
@@ -512,8 +572,8 @@ changes, so a client that follows the notification (Claude Code and Pi do) shows
 No tool result carries the limits. With an app that has not published them yet (an older app, or one that never ran on
 this data folder) the description names the defaults instead.
 
-The images' frozen sources and masks may take about 32 MiB per enqueue. These limits apply to agent enqueues, not to
-generating on the canvas.
+The images' frozen sources, masks and reference images may take about 32 MiB per enqueue (a reference image shared
+by several recipes counts once). These limits apply to agent enqueues, not to generating on the canvas.
 
 **No failure stops the queue.** All projects' agent batches and the app's own **Generate** clicks run in one queue,
 one image at a time. When an image fails, is refused before it is sent or has an unknown outcome, only that image is

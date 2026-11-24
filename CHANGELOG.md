@@ -11,6 +11,13 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
   outfit" switch of the Character and Character & Style references, takes strengths up to 5 and has no fidelity; a
   reference image is cropped to the ~1 MP bucket nearest its aspect instead of padded into three sizes. V4.5 is
   unchanged (it skips an Outfit reference and says so on its card). At most 16 references per request.
+- `prepare_recipe` `references`: agents use Precise Reference in queued t2i, i2i and enhance recipes on V4.5 and V5.
+  `[{image, type, sameOutfit?, strength?, fidelity?}]` names library images (history or imported) like `source`, with
+  the types `character`, `style`, `character_style` and `outfit`. The readback gives each reference's request size and
+  the cost (`precise_reference_paid`); what cannot be sent is refused, never dropped. Several recipes of one enqueue
+  that share a reference image store it once. A canvas capture of those modes takes the canvas's precise references
+  with it. Vibe Transfer stays unavailable in the queue (it needs a separate paid request). See
+  [Precise references](docs/mcp-tools.md#precise-references).
 - **Censor and export** (library): an image's detail and a selection of images open an editor that covers what you
   paint (brush, lasso, eraser, undo, zoom) with a mosaic, a blur, black or white, shown as it will be saved, and writes
   JPGs with no metadata at all (no prompt, settings, EXIF or NovelAI's hidden data; JPG quality 70–100, full-resolution

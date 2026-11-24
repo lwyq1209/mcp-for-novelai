@@ -182,8 +182,12 @@ test('N4 size budget: tools/list totals stay under the agreed ceilings', async t
   // ceiling, so the whole server goes down to 45.5k (about 44.9k used).
   // Fewer tools and compact results (asked for by the user 2026-11-13): lookup_enqueue, control_queue and
   // list_workspaces are retired, so the whole server goes down to 42.6k and core to 41.2k (about 42.1k and 40.8k used).
-  assert.ok(total <= 42_600, `whole server ${total}`);
-  assert.ok(core <= 41_200, `core layer ${core}`);
+  // Precise references in queued recipes (prepare_recipe references; asked for by the user 2026-11-24, the day NovelAI
+  // released them for V5): the field, its four types, sameOutfit, the strength range per model, the cost per image
+  // and what is refused must be visible before a call, about 2.2k characters. The whole server goes to 44.5k and
+  // core to 43.2k (about 44.3k and 43.0k used).
+  assert.ok(total <= 44_500, `whole server ${total}`);
+  assert.ok(core <= 43_200, `core layer ${core}`);
   assert.ok(asset <= 6_900, `asset_library ${asset}`);
 });
 
