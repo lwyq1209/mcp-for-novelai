@@ -255,6 +255,8 @@ parameters and seed) and from the queue (`read_queue` gives each image's status,
   elsewhere).
 - `references` (optional; t2i, i2i and enhance on V4.5 and V5 models): Precise Reference images. See
   [Precise references](#precise-references).
+- `stylePresetId` and `allowText` (optional; t2i, i2i, enhance and inpaint): a style preset of the library written
+  into the call, so its text is not copied by hand. See [Style presets in a recipe](#style-presets-in-a-recipe).
 - `effort` (optional, default `high`): V5 Full's Effort toggle. `medium` runs NovelAI's distilled Medium model and
   exists only for `nai-diffusion-5-full` txt2img, img2img and inpaint; anywhere else the recipe runs on High (warning
   `effort_not_applied`). See [V5 Full Effort](#v5-full-effort-medium).
@@ -363,6 +365,44 @@ NovelAI's own web client (build of 2026-11-24).
 - **Vibe Transfer is not available in the queue**: it needs a separate paid encoding request before the image, and a
   queued image is one request (V5 has no Vibe Transfer at all).
 - Reference presets of the library are not a reference image source yet; use a history image or an imported image.
+
+### Style presets in a recipe
+
+A style preset of the library holds a style: its text, and optionally a list of artists, negative text and
+recommended sampling settings. `stylePresetId` writes one into a `prepare_recipe` call:
+
+```json
+{ "mode": "t2i", "stylePresetId": "…", "positivePrompt": "1girl, garden", "seed": null, "width": 832, "height": 1216 }
+```
+
+- The id comes from `asset_library` (`list` with `kinds: ["style_preset"]`; `read` shows the whole preset).
+- **Style**: the preset's enabled artists, then its `prompt`, then the call's own `stylePrompt` if it writes one,
+  joined with `, `. An artist of weight 1 is written as its name, any other weight as `weight::name::` (negative
+  weights too, for example `-1.5::artist:someone::`).
+- **Negative**: the preset's `negativePrompt`, then its `textNegativePrompt`, then the call's own `negativePrompt`.
+  `textNegativePrompt` is the part that keeps writing out of the image (`text, speech bubble` and the like).
+  `allowText: true` leaves it out, for an image that should have speech bubbles or other writing; nothing else does
+  (the prompts are never searched for bubbles). `allowText` without `stylePresetId` is refused.
+- **Sampling settings**: a setting the preset recommends (`model`, `steps`, `cfgScale`, `cfgRescale`, `sampler`,
+  `noiseSchedule`, `ucPreset`, `qualityPreset`) may be left out of the call; a value the call writes itself wins.
+- With a preset, `stylePrompt` and `negativePrompt` may be left out. A setting the preset does not recommend is still
+  required (the error names them), and so are the picture's own fields (`positivePrompt`, `seed`, the size, the
+  source).
+- `effective.stylePreset` says what the preset wrote: its `id`, `revision` and `name`; the `stylePrompt` and
+  `negativePrompt` as they are frozen; `negative` `{style, text, yours?}` with `applied`, `skipped` (by `allowText`),
+  `none`, `appended` (the call's own) or `not_sent_on_medium`; `artists` `{used, off}`; `params`, the names of the
+  settings taken from the preset (their values are the `effective` entries, as for any value the call did not write);
+  `overridden`, the settings the preset recommends that the call wrote itself; and the preset's `notes`.
+- The recipe **freezes** the resulting text and values and keeps no link to the preset: it is the same recipe, with
+  the same `inputHash`, as a call that wrote everything out. Editing the preset later changes no recipe; a revision
+  passes `stylePresetId` again and takes the preset as it is then.
+- Refused, with nothing saved: an id that names no style preset (`library_not_found`; a preset in Recently deleted is
+  restored first), texts that together are longer than a prompt may be, and `stylePresetId` in `upscale`, `director`
+  or a canvas capture. An archived preset is applied with the warning `style_preset_archived`.
+- With `effort: "medium"` no negative prompt is sent, so none of the preset's is in the recipe (`effective.stylePreset`
+  says `not_sent_on_medium`).
+- The preset is read from the app once per call. An app from before the structured fields simply has presets with a
+  `prompt` only.
 
 ### V5 Full Effort (Medium)
 

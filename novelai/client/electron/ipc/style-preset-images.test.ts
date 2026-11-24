@@ -54,16 +54,17 @@ describe("style prompt preview images", () => {
     expect(fs.readdirSync(path.dirname(copied[0].filePath))).toEqual([path.basename(copied[0].filePath)]);
   });
 
-  it("ignores unsupported files and never exceeds three images", () => {
+  it("ignores unsupported files and never exceeds the preset's limit: six for a style preset, three for a prompt preset", () => {
     const { root } = dataRoot();
-    const sources = ["a.png", "b.jpg", "c.webp", "d.jpeg", "bad.txt"].map(
+    const sources = ["a.png", "b.jpg", "c.webp", "d.jpeg", "e.png", "f.png", "g.png", "bad.txt"].map(
       (name) => {
         const file = path.join(root, name);
         fs.writeFileSync(file, name);
         return file;
       },
     );
-    expect(copyStylePromptPreviewImages(sources, "style", 99, root)).toHaveLength(3);
+    expect(copyStylePromptPreviewImages(sources, "style", 99, root)).toHaveLength(6);
+    expect(copyStylePromptPreviewImages(sources, "positive-prompt-p1", 99, root)).toHaveLength(3);
   });
 
   it("reads a preset's previews from its saved record (or the given ones), with the URL rebuilt from the path", () => {

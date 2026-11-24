@@ -186,8 +186,12 @@ test('N4 size budget: tools/list totals stay under the agreed ceilings', async t
   // released them for V5): the field, its four types, sameOutfit, the strength range per model, the cost per image
   // and what is refused must be visible before a call, about 2.2k characters. The whole server goes to 44.5k and
   // core to 43.2k (about 44.3k and 43.0k used).
-  assert.ok(total <= 44_500, `whole server ${total}`);
-  assert.ok(core <= 43_200, `core layer ${core}`);
+  // Style presets in recipes (prepare_recipe stylePresetId and allowText; issue #1, asked for by the user 2026-11-25):
+  // how the preset's style, negative parts and sampling fields combine with the call's own, and what may then be
+  // omitted, must be visible before a call, about 1.0k characters. The whole server goes to 45.5k and core to 44.2k
+  // (about 45.3k and 44.0k used).
+  assert.ok(total <= 45_500, `whole server ${total}`);
+  assert.ok(core <= 44_200, `core layer ${core}`);
   assert.ok(asset <= 6_900, `asset_library ${asset}`);
 });
 

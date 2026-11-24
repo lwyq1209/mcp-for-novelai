@@ -5,23 +5,23 @@ import { imagePasteProps } from '../image-paste';
 import { useAppStore } from '../store';
 import { saveAssetSetting } from '../asset-library/legacy-settings';
 import { positivePromptPresetStorageId } from '../positive-prompt-presets';
+import { presetPreviewLimit } from '../preset-previews';
 import type { StylePromptPreset, StylePromptPreviewImage } from '../types';
 import { Button, Dialog, Icon, IconButton, UiPortal } from '../ui';
 import { useUiText, type UiText } from '../ui/i18n';
 import './dialogs.css';
 
-/** At most three images per preset (the host's folder keeps the same limit). */
-export const PRESET_IMAGE_LIMIT = 3;
 
 /** The texts that differ between a Style preset's dialog and a prompt preset's (step 4c1: it names prompt presets). */
 export function presetImageTexts(t: UiText, kind: 'style' | 'positive') {
+  const max = presetPreviewLimit(kind);
   return kind === 'positive'
-    ? { title: t('cv.pp.img.title'), none: t('cv.pp.img.none'), hint: t('cv.pp.img.hint'), limit: t('cv.pp.img.limit'), imported: (n: number) => t('cv.pp.img.imported', { n }) }
-    : { title: t('spi.title'), none: t('spi.none'), hint: t('spi.hint'), limit: t('spi.limit'), imported: (n: number) => t('spi.imported', { n }) };
+    ? { title: t('cv.pp.img.title'), none: t('cv.pp.img.none'), hint: t('cv.pp.img.hint', { max }), limit: t('cv.pp.img.limit', { max }), imported: (n: number) => t('cv.pp.img.imported', { n }) }
+    : { title: t('spi.title'), none: t('spi.none'), hint: t('spi.hint', { max }), limit: t('spi.limit', { max }), imported: (n: number) => t('spi.imported', { n }) };
 }
 
 /**
- * The preview images of one preset (at most three): import, drop, paste, replace, delete; double-click for a
+ * The preview images of one preset (a Style preset at most six, a prompt preset three): import, drop, paste, replace, delete; double-click for a
  * full-screen preview, Escape closes the preview first and then the dialog. Rebuilt in step 4c2 on the UI kit.
  */
 export function StylePresetImagesView({ preset, kind, onImport, onDropImages, onReplace, onDelete, onClose }: {
@@ -34,7 +34,7 @@ export function StylePresetImagesView({ preset, kind, onImport, onDropImages, on
   onClose: () => void;
 }) {
   const { t } = useUiText();
-  const text = presetImageTexts(t, kind);
+  const text = presetImageTexts(t, kind), limit = presetPreviewLimit(kind);
   const [preview, setPreview] = useState<StylePromptPreviewImage | null>(null);
   const [dragging, setDragging] = useState(false);
   const opener = useRef<HTMLElement | null>(null);
@@ -57,8 +57,8 @@ export function StylePresetImagesView({ preset, kind, onImport, onDropImages, on
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose, preview]);
   return <>
-    <Dialog open onClose={onClose} icon="palette" width={640} title={text.title} description={<span className="spi-sub">{t('spi.count', { name: preset.name, n: images.length })}</span>} initialFocusRef={closeRef}
-      footer={<><Button ref={closeRef} onClick={onClose}>{t('spi.close')}</Button><Button variant="primary" icon="folder" disabled={images.length >= PRESET_IMAGE_LIMIT} onClick={onImport} data-testid="spi-add">{t('spi.add')}</Button></>}>
+    <Dialog open onClose={onClose} icon="palette" width={640} title={text.title} description={<span className="spi-sub">{t('spi.count', { name: preset.name, n: images.length, max: limit })}</span>} initialFocusRef={closeRef}
+      footer={<><Button ref={closeRef} onClick={onClose}>{t('spi.close')}</Button><Button variant="primary" icon="folder" disabled={images.length >= limit} onClick={onImport} data-testid="spi-add">{t('spi.add')}</Button></>}>
       <div className={clsx('spi-drop', dragging && 'is-over')} data-testid="preset-images"
         onDragEnter={event => { if (!hasDraggedFiles(event.dataTransfer)) return; event.preventDefault(); setDragging(true); }}
         onDragOver={event => { if (!hasDraggedFiles(event.dataTransfer)) return; event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; setDragging(true); }}
@@ -68,7 +68,7 @@ export function StylePresetImagesView({ preset, kind, onImport, onDropImages, on
           if (!hasDraggedFiles(event.dataTransfer)) return;
           event.preventDefault();
           setDragging(false);
-          const paths = droppedImagePaths(event.dataTransfer, PRESET_IMAGE_LIMIT - images.length);
+          const paths = droppedImagePaths(event.dataTransfer, limit - images.length);
           if (paths.length > 0) onDropImages(paths);
         }}>
         {images.length === 0
@@ -113,11 +113,11 @@ export function StylePresetImagesManager({ presetId, onClose, kind = 'style' }: 
   const settingKey = kind === 'positive' ? 'positivePromptPresets' : 'stylePromptPresets';
   const stylePromptPresets = ((kind === 'positive' ? settings?.positivePromptPresets : settings?.stylePromptPresets) ?? EMPTY_PRESETS) as StylePromptPreset[];
   const storageId = (id: string) => kind === 'positive' ? positivePromptPresetStorageId(id) : id;
-  const text = presetImageTexts(t, kind);
+  const text = presetImageTexts(t, kind), limit = presetPreviewLimit(kind);
 
   async function updateImages(id: string, images: StylePromptPreviewImage[]) {
     await saveAssetSetting(window.naiDesktop, settingKey as 'stylePromptPresets', stylePromptPresets,
-      stylePromptPresets.map(item => item.id === id ? { ...item, previewImages: images.slice(0, PRESET_IMAGE_LIMIT) } : item));
+      stylePromptPresets.map(item => item.id === id ? { ...item, previewImages: images.slice(0, limit) } : item));
     await refreshSettings();
   }
 
@@ -137,7 +137,7 @@ export function StylePresetImagesManager({ presetId, onClose, kind = 'style' }: 
 
   async function importImages(preset: StylePromptPreset) {
     const current = await window.naiDesktop.reconcileStylePromptPresetImages(storageId(preset.id), preset.previewImages ?? []);
-    const available = PRESET_IMAGE_LIMIT - current.length;
+    const available = limit - current.length;
     if (available <= 0) { setToast(text.limit); return; }
     const imported = await window.naiDesktop.importStylePromptPresetImages(storageId(preset.id), available, text.title);
     if (imported.length === 0) return;
@@ -146,7 +146,7 @@ export function StylePresetImagesManager({ presetId, onClose, kind = 'style' }: 
 
   async function importDropped(preset: StylePromptPreset, sourcePaths: string[]) {
     const current = await window.naiDesktop.reconcileStylePromptPresetImages(storageId(preset.id), preset.previewImages ?? []);
-    const available = PRESET_IMAGE_LIMIT - current.length;
+    const available = limit - current.length;
     if (available <= 0) { setToast(text.limit); return; }
     const imported = await window.naiDesktop.importStylePromptPresetImagePaths(sourcePaths, storageId(preset.id), available);
     if (imported.length === 0) return;

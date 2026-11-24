@@ -320,6 +320,45 @@ it.each([
   expect(await fs.readdir(destination.userDataRoot)).not.toContain('style-prompt-previews');
 });
 
+it.each([
+  ['every category (the library archive restores the presets)', [...categories]],
+  ['some categories (the preset list of the backup is read)', ['imageHistory', 'promptPresets']],
+] as const)('a style preset keeps its artists, negative texts, sampling settings, notes and six labelled sample images through a backup: %s', async (_label, chosen) => {
+  const context = await source();
+  // Six sample images in the preset's own folder, each with what it shows.
+  const folder = path.join(context.userDataRoot, 'style-prompt-previews', 'style-1');
+  await fs.mkdir(folder, { recursive: true });
+  const labels = ['reference', 'one character', 'two characters', 'comic page', 'landscape', ''];
+  const previewImages = [];
+  for (const [index, label] of labels.entries()) {
+    const filePath = path.join(folder, `sample-${index}.png`);
+    await fs.writeFile(filePath, Buffer.from(`SFW sample ${index}`));
+    previewImages.push({ id: `sample-${index}`, name: `sample-${index}.png`, filePath, fileUrl: 'nai-local://fixture', createdAt: now, ...(label ? { label } : {}) });
+  }
+  const structured = {
+    artists: [{ name: 'artist:fixture_artist', weight: 1.2, enabled: true }, { name: 'artist:other', weight: -1.5, enabled: false }],
+    negativePrompt: '3d, photo', textNegativePrompt: 'text, speech bubble',
+    params: { model: 'nai-diffusion-5-full', sampler: 'k_euler_ancestral', noiseSchedule: 'karras', steps: 28, cfgScale: 5, cfgRescale: 0, ucPreset: 0, qualityPreset: 'standard' },
+    notes: 'One character: Base only.',
+  };
+  context.repository.put('style_preset', 'style-1', { ...context.repository.get('style_preset', 'style-1')!.payload, ...structured, previewImages });
+  const exported = await exportDataBackup({ destination: 'internal', categories: [...categories] });
+  expect(exported).toMatchObject({ ok: true, complete: true });
+  const destination = await fixture();
+  const restored = await importDataBackup({ path: exported.path!, categories: [...chosen], confirmConfigurationOverwrite: false });
+  expect(restored.ok, restored.message).toBe(true);
+  const payload = destination.repository.get('style_preset', 'style-1')!.payload;
+  expect(payload).toMatchObject({ name: 'Watercolor', prompt: ' watercolor\n', group: 'paint', ...structured });
+  expect(payload.previewImages.map((image: any) => image.label ?? '')).toEqual(labels);
+  // Each restored sample is a file of the destination with the bytes of the source (the preset list restores it into
+  // the preset's own folder; the library archive into its media folder, as it restores every image).
+  for (const [index, image] of payload.previewImages.entries()) {
+    expect(image.filePath.startsWith(destination.userDataRoot)).toBe(true);
+    if (chosen.length < categories.length) expect(path.dirname(image.filePath)).toBe(path.join(destination.userDataRoot, 'style-prompt-previews', 'style-1'));
+    expect((await fs.readFile(image.filePath)).toString()).toBe(`SFW sample ${index}`);
+  }
+});
+
 it('createdFolderPath turns the long-path forms Node returns on Windows back into plain paths', () => {
   expect(createdFolderPath(undefined)).toBeUndefined();
   if (process.platform === 'win32') {

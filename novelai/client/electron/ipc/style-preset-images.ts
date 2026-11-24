@@ -5,8 +5,8 @@ import path from "path";
 import { randomUUID } from "crypto";
 import { toLocalMediaUrl } from "./local-media-protocol";
 import type { StylePromptPreviewImage } from "../../src/types";
+import { presetPreviewLimitOfStorage } from "../../src/preset-previews";
 
-const MAX_PREVIEW_IMAGES = 3;
 const SUPPORTED_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
 
 function safePresetId(value: string) {
@@ -98,7 +98,7 @@ export function copyStylePromptPreviewImages(
   const existing = reconcileStylePromptPreviewImages(presetId, undefined, userDataRoot);
   const count = Math.max(
     0,
-    Math.min(MAX_PREVIEW_IMAGES - existing.length, Math.floor(availableSlots)),
+    Math.min(presetPreviewLimitOfStorage(presetId) - existing.length, Math.floor(availableSlots)),
   );
   if (count === 0) return [];
   const copied: StylePromptPreviewImage[] = [];
@@ -125,7 +125,7 @@ export async function importStylePromptPresetImages(
   availableSlots: number,
   dialogTitle = "Images",
 ) {
-  const count = Math.max(0, Math.min(MAX_PREVIEW_IMAGES, Math.floor(availableSlots)));
+  const count = Math.max(0, Math.min(presetPreviewLimitOfStorage(presetId), Math.floor(availableSlots)));
   if (count === 0) return [];
   const result = await dialog.showOpenDialog({
     title: dialogTitle,

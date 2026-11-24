@@ -562,7 +562,7 @@ test('source stays a whitelist: one guarded bridge, fixed host methods per tool,
   // Phase two: the recipe module calls exactly seven fixed host methods (the five raw recipe methods, the canvas
   // capture and list_queue for an unknown receipt), each through the frozen map, and imports nothing from the removed
   // enqueue core. Eight call sites: since 0.1.4 the settle of an unknown enqueue resends the same plan under the same key.
-  assert.deepEqual(importsOf(recipes), ['node:crypto', './bridge-client.mjs', './queue-control.mjs', './recipe-masks.mjs', './recipe-sources.mjs', './recipe-sources.mjs']);
+  assert.deepEqual(importsOf(recipes), ['node:crypto', './bridge-client.mjs', './queue-control.mjs', './recipe-masks.mjs', './recipe-sources.mjs', './style-preset.mjs', './recipe-sources.mjs']);
   const { RECIPE_HOST_METHODS, RECIPE_SOURCE_HOST_METHODS } = await import('../src/recipe-queue.mjs');
   assert.ok(Object.isFrozen(RECIPE_HOST_METHODS));
   assert.deepEqual(Object.values(RECIPE_HOST_METHODS).sort(), [...RECIPE_HOST_METHOD_NAMES, 'list_queue'].sort());
@@ -574,6 +574,11 @@ test('source stays a whitelist: one guarded bridge, fixed host methods per tool,
   const [sources, masks] = await Promise.all(['src/recipe-sources.mjs', 'src/recipe-masks.mjs'].map(read));
   assert.deepEqual(importsOf(sources), ['node:crypto', './bridge-client.mjs', './asset-library-categories.mjs', './asset-library-response.mjs', './recipe-masks.mjs']);
   assert.ok(Object.isFrozen(RECIPE_SOURCE_HOST_METHODS)); assert.deepEqual(RECIPE_SOURCE_HOST_METHODS, { image: 'asset_library' });
+  // A style preset (prepare_recipe stylePresetId): one read of that preset through the same asset_library method, nothing else.
+  const stylePreset = await read('src/style-preset.mjs');
+  assert.deepEqual(importsOf(stylePreset), ['./bridge-client.mjs']);
+  assert.deepEqual([...stylePreset.matchAll(/bridge\.call\(([^)]+)\)/g)].map(match => match[1]), ["method, { action: 'read', kind: 'style_preset', id }, signal"]);
+  assert.match(recipes, /readStylePreset\(bridge, stylePresetId, \{ signal, method: RECIPE_SOURCE_HOST_METHODS\.image \}\)/);
   assert.deepEqual(sources.match(/bridge\.call\([^,]+,/g), ['bridge.call(RECIPE_SOURCE_HOST_METHODS.image,']);
   assert.match(sources, /action: 'image', kind: 'history'/);
   assert.deepEqual(importsOf(masks), ['node:zlib', 'node:crypto', './bridge-client.mjs']);
@@ -598,7 +603,7 @@ test('source stays a whitelist: one guarded bridge, fixed host methods per tool,
 const SERVER_MODULES = ['client/shared/runtime/data-paths.cjs', 'contracts/generated/library-contracts.json', 'contracts/validate.mjs',
   'src/app-autostart.mjs', 'src/app-launch.mjs', 'src/win32-process.mjs', 'src/asset-library-categories.mjs', 'src/asset-library-response.mjs', 'src/bridge-client.mjs', 'src/business-guards.mjs', 'src/compact-results.mjs', 'src/recipe-queue.mjs', 'src/data-paths.mjs', 'src/history-cover.mjs', 'src/history-export.mjs', 'src/image-censor.mjs', 'src/material-tools.mjs',
   'src/mcp-canvas-tools.mjs', 'src/mcp-core-tools.mjs', 'src/mcp-registry.mjs', 'src/mcp.mjs', 'src/platform-fs.mjs', 'src/queue-control.mjs', 'src/queue-limits-file.mjs', 'src/recipe-masks.mjs', 'src/recipe-sources.mjs', 'src/recipe-tool-schemas.mjs',
-  'src/study-tools.mjs', 'src/tag-cooccurrence.mjs', 'src/tag-details.mjs', 'src/tag-query-coordinator.mjs', 'src/version.mjs'];
+  'src/study-tools.mjs', 'src/style-preset.mjs', 'src/tag-cooccurrence.mjs', 'src/tag-details.mjs', 'src/tag-query-coordinator.mjs', 'src/version.mjs'];
 for (const [entry, expected] of [['src/mcp.mjs', SERVER_MODULES]]) {
   test(`N7 runtime module graph (${entry}): loads no enqueue-core, review, policy or plan-store module and touches no files`, async t => {
     const runtimeDir = await mkdtemp(join(tmpdir(), 'novelai-business-graph-'));

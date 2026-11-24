@@ -148,9 +148,41 @@ export const ArtistFavoritePayloadSchema = Type.Object({
 });
 export type ArtistFavoritePayload = Static<typeof ArtistFavoritePayloadSchema>;
 
-export const PreviewImageSchema = Type.Object({ id: text, name: text, filePath: text, fileUrl: text, createdAt: text });
+/**
+ * A preview image of a preset. `label` says what the image shows (a style preset's sample: "reference", "two
+ * characters", "comic page"). A style preset keeps up to six, a prompt preset three (client src/preset-previews.ts).
+ */
+export const PreviewImageSchema = Type.Object({ id: text, name: text, filePath: text, fileUrl: text, createdAt: text, label: optional(Type.String({ maxLength: 60 })) });
 export type PreviewImage = Static<typeof PreviewImageSchema>;
-export const StylePresetPayloadSchema = Type.Object({ id: nonempty, name: text, prompt: text, group: text, createdAt: text, previewImages: optional(Type.Array(PreviewImageSchema)) });
+/**
+ * One artist of a style preset: `name` is the tag as it is written in a prompt (for example "artist:someone"), `weight`
+ * its emphasis (1 = written plain, anything else as weight::name::, negative weights included) and `enabled` whether
+ * it is used. The artists are written into a prompt only when the preset is used (server src/style-preset.mjs);
+ * `prompt` holds the rest of the style and is never rewritten from them.
+ */
+export const StylePresetArtistSchema = Type.Object({ name: nonempty, weight: Type.Number(), enabled: Type.Boolean() });
+export type StylePresetArtist = Static<typeof StylePresetArtistSchema>;
+/**
+ * Sampling settings a style preset recommends; each one is optional and only a default for whoever uses the preset.
+ * Stored records stay open (a field a later version adds is kept); the agent's own writes are checked field by field.
+ */
+export const StylePresetParamsSchema = Type.Object({
+  model: optional(GenerateParamsSchema.properties.model), sampler: optional(GenerateParamsSchema.properties.sampler), noiseSchedule: optional(nonempty),
+  steps: optional(Type.Number()), cfgScale: optional(Type.Number()), cfgRescale: optional(Type.Number()),
+  ucPreset: optional(GenerateParamsSchema.properties.ucPreset), qualityPreset: optional(GenerateParamsSchema.properties.qualityPreset),
+});
+export type StylePresetParams = Static<typeof StylePresetParamsSchema>;
+/**
+ * A style preset (issue #1). Beside the style text `prompt`, all optional (a preset from before them has none):
+ * `artists`; `negativePrompt`, the negative text that belongs to the style; `textNegativePrompt`, the negative text
+ * that keeps writing out of the image (text, speech bubble …), kept apart so that a comic page can leave it out;
+ * `params`, recommended sampling settings; `notes` on how to use the preset.
+ */
+export const StylePresetPayloadSchema = Type.Object({
+  id: nonempty, name: text, prompt: text, group: text, createdAt: text, previewImages: optional(Type.Array(PreviewImageSchema)),
+  artists: optional(Type.Array(StylePresetArtistSchema, { maxItems: 64 })),
+  negativePrompt: optional(text), textNegativePrompt: optional(text), params: optional(StylePresetParamsSchema), notes: optional(text),
+});
 export const PositivePresetPayloadSchema = Type.Object({ id: nonempty, name: text, prompt: text, createdAt: text, previewImages: optional(Type.Array(PreviewImageSchema)) });
 export const PromptChunkPayloadSchema = Type.Object({ id: nonempty, name: text, content: text, createdAt: text, updatedAt: text });
 const localizedNames = Type.Object({ 'zh-CN': optional(text), 'zh-TW': optional(text), 'en-US': optional(text), 'ja-JP': optional(text), 'ko-KR': optional(text) });

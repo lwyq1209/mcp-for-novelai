@@ -1,6 +1,5 @@
 import type { PositivePromptPreset } from "./types";
 
-export const POSITIVE_PROMPT_PRESET_IMAGE_LIMIT = 3;
 const STORAGE_PREFIX = "positive-prompt-";
 
 export function positivePromptPresetStorageId(id: string): string {

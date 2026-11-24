@@ -121,20 +121,24 @@ describe('save a reference as a preset (step 4c2 rebuild)', () => {
 });
 
 describe('preset images (step 4c2 rebuild)', () => {
-  const images = [{ id: 'a', name: 'a.png', fileUrl: 'fixture://a' }, { id: 'b', name: 'b.png', fileUrl: 'fixture://b' }];
-  const preset = (count: number) => ({ id: 's1', name: 'Watercolor', prompt: 'watercolor', previewImages: images.concat([{ id: 'c', name: 'c.png', fileUrl: 'fixture://c' }]).slice(0, count) }) as unknown as StylePromptPreset;
+  const images = ['a', 'b', 'c', 'd', 'e', 'f'].map(id => ({ id, name: `${id}.png`, fileUrl: `fixture://${id}` }));
+  const preset = (count: number) => ({ id: 's1', name: 'Watercolor', prompt: 'watercolor', previewImages: images.slice(0, count) }) as unknown as StylePromptPreset;
   const view = (count: number, kind: 'style' | 'positive' = 'style') => renderToStaticMarkup(<StylePresetImagesView preset={preset(count)} kind={kind} onImport={() => {}} onDropImages={() => {}} onReplace={() => {}} onDelete={() => {}} onClose={() => {}} />);
-  it('shows the empty drop area, the images with replace and delete, and the limit of three', () => {
+  it('shows the empty drop area, the images with replace and delete, and the limit (six for a Style preset, three for a prompt preset)', () => {
     const empty = view(0);
-    for (const part of ['风格参考图', 'Watercolor · 0/3', '尚未导入风格参考图', '将图片拖到这里，或点击选择图片', '每个风格最多 3 张；双击可以全屏查看。']) expect(empty).toContain(part);
+    for (const part of ['风格参考图', 'Watercolor · 0/6', '尚未导入风格参考图', '将图片拖到这里，或点击选择图片', '每个风格最多 6 张；双击可以全屏查看。']) expect(empty).toContain(part);
     expect(button(empty, '导入图片')?.disabled).toBe(false);
     const two = view(2);
-    expect(two).toContain('Watercolor · 2/3');
+    expect(two).toContain('Watercolor · 2/6');
     expect(two.match(/>重新导入</g)).toHaveLength(2);
     expect(two.match(/>删除图片</g)).toHaveLength(2);
     expect(two).toContain('alt="Watercolor · a.png"');
     expect(two).toContain('data-image-paste="drop"');
-    expect(button(view(3), '导入图片')?.disabled).toBe(true);
+    expect(button(view(3), '导入图片')?.disabled).toBe(false);
+    expect(button(view(6), '导入图片')?.disabled).toBe(true);
+    const prompt = view(3, 'positive');
+    for (const part of ['Watercolor · 3/3', '每个正文预设最多 3 张；双击可以全屏查看。']) expect(prompt).toContain(part);
+    expect(button(prompt, '导入图片')?.disabled).toBe(true);
   });
   it('names prompt presets in a prompt preset’s dialog, and has no Chinese in English', () => {
     expect(view(0, 'positive')).toContain('尚未导入正文预设参考图');

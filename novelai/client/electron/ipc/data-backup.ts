@@ -53,6 +53,7 @@ import {
 } from "./style-preset-images";
 import { toLocalMediaUrl } from "./local-media-protocol";
 import { positivePromptPresetStorageId } from "../../src/positive-prompt-presets";
+import { presetPreviewLimitOfStorage } from "../../src/preset-previews";
 import { hostError, type HostErrorParams } from "../host-error";
 import { errorText, hostDetail, hostMessage, MAX_DETAILS, type HostDetail, type HostMessage } from "../host-message";
 import { hostText } from "../host-language";
@@ -1157,7 +1158,7 @@ async function restoreStylePreviews(
   const createdFolder = createdFolderPath(await fs.mkdir(directory, { recursive: true }));
   if (createdFolder) guard?.folders.push({ top: createdFolder, leaf: directory });
   for (const raw of incoming) {
-    if (previews.length >= 3) break;
+    if (previews.length >= presetPreviewLimitOfStorage(presetId)) break;
     const asset = await readAsset(zip, raw.asset);
     if (!asset || hashes.has(asset.reference.sha256)) {
       counters.skipped += 1;
@@ -1174,12 +1175,15 @@ async function restoreStylePreviews(
       filePath,
       fileUrl: toLocalMediaUrl(filePath),
       createdAt: typeof raw.createdAt === "string" ? raw.createdAt : new Date().toISOString(),
+      ...(typeof raw.label === "string" && raw.label ? { label: raw.label } : {}),
     });
     hashes.add(asset.reference.sha256);
     counters.count += 1;
   }
   return reconcileStylePromptPreviewImages(presetId, previews, app.getPath("userData"));
 }
+
+const STYLE_PRESET_STRUCTURED_FIELDS = ["artists", "negativePrompt", "textNegativePrompt", "params", "notes"] as const;
 
 async function restorePromptPresets(
   zip: ReadableBackupZip,
@@ -1252,6 +1256,8 @@ async function restorePromptPresets(
         group: String(raw.group || "Default"),
         createdAt: typeof raw.createdAt === "string" ? raw.createdAt : new Date().toISOString(),
         previewImages: [],
+        // The structured fields of a style preset (issue #1), as the backup holds them; checked with the record below.
+        ...Object.fromEntries(STYLE_PRESET_STRUCTURED_FIELDS.filter((key) => raw[key] !== undefined).map((key) => [key, cloneJson(raw[key])])),
       };
       // Checked before its preview files are written (commitStagedLibrary checks the whole record again).
       checkImportedRecord("style_preset", target);

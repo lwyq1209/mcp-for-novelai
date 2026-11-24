@@ -533,10 +533,10 @@ export const CANVAS_STRINGS = {
   // A prompt preset's own image manager (it reuses the Style one's dialog; step 4c1)
   'cv.pp.img.title': ['正文预设参考图', 'Prompt preset images'],
   'cv.pp.img.none': ['尚未导入正文预设参考图', 'No prompt preset images yet'],
-  'cv.pp.img.hint': ['每个正文预设最多 3 张；双击可以全屏查看。', 'Up to 3 images per prompt preset; double-click one to view it full screen.'],
+  'cv.pp.img.hint': ['每个正文预设最多 {max} 张；双击可以全屏查看。', 'Up to {max} images per prompt preset; double-click one to view it full screen.'],
   'cv.pp.img.imported': ['已导入 {n} 张正文预设参考图。', 'Imported {n} prompt preset images.'],
   'cv.pp.img.imported.one': ['已导入 1 张正文预设参考图。', 'Imported 1 prompt preset image.'],
-  'cv.pp.img.limit': ['这个正文预设已有 3 张图片（上限）。', 'This prompt preset already has 3 images (the limit).'],
+  'cv.pp.img.limit': ['这个正文预设已有 {max} 张图片（上限）。', 'This prompt preset already has {max} images (the limit).'],
   'cv.lib.needText': ['这一栏是空的，没有可保存的内容', 'This field is empty; there is nothing to save'],
   'cv.lib.dan': ['在 Danbooru 查找「{q}」', 'Search Danbooru for “{q}”'],
   'cv.lib.danArtists': ['只看画师', 'Artists only'],

@@ -1857,6 +1857,121 @@ test('parity: the reference rules mirror the client (models, types, the same-out
   assert.equal(Math.max(...recipeQueue.T2I_MODELS.map(model => recipeQueue.referenceCapability(model)?.strengthMax ?? 0)), types.MAX_PRECISE_REFERENCE_STRENGTH);
 });
 
+// ------------------------------------------------------------------------------------------------ style presets (issue #1)
+const STYLE_PRESET = { schemaVersion: 1, kind: 'style_preset', id: 'style-ink', revision: 4, name: 'Ink', archived: false, createdAt: '2026-11-25T00:00:00.000Z', updatedAt: '2026-11-25T00:00:00.000Z', source: { namespace: 'style_preset' },
+  payload: { id: 'style-ink', name: 'Ink', prompt: ' ink lineart, flat color, ', group: '', createdAt: '2026-11-25T00:00:00.000Z',
+    artists: [{ name: 'artist:alpha', weight: 1, enabled: true }, { name: 'artist:beta', weight: 1.3, enabled: true }, { name: 'artist:gamma', weight: -1.5, enabled: true }, { name: 'artist:off', weight: 1, enabled: false }],
+    negativePrompt: '3d, photo', textNegativePrompt: 'text, speech bubble',
+    params: { model: 'nai-diffusion-4-5-full', steps: 28, cfgScale: 5, sampler: 'k_euler_ancestral', noiseSchedule: 'karras', ucPreset: 0, qualityPreset: 'standard' }, notes: 'One character: Base only.' } };
+const INK_STYLE = 'artist:alpha, 1.3::artist:beta::, -1.5::artist:gamma::, ink lineart, flat color';
+/** The library answers the next asset_library call (the preset read, always the first host call) with this preset. */
+const libraryHasPreset = (h, item = STYLE_PRESET) => { h.faults.asset_library = { reply: args => { assert.deepEqual(args, { action: 'read', kind: 'style_preset', id: item.id }); return { item, assets: [], links: [], memberships: [] }; } }; };
+
+test('stylePresetId: one read of the preset, then the recipe is frozen with its style, negative text and sampling fields; the readback says what the preset wrote', async t => {
+  const h = await realHost(t);
+  const { call } = await connect(t, h.bridge), { call: agent } = await connect(t, h.bridge, { compact: true });
+  // Only the preset, the picture and the size: every text and sampling field comes from the preset.
+  const minimal = { mode: 't2i', stylePresetId: 'style-ink', positivePrompt: '1girl, garden', seed: 1234, width: 832, height: 1216 };
+  libraryHasPreset(h);
+  const saved = ok(await agent('prepare_recipe', minimal));
+  assert.deepEqual(h.methods(), ['asset_library', 'put_queue_recipe']);
+  assert.deepEqual(saved.effective.stylePreset, { id: 'style-ink', revision: 4, name: 'Ink', stylePrompt: INK_STYLE, negativePrompt: '3d, photo, text, speech bubble',
+    artists: { used: 3, off: 1 }, negative: { style: 'applied', text: 'applied' }, params: ['model', 'steps', 'cfgScale', 'sampler', 'noiseSchedule', 'ucPreset', 'qualityPreset'], notes: 'One character: Base only.' });
+  // What the call did not write is listed with its value, as any value the caller left to someone else.
+  assert.deepEqual([saved.effective.model, saved.effective.steps, saved.effective.cfgScale, saved.effective.sampler, saved.effective.noiseSchedule, saved.effective.automaticQuality.preset, saved.effective.ucPreset.preset],
+    ['nai-diffusion-4-5-full', 28, 5, 'k_euler_ancestral', 'karras', 'standard', 0]);
+  assert.deepEqual(saved.warnings, []);
+  // The stored recipe holds plain text and values, exactly as a call that wrote them all, and no link to the preset.
+  const stored = json(await h.service.read_queue_recipe({ recipeId: saved.recipeId, recipeRevision: 1 }));
+  const authored = stored.snapshot.reviewInput.authored.params;
+  assert.deepEqual([authored.stylePrompt, authored.positivePrompt, authored.negativePrompt, authored.model, authored.steps, authored.sampler], [INK_STYLE, '1girl, garden', '3d, photo, text, speech bubble', 'nai-diffusion-4-5-full', 28, 'k_euler_ancestral']);
+  assert.equal(JSON.stringify(stored).includes('style-ink'), false);
+  const written = ok(await call('prepare_recipe', { mode: 't2i', ...STYLE_PRESET.payload.params, stylePrompt: INK_STYLE, positivePrompt: '1girl, garden', negativePrompt: '3d, photo, text, speech bubble', seed: 1234, width: 832, height: 1216 }));
+  assert.equal(written.inputHash, saved.inputHash, 'the same recipe as the one written out by hand');
+
+  // The call's own text is appended, its own value wins, and allowText leaves out the text-suppressing negative.
+  libraryHasPreset(h);
+  const own = ok(await agent('prepare_recipe', { ...minimal, preview: true, stylePrompt: 'sketch', negativePrompt: 'hat', steps: 23, allowText: true }));
+  assert.deepEqual(own.effective.stylePreset, { id: 'style-ink', revision: 4, name: 'Ink', stylePrompt: `${INK_STYLE}, sketch`, negativePrompt: '3d, photo, hat',
+    artists: { used: 3, off: 1 }, yourStylePrompt: 'appended', negative: { style: 'applied', text: 'skipped', yours: 'appended' },
+    params: ['model', 'cfgScale', 'sampler', 'noiseSchedule', 'ucPreset', 'qualityPreset'], overridden: ['steps'], notes: 'One character: Base only.' });
+  assert.equal(own.effective.steps, undefined, 'the step count the call wrote is not repeated');
+  assert.equal(own.preview, true);
+
+  // A preset from before the structured fields (only its prompt): the texts may be omitted, every sampling field is still required.
+  const plain = { ...STYLE_PRESET, id: 'style-old', revision: 1, name: 'Old', payload: { id: 'style-old', name: 'Old', prompt: 'watercolor', group: '', createdAt: STYLE_PRESET.createdAt } };
+  libraryHasPreset(h, plain);
+  const before = h.count('put_queue_recipe');
+  const missing = errorOf(await agent('prepare_recipe', { ...minimal, stylePresetId: 'style-old' }));
+  assert.equal(missing.code, 'invalid_arguments');
+  assert.match(missing.message, /^Missing model, steps, cfgScale, sampler, noiseSchedule, ucPreset, qualityPreset; style preset "Old" does not set them/);
+  libraryHasPreset(h, plain);
+  const old = ok(await agent('prepare_recipe', { ...minimal, stylePresetId: 'style-old', ...omit(GEN, 'stylePrompt', 'positivePrompt', 'negativePrompt', 'seed') }));
+  assert.deepEqual(old.effective.stylePreset, { id: 'style-old', revision: 1, name: 'Old', stylePrompt: 'watercolor', negativePrompt: '', negative: { style: 'none', text: 'none' } });
+  assert.equal(h.count('put_queue_recipe'), before + 1);
+
+  // An image mode: the preset is read before the source; inpaint takes the preset's texts and settings too.
+  const source = h.addHistory('history-preset', gradient(832, 1216), { width: 832, height: 1216 });
+  libraryHasPreset(h);
+  h.calls.length = 0;
+  const i2i = ok(await agent('prepare_recipe', { mode: 'i2i', source, stylePresetId: 'style-ink', positivePrompt: '1girl', seed: null, strength: 0.5, preview: true }));
+  assert.deepEqual(h.methods(), ['asset_library', 'asset_library', 'preview_queue_recipe']);
+  assert.equal(i2i.effective.stylePreset.stylePrompt, INK_STYLE);
+  libraryHasPreset(h);
+  const inpaint = ok(await agent('prepare_recipe', { mode: 'inpaint', source, mask: RECT_MASK, stylePresetId: 'style-ink', positivePrompt: '1girl', seed: null, strength: 0.8, preview: true }));
+  assert.equal(inpaint.effective.model, 'nai-diffusion-4-5-full-inpainting');
+  assert.equal(inpaint.effective.stylePreset.negativePrompt, '3d, photo, text, speech bubble');
+
+  // effort medium sends no negative prompt: none of the preset's is in the recipe, and the readback says so.
+  libraryHasPreset(h, { ...STYLE_PRESET, payload: { ...STYLE_PRESET.payload, params: { ...STYLE_PRESET.payload.params, model: 'nai-diffusion-5-full' } } });
+  const medium = ok(await agent('prepare_recipe', { ...minimal, effort: 'medium', preview: true }));
+  assert.deepEqual([medium.effective.stylePreset.negativePrompt, medium.effective.stylePreset.negative], ['', { style: 'not_sent_on_medium', text: 'not_sent_on_medium' }]);
+  assert.ok(medium.warnings.some(warning => warning.code === 'effort_medium_fixed' && warning.field === 'negativePrompt' && /the style preset's/.test(warning.message)));
+  assert.ok(medium.warnings.some(warning => warning.code === 'effort_medium_fixed' && warning.field === 'steps' && /the style preset's 28 was replaced/.test(warning.message)));
+
+  // An archived preset is applied as it is, with a warning.
+  libraryHasPreset(h, { ...STYLE_PRESET, archived: true });
+  const archived = ok(await agent('prepare_recipe', { ...minimal, preview: true }));
+  assert.equal(archived.effective.stylePreset.archived, true);
+  assert.deepEqual(archived.warnings.map(warning => warning.code), ['style_preset_archived']);
+});
+
+test('stylePresetId: what cannot be applied is refused with nothing saved (a wrong field, an unknown preset, a reply that is not that preset, a text that no longer fits)', async t => {
+  const h = await realHost(t);
+  const { call: agent } = await connect(t, h.bridge, { compact: true });
+  const minimal = { mode: 't2i', stylePresetId: 'style-ink', positivePrompt: '1girl, garden', seed: 1234, width: 832, height: 1216 };
+  const source = h.addHistory('history-preset-refused', gradient(512, 512), { width: 512, height: 512 });
+  // Before any host call: the fields themselves.
+  for (const [args, pattern] of [
+    [{ ...omit(minimal, 'stylePresetId'), ...GEN, allowText: true }, /allowText .* needs stylePresetId/],
+    [{ ...minimal, allowText: 'yes' }, /allowText must be boolean/],
+    [{ ...minimal, stylePresetId: '  ' }, /arguments|stylePresetId/],
+    [{ mode: 'upscale', source, stylePresetId: 'style-ink' }, /mode upscale does not accept: stylePresetId/],
+    [{ mode: 'director', source, tool: 'bg-removal', stylePresetId: 'style-ink' }, /mode director does not accept: stylePresetId/],
+    [{ mode: 't2i', canvas: { workspaceId: 'w', expectedRevision: 1 }, stylePresetId: 'style-ink' }, /canvas|stylePresetId/],
+  ]) {
+    const error = errorOf(await agent('prepare_recipe', args));
+    assert.equal(error.code, 'invalid_arguments', JSON.stringify(args));
+    assert.match(error.message, pattern);
+  }
+  assert.deepEqual(h.methods(), [], 'nothing reached the host');
+  // The library has no such style preset (the double answers library_not_found for anything it does not hold).
+  const unknown = errorOf(await agent('prepare_recipe', minimal));
+  assert.equal(unknown.code, 'library_not_found');
+  assert.match(unknown.message, /^stylePresetId "style-ink" is not a style preset in the library: .*Nothing was saved\.$/);
+  // A reply that is another item, another kind or not a record.
+  for (const item of [{ ...STYLE_PRESET, id: 'style-other' }, { ...STYLE_PRESET, kind: 'positive_preset' }, { ...STYLE_PRESET, payload: null }, { ...STYLE_PRESET, revision: 0 }]) {
+    h.faults.asset_library = { reply: () => ({ item }) };
+    assert.equal(errorOf(await agent('prepare_recipe', minimal)).code, 'invalid_response');
+  }
+  // The preset's text and the call's own together no longer fit a prompt.
+  libraryHasPreset(h);
+  const long = errorOf(await agent('prepare_recipe', { ...minimal, stylePrompt: 'x'.repeat(recipeQueue.MAX_TEXT - 20) }));
+  assert.equal(long.code, 'invalid_arguments');
+  assert.match(long.message, /stylePrompt is \d+ characters with style preset "Ink" written into it/);
+  assert.deepEqual(h.methods().filter(method => method !== 'asset_library'), [], 'no put and no preview');
+});
+
 test('every host method observed across this file is declared by the recipe and queue tools', () => {
   const declared = new Set(['prepare_recipe', 'enqueue_recipes', 'list_queue', 'read_queue', 'get_queue_result'].flatMap(name => registry.get(name).hostMethods));
   assert.deepEqual([...new Set(observed)].filter(method => !declared.has(method)), []);

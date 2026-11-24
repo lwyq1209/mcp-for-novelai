@@ -46,7 +46,8 @@ import { createHash } from 'node:crypto';
 import { BridgeError } from './bridge-client.mjs';
 import { MAX_QUEUE_ITEMS, cleanedBatchInstruction, compactQueuedBatch } from './queue-control.mjs';
 import { buildMask } from './recipe-masks.mjs';
-import { maskProvenance, maskReadback, prepareMaskSpec, readAlphaImages, readSourceMetadata, sourceIdentity } from './recipe-sources.mjs';
+import { RECIPE_SOURCE_HOST_METHODS, maskProvenance, maskReadback, prepareMaskSpec, readAlphaImages, readSourceMetadata, sourceIdentity } from './recipe-sources.mjs';
+import { STYLE_PRESET_TEXT_FIELDS, applyStylePreset, readStylePreset } from './style-preset.mjs';
 
 export { RECIPE_SOURCE_HOST_METHODS } from './recipe-sources.mjs';
 export const RECIPE_HOST_METHODS = Object.freeze({ put: 'put_queue_recipe', read: 'read_queue_recipe', preview: 'preview_queue_recipe', lookup: 'lookup_queue_request', enqueue: 'enqueue_queue_recipes', list: 'list_queue', capture: 'capture_canvas_recipe' });
@@ -199,14 +200,19 @@ const seeded = mode => !POSTPROCESS_MODES.includes(mode);
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const GENERATION_FIELDS = ['model', 'steps', 'cfgScale', 'sampler', 'noiseSchedule', 'ucPreset', 'qualityPreset', 'stylePrompt', 'positivePrompt', 'negativePrompt', 'seed'];
 /**
+ * stylePresetId (issue #1): a style preset of the library written into the call before it is validated
+ * (src/style-preset.mjs); allowText leaves out the preset's text-suppressing negative. The generation modes take them.
+ */
+const STYLE_PRESET_FIELDS = Object.freeze(['stylePresetId', 'allowText']);
+/**
  * Per mode: required and optional prepare_recipe fields. A field of another mode is refused, never ignored. i2i may
  * leave out width/height (sized from the source, 0.1.4); upscale's only scale is 2, so it may be left out.
  */
 export const MODE_FIELDS = Object.freeze({
-  t2i: { required: [...GENERATION_FIELDS, 'width', 'height'], optional: ['cfgRescale', 'characters', 'transparentBackground', 'effort', 'references'] },
-  i2i: { required: ['source', ...GENERATION_FIELDS, 'strength'], optional: ['width', 'height', 'cfgRescale', 'characters', 'extraNoiseSeed', 'effort', 'references'] },
-  enhance: { required: ['source', ...GENERATION_FIELDS, 'magnitude', 'scale'], optional: ['cfgRescale', 'characters', 'extraNoiseSeed', 'effort', 'references'] },
-  inpaint: { required: ['source', 'mask', ...GENERATION_FIELDS, 'strength'], optional: ['cfgRescale', 'effort'] },
+  t2i: { required: [...GENERATION_FIELDS, 'width', 'height'], optional: ['cfgRescale', 'characters', 'transparentBackground', 'effort', 'references', ...STYLE_PRESET_FIELDS] },
+  i2i: { required: ['source', ...GENERATION_FIELDS, 'strength'], optional: ['width', 'height', 'cfgRescale', 'characters', 'extraNoiseSeed', 'effort', 'references', ...STYLE_PRESET_FIELDS] },
+  enhance: { required: ['source', ...GENERATION_FIELDS, 'magnitude', 'scale'], optional: ['cfgRescale', 'characters', 'extraNoiseSeed', 'effort', 'references', ...STYLE_PRESET_FIELDS] },
+  inpaint: { required: ['source', 'mask', ...GENERATION_FIELDS, 'strength'], optional: ['cfgRescale', 'effort', ...STYLE_PRESET_FIELDS] },
   upscale: { required: ['source'], optional: ['scale', 'acceptDownscale', 'effort'] },
   director: { required: ['source', 'tool'], optional: ['defry', 'colorizePrompt', 'emotion', 'emotionLevel', 'acceptDownscale', 'effort'] },
 });
@@ -360,12 +366,13 @@ function effortOf(args, mode, warnings) {
 }
 
 /** What Medium replaced, as warnings: `effort medium fixes steps to 14; your 28 was replaced.` */
-function mediumWarnings(args, characters) {
+function mediumWarnings(args, characters, fromPreset = []) {
   const warnings = [], given = args;
   for (const [field, fixed] of Object.entries(MEDIUM_FIXED)) {
     if (given[field] === undefined || sameValue(given[field], fixed)) continue;
     const to = field === 'ucPreset' ? '0 (Heavy)' : field === 'negativePrompt' ? 'empty (Medium sends only the Heavy UC)' : shown(fixed);
-    warnings.push({ code: 'effort_medium_fixed', field, from: given[field], to: fixed, message: `effort medium fixes ${field} to ${to}; your ${shown(given[field])} was replaced.` });
+    // A value the style preset supplied is named as the preset's, not as the caller's.
+    warnings.push({ code: 'effort_medium_fixed', field, from: given[field], to: fixed, message: `effort medium fixes ${field} to ${to}; ${fromPreset.includes(field) ? "the style preset's" : 'your'} ${shown(given[field])} was replaced.` });
   }
   const dropped = (characters ?? []).map((character, index) => character.negativePrompt ? index : -1).filter(index => index >= 0);
   if (dropped.length) warnings.push({ code: 'effort_medium_fixed', field: 'characters.negativePrompt', characters: dropped, message: `effort medium sends no character negative prompt; the negativePrompt of characters ${dropped.join(', ')} was removed (use negative emphasis such as -3::hat:: in the prompt instead).` });
@@ -457,20 +464,51 @@ function referenceFields(args, model, warnings) {
 }
 
 /**
- * Pure validation of prepare_recipe arguments, before any host call. Returns the plan that, with the source
- * metadata (and the built mask for inpaint), becomes the exact preparation sent to the host. plan.warnings lists the
- * corrections made (and checkRecipeSource adds those that need the source size).
+ * The checks of a call that come before its style preset is read: the known fields, the mode, the fields of that mode
+ * and the two style preset fields themselves. `canvas`: a canvas capture, which canvasPlan checks.
  */
-export function recipePlan(args) {
+function planHead(args) {
   exactKeys(args, PREPARE_KEYS, 'prepare_recipe');
   if (!RECIPE_MODES.includes(args.mode)) invalid(`mode must be one of ${RECIPE_MODES.join(', ')}.`);
-  if (Object.hasOwn(args, 'canvas')) return canvasPlan(args);
-  const mode = args.mode, fields = MODE_FIELDS[mode], warnings = [];
+  if (Object.hasOwn(args, 'canvas')) return { canvas: true, stylePresetId: null };
+  const mode = args.mode, fields = MODE_FIELDS[mode];
   const foreign = Object.keys(args).filter(key => !COMMON_KEYS.includes(key) && !fields.required.includes(key) && !fields.optional.includes(key));
   if (foreign.length) invalid(`mode ${mode} does not accept: ${foreign.join(', ')}. Fields of other modes are refused, not ignored.`, { reason: 'field_not_in_mode', fields: foreign });
+  if (args.allowText !== undefined) boolean(args.allowText, 'allowText');
+  if (args.stylePresetId === undefined) {
+    if (args.allowText !== undefined) invalid('allowText only says whether the text-suppressing negative of a style preset is left out; it needs stylePresetId. Without a preset, write the negative prompt you want.', { reason: 'allow_text_without_preset' });
+    return { mode, fields, stylePresetId: null };
+  }
+  if (typeof args.stylePresetId !== 'string' || !/\S/.test(args.stylePresetId) || args.stylePresetId.length > 512) invalid('stylePresetId must be the id of a style preset (asset_library list {kinds:["style_preset"]}).', { reason: 'style_preset_id_invalid' });
+  return { mode, fields, stylePresetId: args.stylePresetId };
+}
+/** The style preset a prepare_recipe call names, after the checks that need no host: its id, or null. */
+export const stylePresetIdOf = args => planHead(args).stylePresetId;
+
+/**
+ * Pure validation of prepare_recipe arguments, before any host call but the read of the style preset the call names
+ * (`stylePreset`: that preset as readStylePreset returns it; required exactly when the call has stylePresetId).
+ * Returns the plan that, with the source metadata (and the built mask for inpaint), becomes the exact preparation
+ * sent to the host. plan.warnings lists the corrections made (and checkRecipeSource adds those that need the source
+ * size); plan.stylePreset is what the preset wrote into the call (the readback's effective.stylePreset).
+ */
+export function recipePlan(given, { stylePreset = null } = {}) {
+  const head = planHead(given);
+  if (head.canvas) return canvasPlan(given);
+  const { mode, fields } = head, warnings = [];
+  let args = given, applied = null;
+  if (head.stylePresetId !== null) {
+    if (!record(stylePreset) || stylePreset.id !== head.stylePresetId) throw new TypeError('recipePlan needs the style preset the call names.');
+    ({ args, applied } = applyStylePreset(given, stylePreset));
+    for (const field of STYLE_PRESET_TEXT_FIELDS) if (args[field].length > MAX_TEXT)
+      invalid(`${field} is ${args[field].length} characters with style preset ${JSON.stringify(applied.name)} written into it; at most ${MAX_TEXT} fit. Shorten your own ${field} or the preset.`, { reason: 'style_preset_text_too_long', field });
+    if (applied.archived) warnings.push({ code: 'style_preset_archived', field: 'stylePresetId', message: `Style preset ${JSON.stringify(applied.name)} is archived; it was applied as it is.` });
+  }
   const effort = effortOf(args, mode, warnings);
   const missing = fields.required.filter(key => !Object.hasOwn(args, key) && !(effort === 'medium' && MEDIUM_FILLED.includes(key)));
-  if (missing.length) invalid(`Missing ${missing.join(', ')}; every ${mode} field is explicit and no host default is inherited.`, { reason: 'missing_fields', fields: missing });
+  if (missing.length) invalid(applied
+    ? `Missing ${missing.join(', ')}; style preset ${JSON.stringify(applied.name)} does not set ${missing.length === 1 ? 'it' : 'them'}, so write ${missing.length === 1 ? 'it' : 'them'} in the call (no host default is inherited).`
+    : `Missing ${missing.join(', ')}; every ${mode} field is explicit and no host default is inherited.`, { reason: 'missing_fields', fields: missing });
   if ((args.recipeId === undefined) !== (args.expectedRevision === undefined)) invalid('Revising a recipe requires both recipeId and its current expectedRevision.');
   if (args.recipeId !== undefined && (typeof args.recipeId !== 'string' || !UUID.test(args.recipeId))) invalid('recipeId must be a recipe UUID.');
   if (args.expectedRevision !== undefined) integerIn(args.expectedRevision, 1, Number.MAX_SAFE_INTEGER, 'expectedRevision');
@@ -480,9 +518,12 @@ export function recipePlan(args) {
     const generation = generationFields(args, mode, effort, warnings);
     plan.generation = { ...generation, stylePrompt: args.stylePrompt, positivePrompt: args.positivePrompt, negativePrompt: args.negativePrompt, sampler: args.sampler };
     if (effort === 'medium') {
-      warnings.push(...mediumWarnings(args, Array.isArray(args.characters) ? args.characters : []));
+      warnings.push(...mediumWarnings(args, Array.isArray(args.characters) ? args.characters : [], applied ? [...(applied.params ?? []), ...(Object.hasOwn(given, 'negativePrompt') ? [] : ['negativePrompt'])] : []));
       Object.assign(plan.generation, { steps: MEDIUM_FIXED.steps, sampler: MEDIUM_FIXED.sampler, ucPreset: MEDIUM_FIXED.ucPreset, negativePrompt: MEDIUM_FIXED.negativePrompt });
     }
+    // What the preset wrote, as it is frozen: Medium sends no negative prompt, so none of the preset's is in the recipe.
+    if (applied) plan.stylePreset = effort !== 'medium' ? applied : { ...applied, negativePrompt: MEDIUM_FIXED.negativePrompt,
+      negative: Object.fromEntries(Object.entries(applied.negative).map(([key, state]) => [key, state === 'applied' || state === 'appended' ? 'not_sent_on_medium' : state])) };
     if (mode === 't2i') plan.size = sizeFields(args, warnings);
     // i2i: the size the caller asked for, if any; checkRecipeSource fits it to the source aspect (or picks one).
     if (mode === 'i2i') plan.requestedSize = args.width === undefined && args.height === undefined ? null
@@ -1137,6 +1178,10 @@ function compactPostprocess(effective, written, mode, known) {
  *   the call wrote it; for a routine t2i call with no quality or UC preset it is empty. The prompts and character
  *   texts of a plain recipe are never echoed. The final positive prompt is stylePrompt, positivePrompt and
  *   automaticQuality.appendedText joined with ", "; the final negative is negativePrompt and ucPreset.text.
+ * - effective.stylePreset (a call with stylePresetId): the preset's id, revision and name, the style and negative
+ *   texts as they are frozen (the preset's parts and the call's own), which negative parts took effect (negative),
+ *   the settings taken from the preset (params: their names; the values are the effective entries) and the ones the
+ *   preset recommends that the call wrote itself (overridden).
  * - A canvas capture wrote none of its inputs, so effective lists them all and authoredPrompts states the texts once.
  * - When the appended text could not be separated (warning readback_not_derived), the final prompts are given.
  * - source and mask: what the call did not state (the source size; the cells the mask selects, per layer).
@@ -1148,7 +1193,7 @@ function compactPostprocess(effective, written, mode, known) {
  */
 export function compactReadback(full, args = {}) {
   if (!record(full) || !MODES.includes(full.mode)) return full;
-  const { authored, effective, readiness, source, mask, previewImage, recipeId, recipeRevision, inputHash, mode, lineage, ready, warnings, preview, next, saved } = full;
+  const { authored, effective, readiness, source, mask, previewImage, recipeId, recipeRevision, inputHash, mode, lineage, ready, warnings, preview, next, saved, stylePreset } = full;
   const canvas = lineage !== 'plain', written = canvas || !record(args) ? {} : args;
   const view = !record(effective) ? null : seeded(mode) ? (record(effective.automaticQuality) ? compactEffective(effective, written, mode, !canvas) : effective) : compactPostprocess(effective, written, mode, !canvas);
   const overlay = record(previewImage);
@@ -1158,7 +1203,8 @@ export function compactReadback(full, args = {}) {
   return {
     ...(preview === true ? { preview: true } : { recipeId, recipeRevision, inputHash, ...(saved === true ? {} : { saved: saved ?? false }) }),
     ready, ...(ready ? {} : { readiness }), warnings,
-    effective: view,
+    // A style preset the call named: what it wrote into the recipe (the texts as frozen, the negative parts, the settings).
+    effective: record(stylePreset) ? { stylePreset, ...(record(view) ? view : {}) } : view,
     ...(seeded(mode) && canvas && record(authored) ? { authoredPrompts: { stylePrompt: authored.stylePrompt ?? '', positivePrompt: authored.positivePrompt ?? '', negativePrompt: authored.negativePrompt ?? '' } } : {}),
     // The source size, unless the post-processing input above already is that size.
     ...(source && !(record(view?.input) && view.input.width === source.width && view.input.height === source.height)
@@ -1415,7 +1461,10 @@ export function createRecipeQueue({ bridge, monotonicNow = () => performance.now
   const stuck = found => found.status === 'unknown' && found.inFlight === false && found.restartable !== true;
 
   async function prepare(args, { signal } = {}) {
-    const plan = recipePlan(args);
+    // A style preset is read first (one library read) and written into the call; everything after sees plain fields.
+    const stylePresetId = stylePresetIdOf(args);
+    const stylePreset = stylePresetId === null ? null : await readStylePreset(bridge, stylePresetId, { signal, method: RECIPE_SOURCE_HOST_METHODS.image });
+    const plan = recipePlan(args, { stylePreset });
     if (plan.canvas) return captureCanvas(plan, signal);
     const { mode, updating } = plan;
     const expectedIdentity = updating ? { recipeId: args.recipeId, recipeRevision: args.expectedRevision + 1 } : { recipeId: null, recipeRevision: 1 };
@@ -1452,7 +1501,8 @@ export function createRecipeQueue({ bridge, monotonicNow = () => performance.now
       }
     }
     const preparation = recipePreparation(plan, { source, size, mask: built && { png: built.png, provenance }, references });
-    if (plan.preview) return previewRecipe({ plan, preparation, source, built, provenance, references, signal });
+    const presetUsed = plan.stylePreset ? { stylePreset: plan.stylePreset } : {};
+    if (plan.preview) return { ...await previewRecipe({ plan, preparation, source, built, provenance, references, signal }), ...presetUsed };
     const receipt = { putAttempted: true, generationSubmitted: false };
     let reply;
     // t2i keeps its original put; recipes with images (a source, references) ask the host to omit image bytes from the reply.
@@ -1480,7 +1530,7 @@ export function createRecipeQueue({ bridge, monotonicNow = () => performance.now
     if (differences.length) mismatched.set(`${observed.recipeId}:${observed.recipeRevision}`, differences);
     if (differences.length) throw new BridgeError('recipe_input_mismatch', `The host stored different generation inputs than requested (${differences.join(', ')}). This revision was saved but must not be enqueued.`, { ...receipt, putOutcome: 'confirmed', observedIdentity, fields: differences });
     const readback = recipeReadback(observed, { built });
-    return { ...readback, warnings: [...readback.warnings, ...(built?.warnings ?? []), ...plan.warnings], saved: true, generationSubmitted: false, next: nextStep(observed, mode) };
+    return { ...readback, warnings: [...readback.warnings, ...(built?.warnings ?? []), ...plan.warnings], saved: true, generationSubmitted: false, next: nextStep(observed, mode), ...presetUsed };
   }
 
   /** Stored-input comparison of a put or preview reply: authored fields, one sample, and the mask provenance. */

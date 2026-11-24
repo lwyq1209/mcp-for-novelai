@@ -29,7 +29,7 @@ const payloads = {
   study:{schemaVersion:1,parserVersion:1,study:{id:'study-1',revision:1,name:'Study',sha256:'a'.repeat(64),mimeType:'image/png',width:832,height:1216,byteLength:100,sourceUrl:'https://example.com/art',sourceAuthor:'Fixture artist',createdAt:now,updatedAt:now,archived:false,metadataStatus:'generation',metadataKind:'novelai',sources:['png-text'],warnings:[],promptFieldCount:1,parameterFieldCount:1},notes:'Authored notes',originalName:'Original.png',previewSha256:'b'.repeat(64),previewByteLength:50,sections:{prompts:[{key:'Comment.prompt',label:'Prompt',value:'  a red mug\n  '}],parameters:[{key:'Comment.seed',label:'Seed',value:'42'}],raw:{'png-text':{Comment:'{"seed":42,"prompt":"a red mug"}'}}}},
   history,
   artist_favorite:{collection:'artist-string-draw',id:'recipe-1',artists:[{name:'fixture_artist',weight:1.1}],auxiliary:[token],mutations:[{...token,category:'medium'}],franchiseStyles:[{...token,category:'franchise'}],basePrompt:'a red mug',prompt:'watercolor, a red mug',move:'weight',pairId:'pair-1',variant:'mutated',sequence:2,status:'done',image:history,liked:true,saving:false,generationModel:params.model,generationSeed:42},
-  style_preset:{id:'style-1',name:'Watercolor',prompt:'  watercolor,\nsoft light  ',group:'paint',createdAt:now,previewImages:[preview]},
+  style_preset:{id:'style-1',name:'Watercolor',prompt:'  watercolor,\nsoft light  ',group:'paint',createdAt:now,previewImages:[preview,{...preview,id:'preview-2',label:'two characters'}],artists:[{name:'artist:fixture_artist',weight:1.2,enabled:true},{name:'artist:other',weight:-1.5,enabled:false}],negativePrompt:'3d, photo',textNegativePrompt:'text, speech bubble',params:{model:params.model,sampler:params.sampler,noiseSchedule:'karras',steps:28,cfgScale:5,cfgRescale:0,ucPreset:0,qualityPreset:'standard'},notes:'One character: Base only.'},
   positive_preset:{id:'positive-1',name:'Mug',prompt:'a red mug',createdAt:now,previewImages:[preview]},
   prompt_chunk:{id:'chunk-1',name:'Light',content:'\nsoft light,\n',createdAt:now,updatedAt:now},
   reference_preset:{id:'reference-1',name:'Reference',group:'paint',kind:'precise',filePath:'/fixture/reference.png',fileUrl:'file:///fixture/reference.png',createdAt:now,infoExtracted:1,strength:0.6,preciseType:'character&style',fidelity:0.5,informationExtracted:0.8,width:832,height:1216,sourceId:'remote-1',sourceNames:{'zh-CN':'参考','en-US':'Reference'},sourceGameNames:{'ja-JP':'作品'},sourceGameId:'game-1',sourceCategory:'character'},
@@ -58,6 +58,16 @@ test('nested payload errors are rejected without coercion, defaults or deletion'
     ['study', value => {value.sections.prompts[0].value = 42;}],
     ['reference_preset', value => {value.sourceNames['zh-CN'] = 2;}],
     ['combo', value => {value.components[1].weight = NaN;}],
+    // A style preset's structured fields (issue #1): each one is typed, none is coerced.
+    ['style_preset', value => {value.artists[0].weight = '1.2';}],
+    ['style_preset', value => {value.artists[0].name = ' ';}],
+    ['style_preset', value => {delete value.artists[1].enabled;}],
+    ['style_preset', value => {value.artists = Array.from({length:65}, () => ({name:'artist:x',weight:1,enabled:true}));}],
+    ['style_preset', value => {value.params.model = 'unknown-model';}],
+    ['style_preset', value => {value.params.ucPreset = 4;}],
+    ['style_preset', value => {value.params.steps = '28';}],
+    ['style_preset', value => {value.negativePrompt = null;}],
+    ['style_preset', value => {value.previewImages[1].label = 'x'.repeat(61);}],
   ]) {
     const input = structuredClone(payloads[kind]); patch(input); const before = structuredClone(input);
     assert.throws(() => validateContract(input, contractSchemas.libraryPayloads[kind]), {code:'invalid_arguments'});

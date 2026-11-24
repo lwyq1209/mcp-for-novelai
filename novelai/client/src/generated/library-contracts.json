@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sourceSha256": "79c806139eb637d15bced26675fc84b25f1aea0ace4a9321cf61e6c737df3ff4",
+  "sourceSha256": "d8f407d178c0cc040f4794ca1c03cd115cf17e0bb4f55aae1617c6627d0d421b",
   "schemas": {
     "libraryPayloads": {
       "tag": {
@@ -2806,9 +2806,104 @@
                 },
                 "createdAt": {
                   "type": "string"
+                },
+                "label": {
+                  "type": "string",
+                  "maxLength": 60
                 }
               }
             }
+          },
+          "artists": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "weight",
+                "enabled"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "weight": {
+                  "type": "number"
+                },
+                "enabled": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "maxItems": 64
+          },
+          "negativePrompt": {
+            "type": "string"
+          },
+          "textNegativePrompt": {
+            "type": "string"
+          },
+          "params": {
+            "type": "object",
+            "properties": {
+              "model": {
+                "enum": [
+                  "nai-diffusion-5-full",
+                  "nai-diffusion-5-curated",
+                  "nai-diffusion-4-5-full",
+                  "nai-diffusion-4-5-curated",
+                  "nai-diffusion-4-full",
+                  "nai-diffusion-4-curated",
+                  "nai-diffusion-3",
+                  "nai-diffusion-furry-3"
+                ]
+              },
+              "sampler": {
+                "enum": [
+                  "k_euler_ancestral",
+                  "k_euler",
+                  "k_dpmpp_2m",
+                  "k_dpmpp_2m_sde",
+                  "k_dpmpp_sde",
+                  "k_dpmpp_2s_ancestral",
+                  "ddim_v3"
+                ]
+              },
+              "noiseSchedule": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "steps": {
+                "type": "number"
+              },
+              "cfgScale": {
+                "type": "number"
+              },
+              "cfgRescale": {
+                "type": "number"
+              },
+              "ucPreset": {
+                "enum": [
+                  0,
+                  1,
+                  2,
+                  3
+                ]
+              },
+              "qualityPreset": {
+                "enum": [
+                  "standard",
+                  "light",
+                  "none"
+                ]
+              }
+            }
+          },
+          "notes": {
+            "type": "string"
           }
         }
       },
@@ -2861,6 +2956,10 @@
                 },
                 "createdAt": {
                   "type": "string"
+                },
+                "label": {
+                  "type": "string",
+                  "maxLength": 60
                 }
               }
             }
@@ -6680,9 +6779,104 @@
                       },
                       "createdAt": {
                         "type": "string"
+                      },
+                      "label": {
+                        "type": "string",
+                        "maxLength": 60
                       }
                     }
                   }
+                },
+                "artists": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "name",
+                      "weight",
+                      "enabled"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      "weight": {
+                        "type": "number"
+                      },
+                      "enabled": {
+                        "type": "boolean"
+                      }
+                    }
+                  },
+                  "maxItems": 64
+                },
+                "negativePrompt": {
+                  "type": "string"
+                },
+                "textNegativePrompt": {
+                  "type": "string"
+                },
+                "params": {
+                  "type": "object",
+                  "properties": {
+                    "model": {
+                      "enum": [
+                        "nai-diffusion-5-full",
+                        "nai-diffusion-5-curated",
+                        "nai-diffusion-4-5-full",
+                        "nai-diffusion-4-5-curated",
+                        "nai-diffusion-4-full",
+                        "nai-diffusion-4-curated",
+                        "nai-diffusion-3",
+                        "nai-diffusion-furry-3"
+                      ]
+                    },
+                    "sampler": {
+                      "enum": [
+                        "k_euler_ancestral",
+                        "k_euler",
+                        "k_dpmpp_2m",
+                        "k_dpmpp_2m_sde",
+                        "k_dpmpp_sde",
+                        "k_dpmpp_2s_ancestral",
+                        "ddim_v3"
+                      ]
+                    },
+                    "noiseSchedule": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "\\S"
+                    },
+                    "steps": {
+                      "type": "number"
+                    },
+                    "cfgScale": {
+                      "type": "number"
+                    },
+                    "cfgRescale": {
+                      "type": "number"
+                    },
+                    "ucPreset": {
+                      "enum": [
+                        0,
+                        1,
+                        2,
+                        3
+                      ]
+                    },
+                    "qualityPreset": {
+                      "enum": [
+                        "standard",
+                        "light",
+                        "none"
+                      ]
+                    }
+                  }
+                },
+                "notes": {
+                  "type": "string"
                 }
               }
             }
@@ -6803,6 +6997,10 @@
                       },
                       "createdAt": {
                         "type": "string"
+                      },
+                      "label": {
+                        "type": "string",
+                        "maxLength": 60
                       }
                     }
                   }

@@ -6,6 +6,19 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
 
 ### Added
 
+- `prepare_recipe` `stylePresetId`: agents use a style preset of the library by its id instead of copying its text.
+  The preset's style (its enabled artists and its prompt) comes before the call's own `stylePrompt`, its negative text
+  before the call's own `negativePrompt`, and a sampling setting it recommends is used where the call has none; with a
+  preset, `stylePrompt`, `negativePrompt` and those settings may be left out. `allowText: true` leaves out the preset's
+  text-suppressing negative, for an image with speech bubbles. The recipe freezes the result (`effective.stylePreset`
+  shows it), so editing the preset later changes no recipe. See
+  [Style presets in a recipe](docs/mcp-tools.md#style-presets-in-a-recipe).
+- **Style presets hold more than a prompt** (issue #1, first part): a style preset can carry a list of artists (each
+  with a weight and an on/off switch), negative text that belongs to the style, separate negative text that keeps
+  writing out of the image, recommended sampling settings and notes. Existing presets are unchanged and backups carry
+  the new fields. This version stores them and uses them in recipes; editing them in the window comes next.
+- A style preset keeps up to **six** sample images (three before), each with an optional label saying what it shows.
+  Prompt presets keep three.
 - **Precise Reference on V5** (NovelAI released it on 2026-11-24): the canvas's precise references now work on V5
   Curated, V5 Full and V5 Full Medium as in NovelAI's own client. V5 adds the **Outfit** reference and the "Prefer same
   outfit" switch of the Character and Character & Style references, takes strengths up to 5 and has no fidelity; a
