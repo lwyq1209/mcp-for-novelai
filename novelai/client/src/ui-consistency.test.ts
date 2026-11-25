@@ -46,7 +46,8 @@ describe("desktop UI consistency guards", () => {
   it("keeps the Style presets of the canvas to apply, preview and save (step 4b3)", () => {
     // The old style-folder menu became the canvas's Style preset picker; groups are managed in the library.
     const source = fs.readFileSync(path.join(projectRoot, "src", "canvas", "sections", "style-presets.tsx"), "utf8");
-    expect(source).toContain("setPromptField(scope, 'stylePrompt', preset.prompt)");
+    // A preset is applied with its style, negative text and (when switched on) settings: one function for the picker and the library.
+    expect(source).toContain("await applyStylePresetToCanvas(preset, scope, options)");
     expect(source).toContain("<StylePresetImagesManager presetId={imagesFor}");
     expect(source).toContain("saveAssetSetting(window.naiDesktop, 'stylePromptPresets', presets, [...presets, preset])");
   });

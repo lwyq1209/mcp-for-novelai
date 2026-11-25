@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { assetCategoryForKind } from './asset-library-categories.mjs';
+import { stylePresetStyleText } from './style-preset.mjs';
 
 /** AI-only projection. No host, workspace, I/O, image decoding or persistent cursor. */
 export const ASSET_SUMMARY_BYTES = 12 * 1024;
@@ -57,7 +58,8 @@ function summarize(item) {
     width: Number.isFinite(image.width ?? params.width) ? image.width ?? params.width : undefined,
     height: Number.isFinite(image.height ?? params.height) ? image.height ?? params.height : undefined,
     matchedTags: tags(item.matchedTags, 'matchedTags'),
-    promptExcerpt: text(params.positivePrompt ?? p.prompt ?? p.content ?? p.tag?.text, 160, 'promptExcerpt'),
+    // A style preset reads as it is applied: its enabled artists, then its text.
+    promptExcerpt: text(params.positivePrompt ?? (item.kind === 'style_preset' ? stylePresetStyleText(p) : p.prompt) ?? p.content ?? p.tag?.text, 160, 'promptExcerpt'),
     image: { descriptionPresent: Boolean(item.preview), inspected: false, ...(previewDescription ? { preview: previewDescription } : {}) },
     summary: true, omitted: 'payload, parameters, characters, negatives, paths, image bytes and unknown fields',
   };

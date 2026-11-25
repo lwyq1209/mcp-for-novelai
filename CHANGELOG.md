@@ -17,10 +17,20 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
   sampling settings and the notes, and `add-preview` copies a history image or an imported image into a preset as a
   labelled sample image (`label-preview` and `remove-preview` change one), so an agent can put the benchmark images it
   generated on the preset they belong to.
-- **Style presets hold more than a prompt** (issue #1, first part): a style preset can carry a list of artists (each
-  with a weight and an on/off switch), negative text that belongs to the style, separate negative text that keeps
-  writing out of the image, recommended sampling settings and notes. Existing presets are unchanged and backups carry
-  the new fields. This version stores them, lets agents write them and uses them in recipes; editing them in the window comes next.
+- **Style presets hold more than a prompt** (issue #1): a style preset can carry a list of artists (each with a weight
+  and an on/off switch), negative text that belongs to the style, separate negative text that keeps writing out of the
+  image, recommended sampling settings and notes. Existing presets are unchanged and backups carry the new fields.
+  - **Library**: a Style preset's detail shows the Style as it is applied, its artists, both negative texts, its
+    settings and its sample images; its edit form has the artist list (switch one off, change a weight, pull the
+    artists out of the text) and the rest. Sample images are added from the library (a history image or an imported
+    image, copied into the preset) or from local files, labelled and removed there.
+  - **Canvas**: choosing a Style preset applies its style and, when it has negative text, replaces the negative prompt
+    with it. Two switches in the preset list, remembered, say whether its recommended sampling settings are applied
+    too and whether text is allowed in the image (the text-suppressing negative is then left out). The size, the
+    prompt, the characters and the seed are never touched.
+  - **Imported images**: an imported image that carries settings can be saved as a Style preset: its artists are read
+    out of its prompt, the text-suppressing tags are held apart from the rest of its negative prompt, its sampling
+    settings are kept, and the image becomes the preset's first sample.
 - A style preset keeps up to **six** sample images (three before), each with an optional label saying what it shows.
   Prompt presets keep three.
 - **Precise Reference on V5** (NovelAI released it on 2026-11-24): the canvas's precise references now work on V5

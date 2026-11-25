@@ -185,6 +185,28 @@
 .lib-sample figcaption { display: flex; align-items: center; gap: 2px; font-size: 11px; color: var(--ui-text-3); }
 .lib-sample figcaption span { flex: 1; }
 .lib-edit { display: flex; flex-direction: column; gap: 12px; }
+.lib-sp-off > .ui-mono { color: var(--ui-text-3); text-decoration: line-through; }
+.lib-sp-params { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 14px; font-size: 12.5px; }
+.lib-sp-params > div { display: flex; justify-content: space-between; gap: 8px; min-width: 0; }
+.lib-sp-params dt { color: var(--ui-text-3); }
+.lib-sp-params dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-sp-samples { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 8px; }
+.lib-sp-sample { margin: 0; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.lib-sp-sample img { width: 100%; aspect-ratio: 1; object-fit: contain; border-radius: var(--ui-r-m); border: 1px solid var(--ui-line); background: var(--ui-bg-1); }
+.lib-sp-sample figcaption { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.lib-sp-sample figcaption .ui-input { min-width: 0; flex: 1; }
+.lib-sp-label { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px; border: 0; border-radius: var(--ui-r-s); background: transparent; color: var(--ui-text-2); font-size: 11.5px; text-align: left; }
+.lib-sp-label > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-sp-label > svg { flex: none; opacity: 0; }
+.lib-sp-label:hover:not(:disabled) { background: var(--ui-bg-3); }
+.lib-sp-label:hover > svg, .lib-sp-label:focus-visible > svg { opacity: 1; }
+.lib-sp-artist { display: grid; grid-template-columns: auto 1fr 72px auto; gap: 6px; align-items: center; }
+.lib-sp-pgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; }
+.lib-sp-param { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 12px; color: var(--ui-text-2); }
+.lib-ssp { display: flex; flex-direction: column; gap: 10px; }
+.lib-ssp-head { align-items: flex-start; flex-wrap: nowrap; }
+.lib-ssp-head > * { flex: 1; min-width: 0; }
+.lib-ssp-toggle { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12.5px; color: var(--ui-text-2); cursor: pointer; }
 .lib-edit-members { display: flex; flex-direction: column; gap: 6px; }
 .lib-edit-member { display: grid; grid-template-columns: 1fr 64px auto auto; gap: 6px; align-items: center; }
 .lib-edit-actions { justify-content: flex-end; }

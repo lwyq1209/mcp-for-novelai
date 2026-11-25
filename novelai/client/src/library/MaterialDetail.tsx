@@ -11,6 +11,7 @@ import type { LibraryApi } from './api';
 import { Thumb } from './Thumb';
 import { HistoryCoverPicker } from './HistoryCoverPicker';
 import { cardExcerpt, itemTitle } from './present';
+import { StylePresetFields, StylePresetView, stylePresetDraftError, stylePresetDraftOf, stylePresetPatch, type StylePresetDraft } from './StylePresetDetail';
 
 /**
  * The drawer of tags, combos, notes, presets and artist picks (prototype 09, 10): cover, the main action, the content
@@ -29,7 +30,9 @@ export interface MaterialDetailProps {
 
 const TARGETS: MaterialTarget[] = ['style', 'base', 'character'];
 const SOURCES: MaterialSource[] = ['danbooru', 'nai', 'english'];
-type Draft = { name: string; group: string; notes: string; text: string; source: MaterialSource; target: MaterialTarget; prompt: string; components: MaterialComponent[]; strength: number; infoExtracted: number; fidelity: number };
+type Draft = { name: string; group: string; notes: string; text: string; source: MaterialSource; target: MaterialTarget; prompt: string; components: MaterialComponent[]; strength: number; infoExtracted: number; fidelity: number;
+  /** A Style preset's artists, negative texts and recommended settings (StylePresetDetail.tsx). */
+  style: StylePresetDraft };
 /** Unsaved edits survive closing the drawer during this run (key: kind:id:revision). */
 const drafts = new Map<string, Draft>();
 export const hasUnsavedDraft = (item: Pick<AssetItem, 'kind' | 'id' | 'revision'>) => drafts.has(`${item.kind}:${item.id}:${item.revision}`);
@@ -37,7 +40,8 @@ export const hasUnsavedDraft = (item: Pick<AssetItem, 'kind' | 'id' | 'revision'
 function draftOf(item: AssetItem): Draft {
   const payload = item.payload ?? {};
   return { name: item.name ?? '', group: String(payload.group ?? ''), notes: String(payload.notes ?? ''), text: String(payload.tag?.text ?? ''), source: payload.tag?.source ?? 'danbooru', target: payload.tag?.target ?? 'base',
-    prompt: String(item.kind === 'prompt_chunk' ? payload.content ?? '' : payload.prompt ?? ''), components: structuredClone(payload.components ?? []), strength: Number(payload.strength ?? 1), infoExtracted: Number(payload.infoExtracted ?? 1), fidelity: Number(payload.fidelity ?? 1) };
+    prompt: String(item.kind === 'prompt_chunk' ? payload.content ?? '' : payload.prompt ?? ''), components: structuredClone(payload.components ?? []), strength: Number(payload.strength ?? 1), infoExtracted: Number(payload.infoExtracted ?? 1), fidelity: Number(payload.fidelity ?? 1),
+    style: stylePresetDraftOf(item.kind === 'style_preset' ? payload : null) };
 }
 const isMaterial = (kind: AssetItem['kind']) => kind === 'tag' || kind === 'combo' || kind === 'note';
 /** A tag's Danbooru check in four words (the host's evidence.resolution: canonical, alias, not_found, unknown). */
@@ -58,7 +62,8 @@ export async function saveEdit(api: LibraryApi, item: AssetItem, draft: Draft) {
     return api.materialLibrary!({ action: 'save', id: item.id, expectedRevision: item.revision, entry });
   }
   const patch: Record<string, unknown> = { name: draft.name.trim() };
-  if (item.kind === 'style_preset') Object.assign(patch, { group: draft.group.trim(), prompt: draft.prompt });
+  // A Style preset: its structured fields only where they changed (an old preset keeps its plain shape until one is used).
+  if (item.kind === 'style_preset') Object.assign(patch, { group: draft.group.trim(), prompt: draft.prompt, ...(draft.notes !== String(item.payload?.notes ?? '') ? { notes: draft.notes } : {}), ...stylePresetPatch(draft.style, item.payload) });
   if (item.kind === 'positive_preset') patch.prompt = draft.prompt;
   if (item.kind === 'prompt_chunk') patch.content = draft.prompt;
   if (item.kind === 'reference_preset') Object.assign(patch, { group: draft.group.trim(), strength: draft.strength, ...(item.payload?.kind === 'vibe' ? { infoExtracted: draft.infoExtracted } : { fidelity: draft.fidelity }) });
@@ -85,7 +90,8 @@ export function MaterialDetail({ api, detail, onAddToTray, onUseOnCanvas, onDele
     {item.kind === 'tag' && <TagSections api={api} item={item} t={t} />}
     {item.kind === 'combo' && <Section title={t('edit.members')}><ul className="lib-members">{(payload.components ?? []).map((member: MaterialComponent, index: number) => <li key={index}><span className="ui-mono">{member.text}</span><span className="ui-faint ui-num">×{member.weight}</span><Tag>{t(`tag.target.${member.target}`)}</Tag></li>)}</ul>
       <Copyable t={t} text={safePrompt(payload.components ?? [])} /></Section>}
-    {(item.kind === 'style_preset' || item.kind === 'positive_preset' || item.kind === 'prompt_chunk') && <Section title={item.kind === 'prompt_chunk' ? t('edit.content') : t('edit.prompt')}><Copyable t={t} text={String(item.kind === 'prompt_chunk' ? payload.content ?? '' : payload.prompt ?? '')} /></Section>}
+    {item.kind === 'style_preset' && <StylePresetView api={api} detail={detail} />}
+    {(item.kind === 'positive_preset' || item.kind === 'prompt_chunk') && <Section title={item.kind === 'prompt_chunk' ? t('edit.content') : t('edit.prompt')}><Copyable t={t} text={String(item.kind === 'prompt_chunk' ? payload.content ?? '' : payload.prompt ?? '')} /></Section>}
     {item.kind === 'reference_preset' && <Section title={t('pre.kind.reference_preset')}><p className="lib-text">{cardExcerpt(item, t).text}</p></Section>}
     {item.kind === 'artist_favorite' && <Section title={t('artist.prompt')}>
       <ul className="lib-members">{(payload.artists ?? []).map((artist: { name: string; weight: number }, index: number) => <li key={index}><span className="ui-mono">{artist.name}</span><span className="ui-faint ui-num">×{artist.weight}</span></li>)}</ul>
@@ -195,6 +201,7 @@ function EditForm({ api, item, onDone }: { api: LibraryApi; item: AssetItem; onD
     if (!draft.name.trim()) { setError(t('edit.nameRequired')); return; }
     if (item.kind === 'tag' && !draft.text.trim()) { setError(t('edit.textRequired')); return; }
     if (draft.components.some(member => !(member.weight >= 0 && member.weight <= 10))) { setError(t('edit.weightRange')); return; }
+    if (item.kind === 'style_preset') { const problem = stylePresetDraftError(draft.style, t); if (problem) { setError(problem); return; } }
     setBusy(true); setError('');
     try { await saveEdit(api, item, draft); drafts.delete(key); showToast({ message: t('edit.saved'), tone: 'ok' }); onDone(); }
     catch (failure) { setError(libraryErrorText(failure, t, lang)); setBusy(false); }
@@ -207,7 +214,8 @@ function EditForm({ api, item, onDone }: { api: LibraryApi; item: AssetItem; onD
       <Field label={t('edit.target')}><Seg<MaterialTarget> full label={t('edit.target')} value={draft.target} onChange={target => setDraft({ target })} options={TARGETS.map(value => ({ value, label: t(`tag.target.${value}`) }))} /></Field>
     </>}
     {(item.kind === 'tag' || item.kind === 'combo' || item.kind === 'note' || item.kind === 'style_preset' || item.kind === 'reference_preset') && <Field label={t('edit.group')}><TextInput value={draft.group} onChange={event => setDraft({ group: event.target.value })} /></Field>}
-    {(item.kind === 'style_preset' || item.kind === 'positive_preset' || item.kind === 'prompt_chunk') && <Field label={item.kind === 'prompt_chunk' ? t('edit.content') : t('edit.prompt')}><TextArea rows={6} value={draft.prompt} onChange={event => setDraft({ prompt: event.target.value })} /></Field>}
+    {item.kind === 'style_preset' && <StylePresetFields draft={draft.style} prompt={draft.prompt} onChange={patch => setDraftState(current => { const next = { ...current, style: { ...current.style, ...patch } }; drafts.set(key, next); return next; })} onPrompt={prompt => setDraft({ prompt })} />}
+    {(item.kind === 'positive_preset' || item.kind === 'prompt_chunk') && <Field label={item.kind === 'prompt_chunk' ? t('edit.content') : t('edit.prompt')}><TextArea rows={6} value={draft.prompt} onChange={event => setDraft({ prompt: event.target.value })} /></Field>}
     {item.kind === 'reference_preset' && <div className="lib-row">
       <Field label={t('pre.ref.strength', { v: '' }).trim()}><TextInput type="number" min={0} max={1} step={0.05} value={draft.strength} onChange={event => setDraft({ strength: Number(event.target.value) })} /></Field>
       {item.payload?.kind === 'vibe' ? <Field label={t('pre.ref.info', { v: '' }).trim()}><TextInput type="number" min={0} max={1} step={0.05} value={draft.infoExtracted} onChange={event => setDraft({ infoExtracted: Number(event.target.value) })} /></Field>
@@ -222,7 +230,7 @@ function EditForm({ api, item, onDone }: { api: LibraryApi; item: AssetItem; onD
       </div>)}
       <Button size="sm" variant="ghost" icon="plus" onClick={() => setDraft({ components: [...draft.components, { text: '', source: 'english', category: null, target: 'base', weight: 1 }] })}>{t('edit.addMember')}</Button>
     </div></Field>}
-    {(isMaterial(item.kind)) && <Field label={item.kind === 'note' ? t('side.notes') : t('edit.notes')}><TextArea className="lib-edit-notes" rows={item.kind === 'note' ? 10 : 4} value={draft.notes} onChange={event => setDraft({ notes: event.target.value })} /></Field>}
+    {(isMaterial(item.kind) || item.kind === 'style_preset') && <Field label={item.kind === 'note' ? t('side.notes') : t('edit.notes')}><TextArea className="lib-edit-notes" rows={item.kind === 'note' ? 10 : 4} value={draft.notes} onChange={event => setDraft({ notes: event.target.value })} /></Field>}
     {error && <p className="lib-error" role="alert"><Icon name="alert" size={14} />{error}</p>}
     <div className="lib-row lib-edit-actions">
       <Button variant="ghost" disabled={busy} onClick={() => { drafts.delete(key); onDone(); }}>{t('edit.discard')}</Button>

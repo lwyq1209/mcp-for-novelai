@@ -120,3 +120,10 @@ test('asset_library style preset writes on an older client: its contract refuses
   reply = new BridgeError('library_conflict', 'The item changed; read it again before saving.');
   assert.equal((await call(writes[1])).structuredContent.error.code, 'library_conflict');
 });
+
+test('asset_library list shows a style preset as it is applied: its enabled artists, then its text', async t => {
+  const preset = { kind: 'style_preset', id: 'p', revision: 1, name: 'Ink', payload: { id: 'p', name: 'Ink', prompt: 'ink lineart', group: '', createdAt: 'now', artists: [{ name: 'artist:alpha', weight: 1.2, enabled: true }, { name: 'artist:off', weight: 1, enabled: false }] } };
+  const plain = { kind: 'style_preset', id: 'q', revision: 1, name: 'Old', payload: { id: 'q', name: 'Old', prompt: ' watercolor ', group: '', createdAt: 'now' } };
+  const { ok } = await mcp(t, { async call() { return { items: [preset, plain], total: 2, revision: 1 }; } });
+  assert.deepEqual((await ok({ action: 'list', kinds: ['style_preset'] })).items.map(item => item.promptExcerpt), ['1.2::artist:alpha::, ink lineart', 'watercolor']);
+});

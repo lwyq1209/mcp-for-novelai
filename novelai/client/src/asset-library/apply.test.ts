@@ -54,6 +54,35 @@ describe('explicit use of unified assets', () => {
     await expect(apply(item('style_preset',{prompt:'oil painting'}))).rejects.toThrow('disk full');
     expect(store.setParam).toHaveBeenCalledTimes(2);
   });
+  it('applies a structured Style preset as the canvas picker does: artists and prompt as the Style, its negative text as the negative prompt, its settings only when that is switched on', async () => {
+    const preset = { prompt: 'ink lineart', artists: [{ name: 'artist:alpha', weight: 1, enabled: true }, { name: 'artist:beta', weight: 1.3, enabled: true }, { name: 'artist:off', weight: 1, enabled: false }],
+      negativePrompt: '3d, photo', textNegativePrompt: 'text, speech bubble', params: { model: 'nai-diffusion-5-full', steps: 23, qualityPreset: 'light' } };
+    const { store, api, apply } = context();
+    expect(await apply(item('style_preset', preset))).toBe('替换基础风格（含负面提示词）完成，尚未生成。');
+    expect(store.setParam.mock.calls).toEqual([['stylePrompt', 'artist:alpha, 1.3::artist:beta::, ink lineart'], ['negativePrompt', '3d, photo, text, speech bubble']]);
+    // Text allowed and settings on: the text negative is left out; the model first, then the other settings.
+    store.setParam.mockClear(); store.settings = { stylePresetApplyParams: true, stylePresetAllowText: true };
+    expect(await apply(item('style_preset', preset))).toBe('替换基础风格（含负面提示词、推荐参数）完成，尚未生成。');
+    expect(store.setParam.mock.calls).toEqual([['stylePrompt', 'artist:alpha, 1.3::artist:beta::, ink lineart'], ['negativePrompt', '3d, photo'], ['model', 'nai-diffusion-5-full'], ['steps', 23], ['qualityPreset', 'light']]);
+    expect(api.setSetting).not.toHaveBeenCalled();
+    // The separate inpaint recipe keeps its own model; locked base fields save their copies before anything changes.
+    store.setParam.mockClear();
+    await apply(item('style_preset', preset), 'inpaint');
+    expect(store.setInpaintRecipeParam.mock.calls).toEqual([['stylePrompt', 'artist:alpha, 1.3::artist:beta::, ink lineart'], ['negativePrompt', '3d, photo'], ['steps', 23], ['qualityPreset', 'light']]);
+    expect(store.setParam).not.toHaveBeenCalled();
+    store.settings = { lockStylePrompt: true, lockNegativePrompt: true };
+    await apply(item('style_preset', preset));
+    expect(api.setSetting.mock.calls).toEqual([['savedStylePrompt', 'artist:alpha, 1.3::artist:beta::, ink lineart'], ['savedNegativePrompt', '3d, photo, text, speech bubble']]);
+    // A preset whose only negative text is the text part, with text allowed: the negative prompt is left as it is.
+    store.setParam.mockClear(); store.settings = { stylePresetAllowText: true };
+    expect(await apply(item('style_preset', { prompt: 'ink', textNegativePrompt: 'text' }))).toBe('替换基础风格完成，尚未生成。');
+    expect(store.setParam.mock.calls).toEqual([['stylePrompt', 'ink']]);
+    // A furry model on the anime family switches the family, as choosing it by hand would.
+    store.setParam.mockClear(); api.setSetting.mockClear(); store.settings = { stylePresetApplyParams: true, modelMode: 'anime' };
+    await apply(item('style_preset', { prompt: 'ink', params: { model: 'nai-diffusion-furry-3' } }));
+    expect(api.setSetting.mock.calls).toEqual([['modelMode', 'furry']]);
+    expect(store.setParam.mock.calls).toEqual([['stylePrompt', 'ink'], ['model', 'nai-diffusion-furry-3']]);
+  });
   it('uses the selected historical precise parameters and current bytes of the same original', async () => {
     const { store, api, apply } = context();
     const saved={kind:'precise',preciseType:'style',strength:0,fidelity:.7,width:320,height:320,filePath:'/owned/reference.png',fileUrl:'localmedia://fixture'};

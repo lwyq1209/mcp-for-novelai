@@ -1050,6 +1050,10 @@ export interface AppSettings {
   lockNegativePrompt: boolean;
   savedStylePrompt: string;
   savedNegativePrompt: string;
+  // Applying a Style preset on the canvas (issue #1), as last chosen: also take its recommended sampling settings;
+  // allow text in the image (leave out the preset's text-suppressing negative).
+  stylePresetApplyParams: boolean;
+  stylePresetAllowText: boolean;
   // Filename template for saved images. Tokens: {date} {time} {seq} {seed} {model} {ext}
   imageNameTemplate: string;
   // Prompt templates

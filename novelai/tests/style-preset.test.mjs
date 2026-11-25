@@ -72,3 +72,26 @@ test('the preset read: one asset_library read of that style preset; an unknown i
   // Anything that is not a host error is passed on as it is.
   await assert.rejects(readStylePreset(bridge(() => { throw new TypeError('bug'); }), 'p'), TypeError);
 });
+
+test('parity: the window writes a preset as this server does (client src/style-preset.ts): the same style, negative and settings for the same preset', async () => {
+  const { createJiti } = await import('jiti');
+  const { fileURLToPath } = await import('node:url');
+  const client = await createJiti(import.meta.url, { moduleCache: false, fsCache: false }).import(fileURLToPath(new URL('../client/src/style-preset.ts', import.meta.url)));
+  assert.deepEqual([...client.STYLE_PRESET_PARAM_FIELDS].sort(), [...STYLE_PRESET_PARAM_FIELDS].sort());
+  const presets = [
+    { prompt: ' ink lineart, flat color, ', artists: [{ name: ' artist:alpha ', weight: 1, enabled: true }, { name: 'artist:beta', weight: 1.3, enabled: true }, { name: 'artist:gamma', weight: -1.5, enabled: true }, { name: 'artist:off', weight: 1, enabled: false }, { name: ' ', weight: 1, enabled: true }, { name: 'artist:third', weight: 0.1 + 0.2, enabled: true }],
+      negativePrompt: ' 3d, photo ,', textNegativePrompt: 'text, speech bubble', params: { model: 'nai-diffusion-5-full', steps: 28, cfgScale: 5, cfgRescale: 0, sampler: 'k_euler', noiseSchedule: 'karras', ucPreset: 0, qualityPreset: 'light' } },
+    { prompt: 'watercolor' }, { prompt: '', artists: [{ name: 'artist:only', weight: 2, enabled: true }], textNegativePrompt: 'text' }, { prompt: ' , ', negativePrompt: '', params: { steps: 23 } },
+  ];
+  const call = { mode: 't2i', stylePresetId: 'p', positivePrompt: '1girl', seed: null, width: 832, height: 1216 };
+  for (const payload of presets) for (const allowText of [false, true]) {
+    const server = applyStylePreset({ ...call, allowText }, item(payload)), window = client.stylePresetApplication(payload, { allowText, withParams: true });
+    const label = `${JSON.stringify(payload).slice(0, 60)} allowText ${allowText}`;
+    assert.equal(window.stylePrompt, server.args.stylePrompt, label);
+    assert.equal(window.negativePrompt ?? '', server.args.negativePrompt, label);
+    assert.deepEqual(window.params, Object.fromEntries((server.applied.params ?? []).map(key => [key, server.args[key]])), label);
+    assert.equal(client.stylePresetStyleText(payload), stylePresetStyleText(payload), label);
+  }
+  // Without the switch the window applies no settings; the server always takes them as defaults of the call.
+  assert.deepEqual(client.stylePresetApplication(presets[0], {}).params, {});
+});

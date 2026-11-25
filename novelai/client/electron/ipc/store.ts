@@ -133,6 +133,8 @@ export function defaultSettings(): StoredSettings {
     lockNegativePrompt: false,
     savedStylePrompt: "",
     savedNegativePrompt: "",
+    stylePresetApplyParams: false,
+    stylePresetAllowText: false,
     imageNameTemplate: "{date}_{seq}_{model}",
     promptTemplates: [],
     lastGenerationState: null,

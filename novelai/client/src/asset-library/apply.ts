@@ -1,7 +1,8 @@
 import { useAppStore } from '../store';
-import { supportsNAICharacterPrompts, supportsNAIPreciseReference, supportsNAIVibeTransfer, type GenerateParams, type HistoryItem, type NaiDesktopApi } from '../types';
+import { supportsNAICharacterPrompts, supportsNAIPreciseReference, supportsNAIVibeTransfer, type GenerateParams, type HistoryItem, type NaiDesktopApi, type StylePromptPreset } from '../types';
 import { appendPromptChunk } from '../prompt-chunks';
 import type { AssetItem } from './types';
+import { applyStylePresetToCanvas, stylePresetApplyOptions } from '../canvas/style-preset-apply';
 
 /** Which prompt field an item goes into when it is used on the canvas. */
 export type MaterialApplicationTarget = { field?: 'style' | 'positive' | 'negative' | 'character' | 'reference'; characterId?: string };
@@ -78,7 +79,14 @@ export async function applyLibraryItem(item: AssetItem, scope: Scope, store: Ret
   }
   const recipe = scope === 'inpaint' ? store.inpaintRecipe : store.params;
   if (!recipe) throw refused('library.apply_no_inpaint_recipe', 'Turn on separate inpaint settings first.');
-  const field = item.kind === 'style_preset' ? 'style' : promptTarget(target);
+  // A Style preset: its style, its negative text and (when the user has that switched on) its recommended settings,
+  // exactly as the canvas's own Style preset picker applies it.
+  if (item.kind === 'style_preset') {
+    const written = await applyStylePresetToCanvas(payload as StylePromptPreset, scope, stylePresetApplyOptions(store.settings), store, api);
+    const extra = [...(written.negative ? ['负面提示词'] : []), ...(written.params.length ? ['推荐参数'] : [])];
+    return `${assetApplicationLabel(item, scope, target)}${extra.length ? `（含${extra.join('、')}）` : ''}完成，尚未生成。`;
+  }
+  const field = promptTarget(target);
   if (field === 'character') {
     if (!supportsNAICharacterPrompts(recipe.model)) throw refused('library.apply_model_no_characters', 'The current model does not support character prompts; choose a model that does first.');
     const character = store.charCaptions.find(value => value.id === target?.characterId);
@@ -86,10 +94,8 @@ export async function applyLibraryItem(item: AssetItem, scope: Scope, store: Ret
     const text = item.kind === 'prompt_chunk' ? appendPromptChunk(character.prompt, payload.content) : payload.prompt;
     store.updateCharCaption(character.id, { prompt: text });
   } else {
-    const key = field === 'style' ? 'stylePrompt' : field === 'negative' ? 'negativePrompt' : 'positivePrompt';
+    const key = field === 'negative' ? 'negativePrompt' : 'positivePrompt';
     const text = item.kind === 'prompt_chunk' ? appendPromptChunk(recipe[key], payload.content) : payload.prompt;
-    // The existing Style preset picker also updates the saved locked text.
-    if (scope === 'base' && key === 'stylePrompt' && store.settings?.lockStylePrompt) await api.setSetting('savedStylePrompt', text);
     if (scope === 'inpaint') store.setInpaintRecipeParam(key, text);
     else store.setParam(key, text);
   }

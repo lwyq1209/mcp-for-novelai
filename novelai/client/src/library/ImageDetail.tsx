@@ -8,6 +8,7 @@ import { setCustomTags, type LibraryApi } from './api';
 import { imageCreatedAt, imageMode, imageSource, type BatchIndex } from './model';
 import { fileName, itemTitle, modelName, samplerName, ucName } from './present';
 import { readReport, reportFields, reportHasSettings } from './image-meta';
+import { StudyStylePresetDialog } from './StudyStylePreset';
 
 export type ImageTab = 'prompt' | 'params' | 'info';
 
@@ -52,6 +53,7 @@ export function ImageDetail({ api, detail, batches, projects, collections, tab, 
   const image = detailImage(detail);
   const [full, setFull] = useState(false);
   const [report, setReport] = useState<ImageMetadataReport | null | undefined>(undefined);
+  const [stylePreset, setStylePreset] = useState(false);
   const study = item.kind === 'study';
   useEffect(() => {
     if (!study || !image) { setReport(undefined); return; }
@@ -79,6 +81,7 @@ export function ImageDetail({ api, detail, batches, projects, collections, tab, 
     <div className="lib-dr-actions">
       <MenuButton label={t('d.reuse')} entries={reuseEntries} minWidth={280}>{trigger => <Button {...trigger} data-capture="reuse" variant="primary" icon="canvas" iconAfter="down">{t('d.reuse')}</Button>}</MenuButton>
       <MenuButton label={t('d.collect.menu')} entries={collectEntries}>{trigger => <Button {...trigger} icon={collected ? 'starFill' : 'star'}>{collected ? t('d.collected') : t('d.collect')}</Button>}</MenuButton>
+      {study && report && reportHasSettings(report) && !item.archived && <IconButton icon="palette" label={t('ssp.open')} onClick={() => setStylePreset(true)} data-testid="detail-style-preset" />}
       <IconButton icon="download" label={t('d.export')} onClick={onExport} />
       {onCensor && image && <IconButton icon="mosaic" label={t('cz.open')} onClick={onCensor} data-testid="detail-censor" />}
       <IconButton icon="trash" className="lib-danger-icon" label={t('d.delete')} onClick={onDelete} />
@@ -87,6 +90,7 @@ export function ImageDetail({ api, detail, batches, projects, collections, tab, 
     {tab === 'prompt' && <PromptSection t={t} item={detail} report={report} />}
     {tab === 'params' && <ParamsSection t={t} lang={lang} detail={detail} report={report} mode={mode} />}
     {tab === 'info' && <InfoSection api={api} detail={detail} batches={batches} projects={projects} collections={collections} onOpenQueue={onOpenQueue} />}
+    {stylePreset && report && <StudyStylePresetDialog api={api} item={item} report={report} onClose={() => setStylePreset(false)} />}
     {full && image && <UiPortal><div className="lib-lightbox" role="dialog" aria-modal="true" aria-label={itemTitle(item)} tabIndex={-1} ref={node => node?.focus()} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); setFull(false); } }} onClick={() => setFull(false)}>
       <img src={image.url} alt={itemTitle(item)} onClick={event => event.stopPropagation()} />
       <IconButton className="lib-lightbox-close" tone="overlay" icon="x" label={t('c.close')} onClick={() => setFull(false)} />

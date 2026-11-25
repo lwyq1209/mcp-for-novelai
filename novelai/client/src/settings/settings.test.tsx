@@ -31,7 +31,7 @@ const SETTINGS: AppSettings = {
   theme: 'dark', reduceMotion: false, autoComplete: true, weightHighlight: true, promptRandomizer: true, superDrop: true, streamPreviewEnabled: true, showFloatingToolbar: true,
   historyJumpAfterGenerate: true, historyRetentionDays: 30, loggingEnabled: true, keepImageMetadata: true, autoBackupEnabled: true, autoBackupIntervalHours: 24, autoBackupRetentionCount: 7,
   autoBackupIncludeImages: false, backupDir: '', activeHistoryGroupId: '', generationGroupId: '', modelMode: 'anime', lockStylePrompt: false, lockNegativePrompt: false, savedStylePrompt: '',
-  savedNegativePrompt: '', imageNameTemplate: '{date}_{seq}_{model}', promptTemplates: [{ id: 't1', name: 'Realistic', prefix: 'masterpiece, ', suffix: '4k', negativePrompt: 'lowres' }],
+  savedNegativePrompt: '', stylePresetApplyParams: false, stylePresetAllowText: false, imageNameTemplate: '{date}_{seq}_{model}', promptTemplates: [{ id: 't1', name: 'Realistic', prefix: 'masterpiece, ', suffix: '4k', negativePrompt: 'lowres' }],
   stylePromptPresets: [], stylePromptPresetGroups: [], positivePromptPresets: [], promptChunks: [], lastGenerationState: null,
   persistGenerateParams: true, persistI2IParams: true, persistInpaintParams: false, persistUpscaleParams: true, persistDirectorParams: true, queueMaxItemsPerEnqueue: 20, queueMaxPendingItems: 200, queueRetentionDays: 30,
 };

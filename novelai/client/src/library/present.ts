@@ -1,3 +1,4 @@
+import { stylePresetStyleText } from '../style-preset';
 import type { AssetItem, AssetKind } from '../asset-library/types';
 import type { IconName } from '../ui';
 import type { UiText } from '../ui/i18n';
@@ -57,7 +58,9 @@ export function cardExcerpt(item: AssetItem, t: UiText): { text: string; meta: s
       return { text: members.map((member: any) => member.weight === 1 ? member.text : `${member.weight}::${member.text}`).join(', '), meta: t('combo.members', { n: members.length }) };
     }
     case 'note': return { text: String(payload.notes ?? ''), meta: payload.group ? String(payload.group) : '' };
-    case 'style_preset': case 'positive_preset': return { text: String(payload.prompt ?? ''), meta: payload.group ? String(payload.group) : '' };
+    // A Style preset reads as it is applied: its enabled artists, then its text.
+    case 'style_preset': return { text: stylePresetStyleText(payload as { prompt: string }), meta: payload.group ? String(payload.group) : '' };
+    case 'positive_preset': return { text: String(payload.prompt ?? ''), meta: payload.group ? String(payload.group) : '' };
     case 'prompt_chunk': return { text: String(payload.content ?? ''), meta: '' };
     case 'reference_preset': {
       const parts = [payload.kind === 'vibe' ? t('pre.ref.vibe') : t('pre.ref.precise'), t('pre.ref.strength', { v: String(payload.strength ?? '') })];
