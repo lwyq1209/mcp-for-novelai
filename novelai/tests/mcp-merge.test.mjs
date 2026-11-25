@@ -190,9 +190,13 @@ test('N4 size budget: tools/list totals stay under the agreed ceilings', async t
   // how the preset's style, negative parts and sampling fields combine with the call's own, and what may then be
   // omitted, must be visible before a call, about 1.0k characters. The whole server goes to 45.5k and core to 44.2k
   // (about 45.3k and 44.0k used).
-  assert.ok(total <= 45_500, `whole server ${total}`);
-  assert.ok(core <= 44_200, `core layer ${core}`);
-  assert.ok(asset <= 6_900, `asset_library ${asset}`);
+  // Style presets written by agents (asset_library create, the structured update fields, add-preview, label-preview and
+  // remove-preview; issue #1, asked for by the user 2026-11-25): what an artist entry, the two negative texts and the
+  // settings mean, and how a sample image is named, must be visible before a call, about 1.0k characters. asset_library
+  // goes to 8.0k, core to 45.3k and the whole server to 46.6k (about 7.9k, 45.0k and 46.3k used).
+  assert.ok(total <= 46_600, `whole server ${total}`);
+  assert.ok(core <= 45_300, `core layer ${core}`);
+  assert.ok(asset <= 8_000, `asset_library ${asset}`);
 });
 
 // --------------------------------------------------------------------------- N5

@@ -5,19 +5,15 @@ import path from "path";
 import { randomUUID } from "crypto";
 import { toLocalMediaUrl } from "./local-media-protocol";
 import type { StylePromptPreviewImage } from "../../src/types";
-import { presetPreviewLimitOfStorage } from "../../src/preset-previews";
+import { presetPreviewFolderName, presetPreviewLimitOfStorage } from "../../src/preset-previews";
 
 const SUPPORTED_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
-
-function safePresetId(value: string) {
-  return value.trim().replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 96);
-}
 
 export function stylePromptPreviewDirectory(
   presetId: string,
   userDataRoot = app.getPath("userData"),
 ) {
-  const safeId = safePresetId(presetId);
+  const safeId = presetPreviewFolderName(presetId);
   if (!safeId) throw new Error("Invalid style preset id.");
   return path.join(userDataRoot, "style-prompt-previews", safeId);
 }

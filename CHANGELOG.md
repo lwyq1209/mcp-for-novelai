@@ -13,10 +13,14 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
   text-suppressing negative, for an image with speech bubbles. The recipe freezes the result (`effective.stylePreset`
   shows it), so editing the preset later changes no recipe. See
   [Style presets in a recipe](docs/mcp-tools.md#style-presets-in-a-recipe).
+- `asset_library` writes style presets: `create` makes one, `update` takes the artists, the negative texts, the
+  sampling settings and the notes, and `add-preview` copies a history image or an imported image into a preset as a
+  labelled sample image (`label-preview` and `remove-preview` change one), so an agent can put the benchmark images it
+  generated on the preset they belong to.
 - **Style presets hold more than a prompt** (issue #1, first part): a style preset can carry a list of artists (each
   with a weight and an on/off switch), negative text that belongs to the style, separate negative text that keeps
   writing out of the image, recommended sampling settings and notes. Existing presets are unchanged and backups carry
-  the new fields. This version stores them and uses them in recipes; editing them in the window comes next.
+  the new fields. This version stores them, lets agents write them and uses them in recipes; editing them in the window comes next.
 - A style preset keeps up to **six** sample images (three before), each with an optional label saying what it shows.
   Prompt presets keep three.
 - **Precise Reference on V5** (NovelAI released it on 2026-11-24): the canvas's precise references now work on V5

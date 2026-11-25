@@ -13,6 +13,7 @@ import type { LibraryTrash, TrashActor } from './library-trash';
 import { hostError, type HostErrorParams } from './host-error';
 import { createLibraryWindow, WINDOW_LIBRARY_ACTIONS } from './library-window';
 import type { BatchFacts } from '../src/library/image-facts';
+import { STYLE_PRESET_PREVIEW_LIMIT, presetPreviewFolderName } from '../src/preset-previews';
 
 /** An English message for MCP and the window's reason/params (src/host-errors/library.ts). */
 const error = (code: string, message: string, reason?: string, params?: HostErrorParams): never => { throw hostError(code, message, reason, params); };
@@ -21,6 +22,9 @@ const identifier = (value: unknown): string => typeof value === 'string' && valu
 const kindOf = (value: unknown): LibraryKind => (LIBRARY_KINDS as readonly unknown[]).includes(value) ? value as LibraryKind : error('invalid_argument', 'Invalid item kind.', 'library.invalid_kind');
 const revision = (value: unknown): number => Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : error('invalid_argument', 'The exact item revision is required.', 'library.revision_required');
 const fields = (value: Record<string, any>, allowed: string[]) => { const unknown = Object.keys(value).filter(key => !allowed.includes(key)); if (unknown.length) error('invalid_argument', `Unsupported fields: ${unknown.join(', ')}.`, 'library.unsupported_fields', { fields: unknown.join(', ') }); };
+/** What a style preset holds beside its name, group, prompt and notes (contracts StylePresetPayloadSchema); an agent writes them with create and update. */
+const STYLE_PRESET_AUTHORED = ['artists', 'negativePrompt', 'textNegativePrompt', 'params'] as const;
+const PREVIEW_COMMANDS = ['add-preview', 'label-preview', 'remove-preview'];
 export function createAssetLibraryService(options: {
   repository: LibraryRepository;
   material?: (args: Record<string, unknown>) => Promise<any>;
@@ -52,7 +56,7 @@ export function createAssetLibraryService(options: {
     return item;
   };
   const update = (item: LibraryItem, patch: Record<string, any>, archived?: boolean) => {
-    const allowed: Record<LibraryKind, string[]> = { tag:['name','group','notes'],combo:['name','group','notes'],note:['name','group','notes'],study:['name','notes'],history:['groupId'],artist_favorite:[],style_preset:['name','group','prompt'],positive_preset:['name','prompt'],prompt_chunk:['name','content','updatedAt'],reference_preset:['name','group','strength','infoExtracted','preciseType','fidelity','informationExtracted'] };
+    const allowed: Record<LibraryKind, string[]> = { tag:['name','group','notes'],combo:['name','group','notes'],note:['name','group','notes'],study:['name','notes'],history:['groupId'],artist_favorite:[],style_preset:['name','group','prompt',...STYLE_PRESET_AUTHORED,'notes'],positive_preset:['name','prompt'],prompt_chunk:['name','content','updatedAt'],reference_preset:['name','group','strength','infoExtracted','preciseType','fidelity','informationExtracted'] };
     if (Object.keys(patch).some(key => !allowed[item.kind].includes(key))) {
       const kind = item.kind, permitted = allowed[kind].join(', ');
       if (!permitted) error('invalid_argument', `${kind} update allows no fields (use its own editor).`, 'library.update_no_fields', { kind });
@@ -75,6 +79,54 @@ export function createAssetLibraryService(options: {
     validateLibraryPayload(item.kind, payload);
     return repo.put(item.kind, item.id, payload, { expectedRevision: item.revision, archived, updatedAt });
   };
+  /**
+   * The sample images of a style preset, changed by an agent (issue #1): add-preview copies one library original (a
+   * history image or an imported image, read as the image action reads it) into the preset's own image folder, so the
+   * sample stays when its source is deleted; label-preview and remove-preview change the preset's list. Each makes
+   * one new revision of the preset. A removed sample's file stays in the folder (older revisions name it) until the
+   * preset itself is purged.
+   */
+  async function previewCommand(args: Record<string, any>) {
+    fields(args, ['action','command','items','image','label','previewId']);
+    const target = record(args.items[0]);
+    const previewsOf = (item: LibraryItem): Record<string, any>[] => Array.isArray(item.payload.previewImages) ? item.payload.previewImages : [];
+    const full = (item: LibraryItem) => { if (previewsOf(item).length >= STYLE_PRESET_PREVIEW_LIMIT) error('invalid_argument', `This style preset already has ${STYLE_PRESET_PREVIEW_LIMIT} sample images, the most it keeps; remove one first (remove-preview).`, 'library.preview_limit', { max: STYLE_PRESET_PREVIEW_LIMIT }); };
+    const store = (previews: (item: LibraryItem) => Record<string, any>[]) => {
+      const item = repo.transaction(() => {
+        const fresh = checked(target), payload = { ...fresh.payload, previewImages: previews(fresh) };
+        validateLibraryPayload('style_preset', payload);
+        return repo.put('style_preset', fresh.id, payload, { expectedRevision: fresh.revision, updatedAt: new Date().toISOString() });
+      });
+      return { items: [item], previews: previewsOf(item).map(image => ({ previewId: image.id, name: image.name, ...(image.label ? { label: image.label } : {}) })), revision: repo.getRevision() };
+    };
+    if (args.command !== 'add-preview') {
+      const previewId = identifier(args.previewId);
+      return store(item => {
+        const current = previewsOf(item);
+        if (!current.some(image => image.id === previewId)) error('library_not_found', 'This style preset has no sample image with that previewId; read the preset for the ids of its previewImages.', 'library.preview_not_found');
+        if (args.command === 'remove-preview') return current.filter(image => image.id !== previewId);
+        return current.map(image => { if (image.id !== previewId) return image; const { label: _label, ...rest } = image; return args.label ? { ...rest, label: args.label } : rest; });
+      });
+    }
+    // The preset and its room are checked before the image is read, and again in the write.
+    const preset = checked(target); full(preset);
+    const roots = activeLibraryPaths() ?? error('library_unavailable', 'The image folder of the presets is not ready.', 'library.previews_unavailable');
+    const image = record(args.image), history = image.kind === 'history';
+    if (history !== (image.assetId !== undefined)) error('invalid_argument', 'image is {kind:"history", id, revision, assetId} or {kind:"study", id, revision}, as the image action takes it.', 'library.preview_image_identity');
+    const original = await readHistoryImage(history
+      ? { kind: 'history', id: identifier(image.id), revision: revision(image.revision), assetId: identifier(image.assetId), variant: 'original' }
+      : { kind: 'study', id: identifier(image.id), revision: revision(image.revision), variant: 'original' });
+    const extension = ({ 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp' } as Record<string, string>)[original.mimeType]
+      ?? error('unsupported_image', 'A sample image is a PNG, JPEG or WebP image.', 'library.preview_image_type');
+    const source = repo.get(history ? 'history' : 'study', image.id, image.revision)?.payload;
+    const sourceName = history ? (typeof source?.filePath === 'string' ? path.basename(source.filePath) : '') : typeof source?.originalName === 'string' ? source.originalName : '';
+    const id = randomUUID(), directory = path.join(roots.userDataRoot, 'style-prompt-previews', presetPreviewFolderName(preset.id)), filePath = path.join(directory, `${id}${extension}`);
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(filePath, Buffer.from(original.data, 'base64'), { flag: 'wx' });
+    try {
+      return store(item => { full(item); return [...previewsOf(item), { id, name: sourceName || `${image.kind}-${image.id}${extension}`, filePath, fileUrl: options.toFileUrl?.(filePath) ?? '', createdAt: new Date().toISOString(), ...(args.label ? { label: args.label } : {}) }]; });
+    } catch (failure) { fs.rmSync(filePath, { force: true }); throw failure; }
+  }
   // The library page's own reads (library-window.ts), for the window's IPC only.
   const windowAction = createLibraryWindow({
     repository: repo, trash: options.trash, batchFacts: options.batchFacts, collection,
@@ -90,7 +142,7 @@ export function createAssetLibraryService(options: {
     if (context.window === true && WINDOW_LIBRARY_ACTIONS.includes(args.action)) { validateLibraryRequest('asset_library_window', args); return windowAction(args); }
     if (['list','read'].includes(args.action)) validateLibraryRequest('asset_library_desktop', args);
     // purge {all:true} (empty Recently Deleted) is the desktop's own action; the public contract purges named trashIds only.
-    if (['collections','mutate','image','recently-deleted','restore','purge'].includes(args.action) && args.command !== 'set-custom-tags') validateLibraryRequest(args.action === 'purge' && args.all !== undefined ? 'asset_library_desktop' : 'asset_library', args);
+    if (['collections','create','mutate','image','recently-deleted','restore','purge'].includes(args.action) && args.command !== 'set-custom-tags') validateLibraryRequest(args.action === 'purge' && args.all !== undefined ? 'asset_library_desktop' : 'asset_library', args);
     if (['versions','thumbnail','restore-content','rename-collection','delete-collection','tag-suggestions'].includes(args.action) || (args.action==='mutate'&&args.command==='set-custom-tags')) validateLibraryRequest('asset_library_desktop', args);
     // The contract allows kind history (with assetId) or study (issue #2: its single registered original, no assetId).
     if (args.action === 'image') return readHistoryImage(args.kind === 'study'
@@ -216,8 +268,7 @@ export function createAssetLibraryService(options: {
       // Preview paths may only be reused from existing owned records. New previews use their dedicated host service.
       if (payload.previewImages?.length && JSON.stringify(payload.previewImages) !== JSON.stringify(previous?.payload.previewImages)) {
         const roots = activeLibraryPaths(); if (!roots || !['style_preset','positive_preset'].includes(kind)) error('invalid_argument', 'Invalid preview image source.', 'library.preview_source');
-        const storageId = `${kind === 'positive_preset' ? 'positive-prompt-' : ''}${id}`.trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0,96);
-        const directory = path.resolve(roots!.userDataRoot, 'style-prompt-previews', storageId);
+        const directory = path.resolve(roots!.userDataRoot, 'style-prompt-previews', presetPreviewFolderName(`${kind === 'positive_preset' ? 'positive-prompt-' : ''}${id}`));
         for (const image of payload.previewImages) {
           if (typeof image.filePath !== 'string' || path.dirname(path.resolve(image.filePath)) !== directory || fs.lstatSync(image.filePath).isSymbolicLink() || !fs.statSync(image.filePath).isFile()) error('invalid_argument', 'Preview images must come from the image save entry point of this preset.', 'library.preview_owner');
         }
@@ -249,6 +300,17 @@ export function createAssetLibraryService(options: {
       if (args.collectionId !== undefined) return trash.deleteCollection(identifier(args.collectionId), { preview: args.preview === true, ...deletedBy });
       return trash.deleteItems((args.items as unknown[]).map(value => { const item = record(value); return { kind: kindOf(item.kind), id: identifier(item.id), expectedRevision: revision(item.expectedRevision) }; }), { preview: args.preview === true, ...deletedBy });
     }
+    // A style preset made by an agent (issue #1): the fields of an update, with a new identity.
+    if (args.action === 'create') {
+      fields(args, ['action','kind','patch']);
+      const patch = record(args.patch), id = randomUUID();
+      const payload = { id, name: identifier(patch.name).trim(), prompt: typeof patch.prompt === 'string' ? patch.prompt : '', group: typeof patch.group === 'string' ? patch.group.trim() : '', createdAt: new Date().toISOString(),
+        ...Object.fromEntries([...STYLE_PRESET_AUTHORED, 'notes'].filter(key => patch[key] !== undefined).map(key => [key, patch[key]])) };
+      validateLibraryPayload('style_preset', payload);
+      const item = repo.put('style_preset', id, payload, { expectedRevision: 0, source: { namespace: 'style_preset', legacyId: id, position: repo.all('style_preset').length } });
+      return { item, revision: repo.getRevision() };
+    }
+    if (args.action === 'mutate' && PREVIEW_COMMANDS.includes(args.command)) return previewCommand(args);
     if (args.action === 'mutate') {
       fields(args, ['action','command','items','collectionId','patch','tags']);
       if (!Array.isArray(args.items) || !args.items.length || args.items.length > 500) error('invalid_argument', 'Select 1–500 items.', 'library.selection_size');

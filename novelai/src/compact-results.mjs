@@ -121,6 +121,13 @@ export function compactAssetMutation(result) {
   return { ...result, items: result.items.map(item => record(item) ? present({ kind: item.kind, id: item.id, revision: item.revision, ...(item.archived ? { archived: true } : {}) }) : item) };
 }
 
+/** asset_library create: the identity of the new item (a read gives its fields). */
+export function compactAssetCreated(result) {
+  if (!record(result) || !record(result.item)) return result;
+  const { item, ...rest } = result;
+  return { ...rest, item: present({ kind: item.kind, id: item.id, revision: item.revision, name: item.name }) };
+}
+
 /** A collection by the id list and mutate take ("<namespace>:<id>") and its name. */
 const collectionRow = value => record(value) ? present({ id: value.id, name: value.name }) : value;
 /** asset_library collections and create-collection: id and name per collection (the id carries the namespace). */

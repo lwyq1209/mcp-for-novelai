@@ -9,5 +9,7 @@ export const PROMPT_PRESET_PREVIEW_LIMIT = 3;
 const PROMPT_PRESET_STORAGE_PREFIX = 'positive-prompt-';
 
 export const presetPreviewLimit = (kind: 'style' | 'positive') => kind === 'positive' ? PROMPT_PRESET_PREVIEW_LIMIT : STYLE_PRESET_PREVIEW_LIMIT;
+/** The folder name of a preset's images under <data>/style-prompt-previews: its storage id with only safe characters. */
+export const presetPreviewFolderName = (storageId: string) => storageId.trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 96);
 /** The limit of the preset whose image folder has this storage id. */
 export const presetPreviewLimitOfStorage = (storageId: string) => presetPreviewLimit(storageId.startsWith(PROMPT_PRESET_STORAGE_PREFIX) ? 'positive' : 'style');

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sourceSha256": "d8f407d178c0cc040f4794ca1c03cd115cf17e0bb4f55aae1617c6627d0d421b",
+  "sourceSha256": "788883cfbb5f865c20581ceeb35497d9c3ec3a74503218d990de37080821d74b",
   "schemas": {
     "libraryPayloads": {
       "tag": {
@@ -9454,6 +9454,108 @@
                   "updatedAt": {
                     "type": "string"
                   },
+                  "artists": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "name",
+                        "weight",
+                        "enabled"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S",
+                          "maxLength": 200
+                        },
+                        "weight": {
+                          "type": "number"
+                        },
+                        "enabled": {
+                          "type": "boolean"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 64,
+                    "description": "style_preset: [{name, weight, enabled}]; name as written in a prompt (artist:someone), weight 1 = plain, else weight::name::."
+                  },
+                  "negativePrompt": {
+                    "type": "string",
+                    "description": "style_preset: negative text of the style."
+                  },
+                  "textNegativePrompt": {
+                    "type": "string",
+                    "description": "style_preset: negative text that keeps writing out of the image; prepare_recipe allowText leaves it out."
+                  },
+                  "params": {
+                    "type": "object",
+                    "properties": {
+                      "model": {
+                        "enum": [
+                          "nai-diffusion-5-full",
+                          "nai-diffusion-5-curated",
+                          "nai-diffusion-4-5-full",
+                          "nai-diffusion-4-5-curated",
+                          "nai-diffusion-4-full",
+                          "nai-diffusion-4-curated",
+                          "nai-diffusion-3",
+                          "nai-diffusion-furry-3"
+                        ]
+                      },
+                      "sampler": {
+                        "enum": [
+                          "k_euler_ancestral",
+                          "k_euler",
+                          "k_dpmpp_2m",
+                          "k_dpmpp_2m_sde",
+                          "k_dpmpp_sde",
+                          "k_dpmpp_2s_ancestral",
+                          "ddim_v3"
+                        ]
+                      },
+                      "noiseSchedule": {
+                        "enum": [
+                          "native",
+                          "karras",
+                          "exponential"
+                        ]
+                      },
+                      "steps": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50
+                      },
+                      "cfgScale": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 10
+                      },
+                      "cfgRescale": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "ucPreset": {
+                        "enum": [
+                          0,
+                          1,
+                          2,
+                          3
+                        ]
+                      },
+                      "qualityPreset": {
+                        "enum": [
+                          "standard",
+                          "light",
+                          "none"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  },
                   "strength": {
                     "type": "number",
                     "minimum": 0,
@@ -9486,7 +9588,7 @@
                   }
                 },
                 "additionalProperties": false,
-                "description": "Allowed update fields by kind: history: groupId only (existing history-group raw ID; never name or group); tag/combo/note: name, group, notes; study: name, notes; style_preset: name, group, prompt; positive_preset: name, prompt; prompt_chunk: name, content, updatedAt; reference_preset: name, group, strength (precise 0–5, V4.5 uses at most 1; vibe 0–1), infoExtracted, preciseType (character, character_mainoutfit, style, costume = outfit, character&style, character&style_anyoutfit; the outfit ones are V5-only), fidelity (V4.5 only), informationExtracted; artist_favorite: none. Note prose belongs in notes; do not invent fields. To collect history and notes together, create-collection then add-to-collection with its returned collectionId, not update."
+                "description": "Allowed update fields by kind: history: groupId only (existing history-group raw ID; never name or group); tag/combo/note: name, group, notes; study: name, notes; style_preset: name, group, prompt, artists, negativePrompt, textNegativePrompt, params, notes (each one replaces the stored value as a whole); positive_preset: name, prompt; prompt_chunk: name, content, updatedAt; reference_preset: name, group, strength (precise 0–5, V4.5 uses at most 1; vibe 0–1), infoExtracted, preciseType (character, character_mainoutfit, style, costume = outfit, character&style, character&style_anyoutfit; the outfit ones are V5-only), fidelity (V4.5 only), informationExtracted; artist_favorite: none. Note prose belongs in notes; do not invent fields. To collect history and notes together, create-collection then add-to-collection with its returned collectionId, not update."
               }
             },
             "additionalProperties": false
@@ -9551,6 +9653,354 @@
                 "maxItems": 500
               },
               "collectionId": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "action",
+              "kind",
+              "patch"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "create"
+              },
+              "kind": {
+                "type": "string",
+                "const": "style_preset"
+              },
+              "patch": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S",
+                    "maxLength": 512
+                  },
+                  "group": {
+                    "type": "string"
+                  },
+                  "prompt": {
+                    "type": "string"
+                  },
+                  "notes": {
+                    "type": "string"
+                  },
+                  "artists": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "name",
+                        "weight",
+                        "enabled"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S",
+                          "maxLength": 200
+                        },
+                        "weight": {
+                          "type": "number"
+                        },
+                        "enabled": {
+                          "type": "boolean"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 64,
+                    "description": "style_preset: [{name, weight, enabled}]; name as written in a prompt (artist:someone), weight 1 = plain, else weight::name::."
+                  },
+                  "negativePrompt": {
+                    "type": "string",
+                    "description": "style_preset: negative text of the style."
+                  },
+                  "textNegativePrompt": {
+                    "type": "string",
+                    "description": "style_preset: negative text that keeps writing out of the image; prepare_recipe allowText leaves it out."
+                  },
+                  "params": {
+                    "type": "object",
+                    "properties": {
+                      "model": {
+                        "enum": [
+                          "nai-diffusion-5-full",
+                          "nai-diffusion-5-curated",
+                          "nai-diffusion-4-5-full",
+                          "nai-diffusion-4-5-curated",
+                          "nai-diffusion-4-full",
+                          "nai-diffusion-4-curated",
+                          "nai-diffusion-3",
+                          "nai-diffusion-furry-3"
+                        ]
+                      },
+                      "sampler": {
+                        "enum": [
+                          "k_euler_ancestral",
+                          "k_euler",
+                          "k_dpmpp_2m",
+                          "k_dpmpp_2m_sde",
+                          "k_dpmpp_sde",
+                          "k_dpmpp_2s_ancestral",
+                          "ddim_v3"
+                        ]
+                      },
+                      "noiseSchedule": {
+                        "enum": [
+                          "native",
+                          "karras",
+                          "exponential"
+                        ]
+                      },
+                      "steps": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50
+                      },
+                      "cfgScale": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 10
+                      },
+                      "cfgRescale": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "ucPreset": {
+                        "enum": [
+                          0,
+                          1,
+                          2,
+                          3
+                        ]
+                      },
+                      "qualityPreset": {
+                        "enum": [
+                          "standard",
+                          "light",
+                          "none"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "action",
+              "command",
+              "items",
+              "image"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "mutate"
+              },
+              "command": {
+                "type": "string",
+                "const": "add-preview"
+              },
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "id",
+                    "expectedRevision"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "style_preset"
+                    },
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "\\S"
+                    },
+                    "expectedRevision": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 1
+              },
+              "image": {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "id",
+                  "revision"
+                ],
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "history",
+                      "study"
+                    ]
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S",
+                    "maxLength": 512
+                  },
+                  "revision": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "assetId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S",
+                    "maxLength": 512
+                  }
+                },
+                "additionalProperties": false
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 60
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "action",
+              "command",
+              "items",
+              "previewId",
+              "label"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "mutate"
+              },
+              "command": {
+                "type": "string",
+                "const": "label-preview"
+              },
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "id",
+                    "expectedRevision"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "style_preset"
+                    },
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "\\S"
+                    },
+                    "expectedRevision": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 1
+              },
+              "previewId": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 60
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "action",
+              "command",
+              "items",
+              "previewId"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "mutate"
+              },
+              "command": {
+                "type": "string",
+                "const": "remove-preview"
+              },
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "id",
+                    "expectedRevision"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "style_preset"
+                    },
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "\\S"
+                    },
+                    "expectedRevision": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 1
+              },
+              "previewId": {
                 "type": "string",
                 "minLength": 1,
                 "pattern": "\\S"
@@ -9764,7 +10214,7 @@
           }
         ],
         "type": "object",
-        "description": "AI list is summary-only (default 10, max 20, 12 KiB UTF-8 JSON). Explicit image reads one selected history original by kind/id/exact revision/registered assetId; variant defaults to thumbnail (max 384), original must be explicit. Native attachment only, no workspace, paths, batch, exports or automatic reads. Read detail:summary|full; history defaults to summary, other kinds to full. Summaries are not recipes or verified images. Explicit full is untruncated and may be large. Create a mixed user collection with {action:\"create-collection\",name}; reuse its returned collection.id for explicit versioned membership changes. System namespaces are not public; mutate delete with a user collectionId moves that collection (not its items) to Recently Deleted. Allowed update fields by kind: history: groupId only (existing history-group raw ID; never name or group); tag/combo/note: name, group, notes; study: name, notes; style_preset: name, group, prompt; positive_preset: name, prompt; prompt_chunk: name, content, updatedAt; reference_preset: name, group, strength (precise 0–5, V4.5 uses at most 1; vibe 0–1), infoExtracted, preciseType (character, character_mainoutfit, style, costume = outfit, character&style, character&style_anyoutfit; the outfit ones are V5-only), fidelity (V4.5 only), informationExtracted; artist_favorite: none. Note prose belongs in notes; do not invent fields. To collect history and notes together, create-collection then add-to-collection with its returned collectionId, not update.",
+        "description": "AI list is summary-only (default 10, max 20, 12 KiB UTF-8 JSON). Explicit image reads one selected history original by kind/id/exact revision/registered assetId; variant defaults to thumbnail (max 384), original must be explicit. Native attachment only, no workspace, paths, batch, exports or automatic reads. Read detail:summary|full; history defaults to summary, other kinds to full. Summaries are not recipes or verified images. Explicit full is untruncated and may be large. Create a mixed user collection with {action:\"create-collection\",name}; reuse its returned collection.id for explicit versioned membership changes. System namespaces are not public; mutate delete with a user collectionId moves that collection (not its items) to Recently Deleted. Allowed update fields by kind: history: groupId only (existing history-group raw ID; never name or group); tag/combo/note: name, group, notes; study: name, notes; style_preset: name, group, prompt, artists, negativePrompt, textNegativePrompt, params, notes (each one replaces the stored value as a whole); positive_preset: name, prompt; prompt_chunk: name, content, updatedAt; reference_preset: name, group, strength (precise 0–5, V4.5 uses at most 1; vibe 0–1), infoExtracted, preciseType (character, character_mainoutfit, style, costume = outfit, character&style, character&style_anyoutfit; the outfit ones are V5-only), fidelity (V4.5 only), informationExtracted; artist_favorite: none. Note prose belongs in notes; do not invent fields. To collect history and notes together, create-collection then add-to-collection with its returned collectionId, not update.",
         "properties": {
           "action": {
             "anyOf": [
@@ -9791,6 +10241,22 @@
               {
                 "type": "string",
                 "const": "create-collection"
+              },
+              {
+                "type": "string",
+                "const": "mutate"
+              },
+              {
+                "type": "string",
+                "const": "mutate"
+              },
+              {
+                "type": "string",
+                "const": "mutate"
+              },
+              {
+                "type": "string",
+                "const": "create"
               },
               {
                 "type": "string",
@@ -10043,6 +10509,10 @@
               {
                 "type": "string",
                 "const": "study"
+              },
+              {
+                "type": "string",
+                "const": "style_preset"
               }
             ]
           },
@@ -10146,6 +10616,18 @@
                   "add-to-collection",
                   "remove-from-collection"
                 ]
+              },
+              {
+                "type": "string",
+                "const": "add-preview"
+              },
+              {
+                "type": "string",
+                "const": "label-preview"
+              },
+              {
+                "type": "string",
+                "const": "remove-preview"
               },
               {
                 "type": "string",
@@ -10294,6 +10776,96 @@
                   ],
                   "properties": {
                     "kind": {
+                      "type": "string",
+                      "const": "style_preset"
+                    },
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "\\S"
+                    },
+                    "expectedRevision": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 1
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "id",
+                    "expectedRevision"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "style_preset"
+                    },
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "\\S"
+                    },
+                    "expectedRevision": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 1
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "id",
+                    "expectedRevision"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "style_preset"
+                    },
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "\\S"
+                    },
+                    "expectedRevision": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 1
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "id",
+                    "expectedRevision"
+                  ],
+                  "properties": {
+                    "kind": {
                       "enum": [
                         "tag",
                         "combo",
@@ -10369,6 +10941,108 @@
                   "updatedAt": {
                     "type": "string"
                   },
+                  "artists": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "name",
+                        "weight",
+                        "enabled"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S",
+                          "maxLength": 200
+                        },
+                        "weight": {
+                          "type": "number"
+                        },
+                        "enabled": {
+                          "type": "boolean"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 64,
+                    "description": "style_preset: [{name, weight, enabled}]; name as written in a prompt (artist:someone), weight 1 = plain, else weight::name::."
+                  },
+                  "negativePrompt": {
+                    "type": "string",
+                    "description": "style_preset: negative text of the style."
+                  },
+                  "textNegativePrompt": {
+                    "type": "string",
+                    "description": "style_preset: negative text that keeps writing out of the image; prepare_recipe allowText leaves it out."
+                  },
+                  "params": {
+                    "type": "object",
+                    "properties": {
+                      "model": {
+                        "enum": [
+                          "nai-diffusion-5-full",
+                          "nai-diffusion-5-curated",
+                          "nai-diffusion-4-5-full",
+                          "nai-diffusion-4-5-curated",
+                          "nai-diffusion-4-full",
+                          "nai-diffusion-4-curated",
+                          "nai-diffusion-3",
+                          "nai-diffusion-furry-3"
+                        ]
+                      },
+                      "sampler": {
+                        "enum": [
+                          "k_euler_ancestral",
+                          "k_euler",
+                          "k_dpmpp_2m",
+                          "k_dpmpp_2m_sde",
+                          "k_dpmpp_sde",
+                          "k_dpmpp_2s_ancestral",
+                          "ddim_v3"
+                        ]
+                      },
+                      "noiseSchedule": {
+                        "enum": [
+                          "native",
+                          "karras",
+                          "exponential"
+                        ]
+                      },
+                      "steps": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50
+                      },
+                      "cfgScale": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 10
+                      },
+                      "cfgRescale": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "ucPreset": {
+                        "enum": [
+                          0,
+                          1,
+                          2,
+                          3
+                        ]
+                      },
+                      "qualityPreset": {
+                        "enum": [
+                          "standard",
+                          "light",
+                          "none"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  },
                   "strength": {
                     "type": "number",
                     "minimum": 0,
@@ -10401,7 +11075,197 @@
                   }
                 },
                 "additionalProperties": false,
-                "description": "Allowed update fields by kind: history: groupId only (existing history-group raw ID; never name or group); tag/combo/note: name, group, notes; study: name, notes; style_preset: name, group, prompt; positive_preset: name, prompt; prompt_chunk: name, content, updatedAt; reference_preset: name, group, strength (precise 0–5, V4.5 uses at most 1; vibe 0–1), infoExtracted, preciseType (character, character_mainoutfit, style, costume = outfit, character&style, character&style_anyoutfit; the outfit ones are V5-only), fidelity (V4.5 only), informationExtracted; artist_favorite: none. Note prose belongs in notes; do not invent fields. To collect history and notes together, create-collection then add-to-collection with its returned collectionId, not update."
+                "description": "Allowed update fields by kind: history: groupId only (existing history-group raw ID; never name or group); tag/combo/note: name, group, notes; study: name, notes; style_preset: name, group, prompt, artists, negativePrompt, textNegativePrompt, params, notes (each one replaces the stored value as a whole); positive_preset: name, prompt; prompt_chunk: name, content, updatedAt; reference_preset: name, group, strength (precise 0–5, V4.5 uses at most 1; vibe 0–1), infoExtracted, preciseType (character, character_mainoutfit, style, costume = outfit, character&style, character&style_anyoutfit; the outfit ones are V5-only), fidelity (V4.5 only), informationExtracted; artist_favorite: none. Note prose belongs in notes; do not invent fields. To collect history and notes together, create-collection then add-to-collection with its returned collectionId, not update."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S",
+                    "maxLength": 512
+                  },
+                  "group": {
+                    "type": "string"
+                  },
+                  "prompt": {
+                    "type": "string"
+                  },
+                  "notes": {
+                    "type": "string"
+                  },
+                  "artists": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "name",
+                        "weight",
+                        "enabled"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S",
+                          "maxLength": 200
+                        },
+                        "weight": {
+                          "type": "number"
+                        },
+                        "enabled": {
+                          "type": "boolean"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 64,
+                    "description": "style_preset: [{name, weight, enabled}]; name as written in a prompt (artist:someone), weight 1 = plain, else weight::name::."
+                  },
+                  "negativePrompt": {
+                    "type": "string",
+                    "description": "style_preset: negative text of the style."
+                  },
+                  "textNegativePrompt": {
+                    "type": "string",
+                    "description": "style_preset: negative text that keeps writing out of the image; prepare_recipe allowText leaves it out."
+                  },
+                  "params": {
+                    "type": "object",
+                    "properties": {
+                      "model": {
+                        "enum": [
+                          "nai-diffusion-5-full",
+                          "nai-diffusion-5-curated",
+                          "nai-diffusion-4-5-full",
+                          "nai-diffusion-4-5-curated",
+                          "nai-diffusion-4-full",
+                          "nai-diffusion-4-curated",
+                          "nai-diffusion-3",
+                          "nai-diffusion-furry-3"
+                        ]
+                      },
+                      "sampler": {
+                        "enum": [
+                          "k_euler_ancestral",
+                          "k_euler",
+                          "k_dpmpp_2m",
+                          "k_dpmpp_2m_sde",
+                          "k_dpmpp_sde",
+                          "k_dpmpp_2s_ancestral",
+                          "ddim_v3"
+                        ]
+                      },
+                      "noiseSchedule": {
+                        "enum": [
+                          "native",
+                          "karras",
+                          "exponential"
+                        ]
+                      },
+                      "steps": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50
+                      },
+                      "cfgScale": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 10
+                      },
+                      "cfgRescale": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "ucPreset": {
+                        "enum": [
+                          0,
+                          1,
+                          2,
+                          3
+                        ]
+                      },
+                      "qualityPreset": {
+                        "enum": [
+                          "standard",
+                          "light",
+                          "none"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          },
+          "image": {
+            "anyOf": [
+              {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "id",
+                  "revision"
+                ],
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "history",
+                      "study"
+                    ]
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S",
+                    "maxLength": 512
+                  },
+                  "revision": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "assetId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S",
+                    "maxLength": 512
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60
+              },
+              {
+                "type": "string",
+                "maxLength": 60
+              }
+            ]
+          },
+          "previewId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
               }
             ]
           },

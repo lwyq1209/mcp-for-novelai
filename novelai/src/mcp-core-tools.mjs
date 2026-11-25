@@ -18,7 +18,7 @@ import { materialToolAction } from './material-tools.mjs';
 import { MAX_QUEUE_ITEMS, QUEUE_HOST_METHODS, QUEUE_RESULT_PAGE, QUEUE_THUMBNAIL_EDGE, QUEUE_WAIT, QUEUE_WAIT_UNTIL, queueBatchResults, queueControlAction, waitForQueuedBatch } from './queue-control.mjs';
 import { RECIPE_TOOL_SPECS } from './recipe-tool-schemas.mjs';
 import { compactReadback, mcpHostRequestKey } from './recipe-queue.mjs';
-import { compactAssetList, compactAssetMutation, compactBatch, compactCollections, compactEnqueue, compactMaterialList, compactQueueList, compactQueueResult, compactTags, historyRecipeView } from './compact-results.mjs';
+import { compactAssetCreated, compactAssetList, compactAssetMutation, compactBatch, compactCollections, compactEnqueue, compactMaterialList, compactQueueList, compactQueueResult, compactTags, historyRecipeView } from './compact-results.mjs';
 import { studyToolAction } from './study-tools.mjs';
 import { queryTagDetails } from './tag-details.mjs';
 import { ASSET_LIBRARY_DESCRIPTION, assetLibraryFlatSchema, normalizeAssetLibraryRequest } from './asset-library-categories.mjs';
@@ -232,6 +232,9 @@ const materialStudies = core({
 const { detail: _detail, ...assetLibraryPublicProperties } = assetLibraryFlatSchema.properties;
 const assetLibraryPublicSchema = { ...assetLibraryFlatSchema, properties: assetLibraryPublicProperties };
 
+/** A request only a client with the style preset writes of issue #1 knows: create, the sample-image commands, an update of the structured fields. */
+const stylePresetWrite = request => request.action === 'create' || (request.action === 'mutate' && (['add-preview', 'label-preview', 'remove-preview'].includes(request.command)
+  || (request.command === 'update' && request.patch !== null && typeof request.patch === 'object' && ['artists', 'negativePrompt', 'textNegativePrompt', 'params'].some(key => key in request.patch))));
 const assetLibrary = core({
   // An agent's read has one answer per kind, so the public schema has no detail; the summary and full projections of
   // the response module stay reachable for its tests (wholeInputSchema).
@@ -262,6 +265,10 @@ const assetLibrary = core({
       // already validated as an argument error.
       if (error instanceof BridgeError && hostRequest.action === 'image' && hostRequest.kind === 'study' && ['invalid_argument', 'invalid_arguments'].includes(error.code))
         throw new BridgeError('host_outdated', 'The NovelAI client is older than this MCP server and cannot read imported-image (study) originals here. Fully rebuild and restart the client; until then view imported images with material_studies {action:"image", id}. Nothing was changed.', { hostCode: error.code });
+      // A client from before agents could write style presets (issue #1) has no create action, no sample-image commands
+      // and no structured style preset fields in its contract, and refuses the request this server already validated.
+      if (error instanceof BridgeError && stylePresetWrite(hostRequest) && ['invalid_argument', 'invalid_arguments'].includes(error.code) && /^Invalid library request:/.test(error.message ?? ''))
+        throw new BridgeError('host_outdated', 'The NovelAI client is older than this MCP server and cannot create style presets, write their artists, negative texts, settings or notes, or change their sample images. Fully rebuild and restart the client. Nothing was changed.', { hostCode: error.code });
       throw error;
     }
     // An agent's read of a history image is everything it was made with, once (historyRecipeView), and its lists are
@@ -271,7 +278,7 @@ const assetLibrary = core({
     // A change answers with the identities and new revisions; the collections with their ids and names.
     const changed = args.action === 'mutate' && !['delete', 'delete-archived'].includes(args.command);
     const result = wholeResults ? projected : recipeView ? historyRecipeView(projected) : args.action === 'list' ? compactAssetList(projected)
-      : changed ? compactAssetMutation(projected) : ['collections', 'create-collection'].includes(args.action) ? compactCollections(projected) : projected;
+      : changed ? compactAssetMutation(projected) : args.action === 'create' ? compactAssetCreated(projected) : ['collections', 'create-collection'].includes(args.action) ? compactCollections(projected) : projected;
     if (args.action === 'image') {
       const { data: _data, ...metadata } = result;
       return success(metadata, [imageBlock(result, 'Read the library entry again.')], roots);

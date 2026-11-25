@@ -48,3 +48,75 @@ test('MCP advertises the generated asset schema and returns bounded summaries',a
   assert.equal(oversized.isError,true);assert.equal(oversized.structuredContent.error.code,'asset_summary_too_large');assert.ok(Buffer.byteLength(oversized.content[0].text)<1024);
   assert.deepEqual(await ok({action:'create-collection',name:'雨窗书店'}),{method:'asset_library',args:{action:'create-collection',name:'雨窗书店'}});
 });
+
+// Issue #1: style presets written by an agent.
+test('asset_library writes style presets: create, the structured update fields and the sample-image commands are checked here and forwarded as they are', async t => {
+  const calls = [];
+  const stored = { kind: 'style_preset', id: 'preset-1', revision: 1, name: 'Ink', archived: false, createdAt: 'now', updatedAt: 'now', payload: { id: 'preset-1', name: 'Ink', prompt: 'ink', group: '', createdAt: 'now' } };
+  const bridge = { async call(method, args) { calls.push({ method, args }); return args.action === 'create' ? { item: stored, revision: 5 } : { items: [{ ...stored, revision: 2 }], revision: 6, ...(args.command === 'update' ? {} : { previews: [{ previewId: 'sample-1', name: 'bench.png', label: 'one character' }] }) }; } };
+  const artists = [{ name: 'artist:someone', weight: 1.2, enabled: true }, { name: 'artist:other', weight: -1.5, enabled: false }];
+  const params = { model: 'nai-diffusion-5-full', steps: 28, cfgScale: 5, cfgRescale: 0, sampler: 'k_euler_ancestral', noiseSchedule: 'karras', ucPreset: 0, qualityPreset: 'standard' };
+  const items = [{ kind: 'style_preset', id: 'preset-1', expectedRevision: 1 }];
+  const inputs = [
+    { action: 'create', kind: 'style_preset', patch: { name: 'Ink', group: 'Line', prompt: 'ink lineart', artists, negativePrompt: '3d', textNegativePrompt: 'text, speech bubble', params, notes: 'One character: Base only.' } },
+    { action: 'create', kind: 'style_preset', patch: { name: 'Bare' } },
+    { action: 'mutate', command: 'update', items, patch: { artists: [], params: { steps: 23 }, negativePrompt: '', textNegativePrompt: 'text', notes: 'n' } },
+    { action: 'mutate', command: 'add-preview', items, image: { kind: 'history', id: 'h1', revision: 1, assetId: 'path:abc' }, label: 'one character' },
+    { action: 'mutate', command: 'add-preview', items, image: { kind: 'study', id: '00000000-0000-4000-8000-000000000001', revision: 2 } },
+    { action: 'mutate', command: 'label-preview', items, previewId: 'sample-1', label: '' },
+    { action: 'mutate', command: 'remove-preview', items, previewId: 'sample-1' },
+  ];
+  // The agent's server (compact results): the new identity, the new revision, the samples by previewId.
+  const server = createNovelAiMcpServer({ bridgeClient: bridge }), client = new Client({ name: 'asset-style-preset-test', version: '1' });
+  const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(b); await client.connect(a);
+  t.after(async () => { await client.close(); await server.close(); });
+  const call = args => client.callTool({ name: 'asset_library', arguments: args });
+  const results = [];
+  for (const input of inputs) { const result = await call(input); assert.equal(result.isError, undefined, JSON.stringify(result.structuredContent)); results.push(result.structuredContent); }
+  assert.deepEqual(calls, inputs.map(args => ({ method: 'asset_library', args })));
+  assert.deepEqual(results[0], { item: { kind: 'style_preset', id: 'preset-1', revision: 1, name: 'Ink' }, revision: 5 });
+  assert.deepEqual(results[2], { items: [{ kind: 'style_preset', id: 'preset-1', revision: 2 }], revision: 6 });
+  assert.deepEqual(results[3], { items: [{ kind: 'style_preset', id: 'preset-1', revision: 2 }], revision: 6, previews: [{ previewId: 'sample-1', name: 'bench.png', label: 'one character' }] });
+  // Refused here, before the host: a field no style preset has, a value prepare_recipe would not take, another kind, a malformed image or selection.
+  const sent = calls.length;
+  for (const args of [
+    { action: 'create', kind: 'style_preset', patch: {} }, { action: 'create', kind: 'style_preset', patch: { name: 'x', suffixPrompt: 'y' } }, { action: 'create', kind: 'style_preset', patch: { name: 'x', previewImages: [] } },
+    { action: 'create', kind: 'style_preset' }, { action: 'create', kind: 'positive_preset', patch: { name: 'x' } }, { action: 'create', kind: 'style_preset', patch: { name: 'x' }, id: 'chosen' },
+    { action: 'create', kind: 'style_preset', patch: { name: 'x', artists: [{ name: 'artist:a', weight: 1 }] } }, { action: 'create', kind: 'style_preset', patch: { name: 'x', artists: [{ name: 'artist:a', weight: 1, enabled: true, raw: 'x' }] } },
+    { action: 'create', kind: 'style_preset', patch: { name: 'x', params: { steps: 51 } } }, { action: 'create', kind: 'style_preset', patch: { name: 'x', params: { noiseSchedule: 'linear' } } }, { action: 'create', kind: 'style_preset', patch: { name: 'x', params: { seed: 1 } } },
+    { action: 'mutate', command: 'update', items, patch: { params: { model: 'no-such-model' } } }, { action: 'mutate', command: 'update', items, patch: { artists: 'artist:a' } },
+    { action: 'mutate', command: 'add-preview', items }, { action: 'mutate', command: 'add-preview', items, image: { kind: 'style_preset', id: 'x', revision: 1 } }, { action: 'mutate', command: 'add-preview', items, image: { kind: 'history', id: 'h1', revision: 1, assetId: 'a', filePath: '/outside.png' } },
+    { action: 'mutate', command: 'add-preview', items, image: { kind: 'history', id: 'h1', revision: 1, assetId: 'a' }, label: 'x'.repeat(61) }, { action: 'mutate', command: 'add-preview', items: [...items, ...items], image: { kind: 'history', id: 'h1', revision: 1, assetId: 'a' } },
+    { action: 'mutate', command: 'add-preview', items: [{ kind: 'positive_preset', id: 'p', expectedRevision: 1 }], image: { kind: 'history', id: 'h1', revision: 1, assetId: 'a' } },
+    { action: 'mutate', command: 'label-preview', items, previewId: 'sample-1' }, { action: 'mutate', command: 'remove-preview', items }, { action: 'mutate', command: 'remove-preview', items, previewId: 'sample-1', label: 'x' },
+  ]) { const result = await call(args); assert.equal(result.isError, true, JSON.stringify(args)); assert.equal(result.structuredContent.error.code, 'invalid_arguments', JSON.stringify(args)); }
+  assert.equal(calls.length, sent, 'nothing invalid reached the host');
+  const tool = (await client.listTools()).tools.find(item => item.name === 'asset_library');
+  for (const action of ['create']) assert.ok(tool.inputSchema.properties.action.enum.includes(action));
+  for (const command of ['add-preview', 'label-preview', 'remove-preview']) assert.ok(tool.inputSchema.properties.command.enum.includes(command));
+  for (const text of [/artists \[\{name,weight,enabled\}\]/, /create \{kind:"style_preset",patch\}/, /add-preview/, /previewId/]) assert.match(tool.description, text);
+});
+
+test('asset_library style preset writes on an older client: its contract refuses the request this server validated, which is reported as host_outdated; other refusals pass as they are', async t => {
+  let reply;
+  const { call } = await mcp(t, { async call() { throw reply; } });
+  const { BridgeError } = await import('../src/bridge-client.mjs');
+  const items = [{ kind: 'style_preset', id: 'preset-1', expectedRevision: 1 }];
+  const writes = [
+    { action: 'create', kind: 'style_preset', patch: { name: 'Ink' } }, { action: 'mutate', command: 'update', items, patch: { artists: [] } }, { action: 'mutate', command: 'update', items, patch: { params: { steps: 28 } } },
+    { action: 'mutate', command: 'add-preview', items, image: { kind: 'study', id: 's', revision: 1 } }, { action: 'mutate', command: 'label-preview', items, previewId: 'a', label: 'x' }, { action: 'mutate', command: 'remove-preview', items, previewId: 'a' },
+  ];
+  reply = new BridgeError('invalid_argument', 'Invalid library request: data/action must be equal to constant, data must match a schema in anyOf');
+  for (const args of writes) {
+    const error = (await call(args)).structuredContent.error;
+    assert.equal(error.code, 'host_outdated', JSON.stringify(args));
+    assert.match(error.message, /older than this MCP server .* Nothing was changed\.$/);
+  }
+  // An update of fields every client knows keeps the client's own answer.
+  assert.equal((await call({ action: 'mutate', command: 'update', items, patch: { prompt: 'ink' } })).structuredContent.error.code, 'invalid_argument');
+  // A current client's own refusals of these writes are not rewritten.
+  reply = new BridgeError('invalid_argument', 'This style preset already has 6 sample images, the most it keeps; remove one first (remove-preview).');
+  assert.equal((await call(writes[3])).structuredContent.error.code, 'invalid_argument');
+  reply = new BridgeError('library_conflict', 'The item changed; read it again before saving.');
+  assert.equal((await call(writes[1])).structuredContent.error.code, 'library_conflict');
+});

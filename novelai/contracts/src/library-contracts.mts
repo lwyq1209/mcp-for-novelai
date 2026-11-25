@@ -267,7 +267,25 @@ export type AssetThumbnail = Static<typeof AssetThumbnailSchema>;
 const assetSelection = Type.Array(closed({kind:LibraryKindSchema,id:nonempty,expectedRevision:revision}),{minItems:1,maxItems:500});
 /** Recently Deleted entry identities (recently-deleted lists them). */
 const trashIds = Type.Array(Type.String({pattern:'^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$'}),{minItems:1,maxItems:500,uniqueItems:true});
-const assetUpdateDescription = 'Allowed update fields by kind: history: groupId only (existing history-group raw ID; never name or group); tag/combo/note: name, group, notes; study: name, notes; style_preset: name, group, prompt; positive_preset: name, prompt; prompt_chunk: name, content, updatedAt; reference_preset: name, group, strength (precise 0–5, V4.5 uses at most 1; vibe 0–1), infoExtracted, preciseType (character, character_mainoutfit, style, costume = outfit, character&style, character&style_anyoutfit; the outfit ones are V5-only), fidelity (V4.5 only), informationExtracted; artist_favorite: none. Note prose belongs in notes; do not invent fields. To collect history and notes together, create-collection then add-to-collection with its returned collectionId, not update.';
+/**
+ * What an agent writes of a style preset beside its name, group, prompt and notes (create and update). Stricter than
+ * the stored record: closed objects and the ranges prepare_recipe takes, so a typo is refused instead of kept.
+ */
+const stylePresetAuthoredFields = {
+  artists:optional(Type.Array(closed({name:Type.String({...nonempty,maxLength:200}),weight:Type.Number(),enabled:Type.Boolean()}),{maxItems:64,description:'style_preset: [{name, weight, enabled}]; name as written in a prompt (artist:someone), weight 1 = plain, else weight::name::.'})),
+  negativePrompt:optional(Type.String({description:'style_preset: negative text of the style.'})),
+  textNegativePrompt:optional(Type.String({description:'style_preset: negative text that keeps writing out of the image; prepare_recipe allowText leaves it out.'})),
+  params:optional(closed({
+    model:optional(GenerateParamsSchema.properties.model),sampler:optional(GenerateParamsSchema.properties.sampler),noiseSchedule:optional(values(['native','karras','exponential'])),
+    steps:optional(Type.Integer({minimum:1,maximum:50})),cfgScale:optional(Type.Number({minimum:0,maximum:10})),cfgRescale:optional(Type.Number({minimum:0,maximum:1})),
+    ucPreset:optional(GenerateParamsSchema.properties.ucPreset),qualityPreset:optional(GenerateParamsSchema.properties.qualityPreset),
+  })),
+};
+const oneStylePreset = Type.Array(closed({kind:Type.Literal('style_preset'),id:nonempty,expectedRevision:revision}),{minItems:1,maxItems:1});
+const previewLabel = Type.String({maxLength:60});
+/** A library image as the image action names it: a history original (assetId) or an imported image (no assetId). */
+const libraryImageIdentity = closed({kind:values(['history','study']),id:Type.String({...nonempty,maxLength:512}),revision,assetId:optional(Type.String({...nonempty,maxLength:512}))});
+const assetUpdateDescription = 'Allowed update fields by kind: history: groupId only (existing history-group raw ID; never name or group); tag/combo/note: name, group, notes; study: name, notes; style_preset: name, group, prompt, artists, negativePrompt, textNegativePrompt, params, notes (each one replaces the stored value as a whole); positive_preset: name, prompt; prompt_chunk: name, content, updatedAt; reference_preset: name, group, strength (precise 0–5, V4.5 uses at most 1; vibe 0–1), infoExtracted, preciseType (character, character_mainoutfit, style, costume = outfit, character&style, character&style_anyoutfit; the outfit ones are V5-only), fidelity (V4.5 only), informationExtracted; artist_favorite: none. Note prose belongs in notes; do not invent fields. To collect history and notes together, create-collection then add-to-collection with its returned collectionId, not update.';
 // Internal/manual list and read retain their original limits and complete records.
 const assetHostList = closed({action:Type.Literal('list'),query:optional(text),kinds:optional(Type.Array(LibraryKindSchema,{maxItems:10,uniqueItems:true})),collectionId:optional(nonempty),includeArchived:optional(Type.Boolean()),offset:optional(integer),limit:optional(Type.Integer({minimum:1,maximum:100})),sortBy:optional(values(['updatedAt','createdAt','name'])),sortDirection:optional(values(['asc','desc'])),historyTags:optional(Type.Array(Type.String({minLength:1,maxLength:256}),{maxItems:30})),historyTagMatch:optional(values(['all','any'])),historyTagSources:optional(Type.Array(HistoryTagSourceSchema,{minItems:1,maxItems:4,uniqueItems:true})),
   // History images a queued batch saved (2026-10-14, issue #1): queueOrigin.requestKey (namespaced host key) / batchId.
@@ -288,10 +306,18 @@ const assetRequestVariants = [
     notes:optional(Type.String({description:'Note prose for tag/combo/note/study. Keep user feedback and AI observations attributed; do not add invented fields.'})),
     groupId:optional(Type.String({description:'History only: existing history-group raw ID from collections; empty string clears that history group. Never a user collection name or encoded user collectionId.'})),
     prompt:optional(text),content:optional(text),updatedAt:optional(text),
+    ...stylePresetAuthoredFields,
     strength:optional(Type.Number({minimum:0,maximum:5})),infoExtracted:optional(Type.Number({minimum:0,maximum:1})),
     preciseType:optional(preciseReferenceType()),fidelity:optional(Type.Number({minimum:0,maximum:1})),informationExtracted:optional(Type.Number({minimum:0,maximum:1})),
   }, {additionalProperties:false,description:assetUpdateDescription})}),
   closed({action:Type.Literal('mutate'),command:values(['add-to-collection','remove-from-collection']),items:assetSelection,collectionId:nonempty}),
+  // Style presets by agents (issue #1): create one; give it sample images copied from library images, label or remove them.
+  closed({action:Type.Literal('create'),kind:Type.Literal('style_preset'),patch:closed({
+    name:Type.String({...nonempty,maxLength:512}),group:optional(text),prompt:optional(text),notes:optional(text),...stylePresetAuthoredFields,
+  })}),
+  closed({action:Type.Literal('mutate'),command:Type.Literal('add-preview'),items:oneStylePreset,image:libraryImageIdentity,label:optional(previewLabel)}),
+  closed({action:Type.Literal('mutate'),command:Type.Literal('label-preview'),items:oneStylePreset,previewId:nonempty,label:previewLabel}),
+  closed({action:Type.Literal('mutate'),command:Type.Literal('remove-preview'),items:oneStylePreset,previewId:nonempty}),
   // Recently Deleted (step 3c, 2026-11-02): delete moves items, or one user collection, there even when they are
   // referenced (the receipt lists the effects; preview:true only lists them); entries are purged automatically after
   // 30 days, restore brings them back, purge removes them for good.

@@ -137,6 +137,25 @@ The library as the app shows it, without the canvas. Items are identified by `ki
 - `collections` (each by `id` and `name`), `create-collection`, and `mutate` with `archive`, `update` (only the
   fields each kind allows), `add-to-collection` and `remove-from-collection`. A `mutate` answers with each item's
   `kind`, `id` and new `revision`.
+- **Style presets** can be written in full:
+  - `create` `{kind: "style_preset", patch}` makes a new one from the fields below (`name` is required) and answers
+    with its `id` and `revision`. Every call makes another preset, so do not repeat it to be sure.
+  - `mutate` `update` takes, beside `name`, `group` and `prompt`: `artists` `[{name, weight, enabled}]` (the name as
+    it is written in a prompt, for example `artist:someone`; weight 1 is written plain, any other as
+    `weight::name::`, negative weights included; at most 64), `negativePrompt` (negative text of the style),
+    `textNegativePrompt` (negative text that keeps writing out of the image, which `prepare_recipe` leaves out with
+    `allowText`), `params` (`model`, `steps` 1–50, `cfgScale` 0–10, `cfgRescale` 0–1, `sampler`, `noiseSchedule`,
+    `ucPreset`, `qualityPreset`: defaults for a recipe that names the preset) and `notes`. Each field replaces the
+    stored value as a whole: to change one setting, send all of `params`; an empty value clears a field.
+  - `mutate` `add-preview` `{items: [the preset], image, label?}` copies one library image into the preset as a
+    **sample image**: a history original `{kind: "history", id, revision, assetId}` or an imported image
+    `{kind: "study", id, revision}` (PNG, JPEG or WebP). The copy is the preset's own, so the sample stays when its
+    source is deleted. A preset keeps at most six; `label` (at most 60 characters) says what a sample shows, for
+    example the scene of a benchmark image. `label-preview` `{items, previewId, label}` changes a label (an empty one
+    removes it) and `remove-preview` `{items, previewId}` takes a sample off the preset. Each answers with the preset's
+    new `revision` and its samples as `previews` `[{previewId, name, label?}]`; `read` lists them as `previewImages`.
+  - How a recipe uses a preset: [Style presets in a recipe](#style-presets-in-a-recipe). An app older than these
+    writes answers `host_outdated`.
 - `mutate` `delete` moves items to **Recently deleted**; `delete-archived` deletes archived items (500 per call).
   `preview: true` lists the effects without changing anything: tag covers made from a deleted image are cleared,
   collection memberships are removed, recipes that use a deleted image as their source fail at enqueue until it is
@@ -375,7 +394,8 @@ recommended sampling settings. `stylePresetId` writes one into a `prepare_recipe
 { "mode": "t2i", "stylePresetId": "…", "positivePrompt": "1girl, garden", "seed": null, "width": 832, "height": 1216 }
 ```
 
-- The id comes from `asset_library` (`list` with `kinds: ["style_preset"]`; `read` shows the whole preset).
+- The id comes from `asset_library` (`list` with `kinds: ["style_preset"]`; `read` shows the whole preset; `create`
+  and `update` write one, see [`asset_library`](#asset_library)).
 - **Style**: the preset's enabled artists, then its `prompt`, then the call's own `stylePrompt` if it writes one,
   joined with `, `. An artist of weight 1 is written as its name, any other weight as `weight::name::` (negative
   weights too, for example `-1.5::artist:someone::`).
