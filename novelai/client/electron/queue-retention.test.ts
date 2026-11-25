@@ -25,10 +25,14 @@ const origin = (capturedAt: number): CanvasOrigin => ({ workspaceId: 'novelai-wi
 
 async function runtime() { const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'nai-queue-retention-'))); cleanups.push(() => fs.rm(dir, { recursive: true, force: true })); return dir; }
 type Host = Awaited<ReturnType<typeof host>>;
-/** `outcome` decides each image: succeeded at once (default), unknown (the batch ends partial) or held (busy). */
-async function host({ runtimeDir: given, days = 30 as number | null }: { runtimeDir?: string; days?: number | null } = {}) {
+/**
+ * `outcome` decides each image: succeeded at once (default), unknown (the batch ends partial) or held (busy).
+ * `busy`: the generator is busy from the start, so a host over a runtime that already holds a queued batch sends
+ * nothing of it until the test sets state.busy to false.
+ */
+async function host({ runtimeDir: given, days = 30 as number | null, busy = false }: { runtimeDir?: string; days?: number | null; busy?: boolean } = {}) {
   const runtimeDir = given ?? await runtime();
-  const state = { busy: false, clock: Date.now(), submitted: 0, days, outcome: 'succeeded' as 'succeeded' | 'unknown', removed: [] as string[] };
+  const state = { busy, clock: Date.now(), submitted: 0, days, outcome: 'succeeded' as 'succeeded' | 'unknown', removed: [] as string[] };
   const generation = {
     lookup: async () => null, read: async () => null, cancel: async () => null, subscribe: () => () => {},
     async submit(args: any) {
@@ -323,7 +327,10 @@ describe('queue retention: interruptions, restarts and concurrent calls', () => 
       h.state.busy = true; const live = await h.enqueue('mcp-live', [item(await h.put('live'), 1)]);
       const file = path.join(h.runtimeDir, QUEUE_TOMBSTONE_FILE.directory, QUEUE_TOMBSTONE_FILE.name);
       await damage(h, file);
-      const damaged = await host({ runtimeDir: h.runtimeDir }), recipe = await damaged.put('after damage');
+      // The app after a restart: its generator is busy too, so the live batch it loads stays queued while the answers
+      // are checked. (An idle one sends the live image whenever its worker gets to it, which made the count below
+      // depend on the machine's speed.)
+      const damaged = await host({ runtimeDir: h.runtimeDir, busy: true }), recipe = await damaged.put('after damage');
       for (const key of ['mcp-one', 'mcp-two', 'mcp-brand-new']) await expect(damaged.service.lookup_queue_request({ requestKey: key }), `${name}: ${key}`).rejects.toMatchObject({ code: 'queue_storage_failed', details: { reason: 'cleaned_records_unreadable' } });
       await expect(damaged.enqueue('mcp-brand-new', [item(recipe, 1)]), name).rejects.toMatchObject({ code: 'queue_storage_failed' });
       await expect(damaged.enqueue('mcp-one', [item(one.recipe, 10), item(one.recipe, 11)]), name).rejects.toMatchObject({ code: 'queue_storage_failed' });
@@ -332,7 +339,12 @@ describe('queue retention: interruptions, restarts and concurrent calls', () => 
       expect(await damaged.service.lookup_queue_request({ requestKey: 'mcp-live' }), name).toMatchObject({ status: 'accepted', batch: { batchId: live.batchId } });
       expect(await damaged.service.runRetention(), name).toMatchObject({ skipped: 'cleaned_records_unreadable' });
       expect(damaged.service.retentionStatus().records, name).toMatchObject({ state: 'broken' });
-      expect(damaged.state.submitted + h.state.submitted, name).toBe(4);
+      // Nothing was sent for the refused requests: only the four images of the two ended batches.
+      expect([h.state.submitted, damaged.state.submitted], name).toEqual([4, 0]);
+      // The live batch does not depend on the damaged records: once the generator is free it runs, once.
+      damaged.state.busy = false;
+      await damaged.settled(live.batchId);
+      expect([h.state.submitted, damaged.state.submitted], name).toEqual([4, 1]);
       await damaged.batch.dispose(); await h.batch.dispose();
     }
   });
