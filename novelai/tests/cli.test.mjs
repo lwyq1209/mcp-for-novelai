@@ -232,7 +232,7 @@ test('exit codes and envelopes: usage 2, tool error 1 (scrubbed by the server), 
   const failed = await run(['--data-dir', data, 'queue', 'list'], { cwd: base });
   assert.equal(failed.code, EXIT.toolError, failed.stdout);
   assert.equal(failed.json.error.code, 'queue_storage_failed');
-  assert.ok(!failed.stdout.includes(base) && !failed.stdout.includes('abcdef123456'), failed.stdout);
+  assert.ok(!failed.json.error.message.includes(base) && !failed.stdout.includes('secret dir') && !failed.stdout.includes('abcdef123456'), failed.stdout);
   assert.equal(failed.stderr, '');
 });
 
@@ -252,7 +252,7 @@ test('inputs: stdin with -, @file, size limit and invalid JSON are refused befor
   await writeFile(join(base, 'secret.json'), 'sk-THE-SECRET-VALUE');
   const secret = await run(['--data-dir', data, 'call', 'list_queue', `@${join(base, 'secret.json')}`], { cwd: base });
   assert.equal(secret.json.error.code, 'invalid_json');
-  assert.ok(!secret.stdout.includes('THE-SECRET') && secret.stdout.includes(join(base, 'secret.json')), secret.stdout);
+  assert.ok(!secret.stdout.includes('THE-SECRET') && secret.json.error.message.includes(join(base, 'secret.json')), secret.stdout);
   assert.match(secret.json.error.message, /not valid JSON( at (line \d+, column \d+|position \d+))?\. Nothing was sent\.$/);
   const empty = await run(['--data-dir', data, '--image-dir', '', 'queue', 'list'], { cwd: base });
   assert.equal(empty.code, EXIT.usage); assert.match(empty.json.error.message, /--image-dir needs a folder/);
