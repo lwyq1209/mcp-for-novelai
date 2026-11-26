@@ -79,8 +79,11 @@ export function createNovelAiMcpServer(options = {}) {
 }
 
 /** True when this module is the started script: `node src/mcp.mjs`, or the single-file bundle run with Node or
- * with Electron as Node (ELECTRON_RUN_AS_NODE=1). Real paths are compared, so a symlinked path also starts it. */
+ * with Electron as Node (ELECTRON_RUN_AS_NODE=1). Real paths are compared, so a symlinked path also starts it. The
+ * command line (src/cli.mjs) imports this module to run the same server in its own process and marks that first
+ * (Symbol.for('novelai.mcp.embedded')): its one-file bundle is then the started script, yet no stdio server starts. */
 function isMainModule() {
+  if (globalThis[Symbol.for('novelai.mcp.embedded')] === true) return false;
   if (!process.argv[1]) return false;
   const real = file => { try { return realpathSync(file); } catch { return resolve(file); } };
   return real(process.argv[1]) === real(fileURLToPath(import.meta.url));

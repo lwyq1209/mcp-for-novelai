@@ -12,6 +12,9 @@
 //     in scripts/bundles.mjs; THIRD_PARTY_NOTICES.md lists what they contain). electron-builder ships
 //     it as resources/mcp/novelai-mcp.mjs; it runs with the app's own Electron as Node:
 //     ELECTRON_RUN_AS_NODE=1 <app executable> <resources>/mcp/novelai-mcp.mjs
+//     and the command line `nai` (../src/cli.mjs) into dist-mcp/novelai-cli.mjs, shipped beside it as
+//     resources/mcp/novelai-cli.mjs and started by the launcher bin/nai (bin/nai.cmd on Windows), shipped as
+//     resources/bin/; in a build from source bin/nai runs it with the client's development Electron;
 //  5. only with NAI_UPDATE_TEST_BUILD=1 (update rehearsals: dev-tools/update-rehearsal.mjs and the CI rehearsal job):
 //     writes dist-electron/update-test-mode.json, which makes the app read its update source, key and certificate from
 //     NAI_UPDATE_TEST_* variables (electron/update/source.ts). Release builds never set it, and
@@ -39,6 +42,7 @@ const bundles = bundleDefinitions(client);
 try {
   await build(bundles.tagDetails);
   await build(bundles.mcp);
+  await build(bundles.cli);
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);
   process.exit(1);
@@ -47,5 +51,5 @@ if (process.env.NAI_UPDATE_TEST_BUILD === '1') {
   await writeFile(path.join(client, 'dist-electron', 'update-test-mode.json'), `${JSON.stringify({ updateTestBuild: true, note: 'Update rehearsal build: reads NAI_UPDATE_TEST_* (electron/update/source.ts). Never released.' }, null, 2)}\n`);
   console.log('Update rehearsal build: dist-electron/update-test-mode.json written (never release this build).');
 }
-const size = (await stat(path.join(client, 'dist-mcp', 'novelai-mcp.mjs'))).size;
-console.log(`MCP bundle: dist-mcp/novelai-mcp.mjs (${(size / 1024).toFixed(0)} KiB); tag modules: dist-electron/vendor/tag-details.cjs`);
+const size = async file => `${((await stat(path.join(client, 'dist-mcp', file))).size / 1024).toFixed(0)} KiB`;
+console.log(`MCP bundle: dist-mcp/novelai-mcp.mjs (${await size('novelai-mcp.mjs')}); command line: dist-mcp/novelai-cli.mjs (${await size('novelai-cli.mjs')}), started by bin/nai; tag modules: dist-electron/vendor/tag-details.cjs`);

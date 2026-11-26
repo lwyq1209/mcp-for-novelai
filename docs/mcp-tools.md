@@ -35,6 +35,9 @@ authoritative text; this page explains them for people.
 - The app records which agent called (the MCP client's own name and version from `initialize`), the tool and the
   time, never the arguments. Settings › MCP access shows the recent connections; the queue shows which agent put
   each batch in.
+- The same tools also run from a terminal through `nai`, the command line that ships with the app
+  (`resources/bin/nai`): it creates this server in its own process and calls it as an MCP client, so every check and
+  answer on this page applies to it unchanged. See [The nai command line](cli.md).
 
 ## When the app is not running
 

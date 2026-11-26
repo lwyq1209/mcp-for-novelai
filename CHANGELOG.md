@@ -6,6 +6,18 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
 
 ### Added
 
+- **`nai`, a command line for agents that work in a terminal**, shipped with the app (`resources/bin/nai`, `nai.cmd` on
+  Windows; link it into a folder on your `PATH`, or on Windows put its folder on `PATH`). It runs the MCP server's own tools in its own process, with the same checks,
+  answers and automatic start of the app, prints one JSON document per command and writes images to files instead of
+  printing them. Long prompts stay in files: `nai asset recipe <historyId> -o draft.json` writes an image's settings as
+  a recipe, the agent edits the file, `nai prepare -f draft.json -o prepared.json` freezes it and `nai enqueue -f
+  prepared.json --key <key> --wait done` generates and waits in one command. Commands for tags, the library, imported
+  images, the queue and the canvas, and `nai call <tool>` for everything else; `nai skill` prints the agent guide of
+  the installed version, and `novelai/skills/novelai-cli/SKILL.md` is a short skill that points agents to it. The app
+  lists its calls as `nai-cli` under Settings › MCP access. Local files to import are copied into the inbox for you
+  (`nai study import <file>…`). The project root is `--project`, `NOVELAI_PROJECT_ROOT`, the nearest folder above with
+  `novelai/library-inbox` or `novelai/study-inbox` or whose `.mcp.json` / `.pi/mcp.json` sets the novelai server's
+  `NOVELAI_PROJECT_ROOT`, or the data folder's workspace. See [The nai command line](docs/cli.md).
 - `prepare_recipe` `stylePresetId`: agents use a style preset of the library by its id instead of copying its text.
   The preset's style (its enabled artists and its prompt) comes before the call's own `stylePrompt`, its negative text
   before the call's own `negativePrompt`, and a sampling setting it recommends is used where the call has none; with a

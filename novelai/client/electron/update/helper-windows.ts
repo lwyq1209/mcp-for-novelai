@@ -8,10 +8,10 @@
 //
 // Steps: write helper-pid; wait for the app to exit (never kills it; at most ExitTimeout s, else nothing changes),
 // stopping at once, changing nothing, when the app withdraws the update meanwhile (its state folder or pending.json is
-// gone: a batch arrived); wait until no other app of this installation runs (its main processes, not its MCP servers or
-// Chromium's helper processes; at most OthersTimeout s): another copy that keeps running — an app with another data
+// gone: a batch arrived); wait until no other app of this installation runs (its main processes, not its MCP servers, the
+// nai command line or Chromium's helper processes; at most OthersTimeout s): another copy that keeps running — an app with another data
 // folder — makes it give up, because the installer would end it (it ends every process running from the installation
-// folder; MCP servers of agents are ended too, which only breaks a call under way: the app no longer accepts work by
+// folder; MCP servers and nai commands of agents are ended too, which only breaks a call under way: the app no longer accepts work by
 // then); check the installer's SHA-256 on disk once more; run it silently into the same folder (/S --updated
 // /D=<folder>: the same per-user installation, shortcuts kept); check that the installed executable now has the new
 // version (its FileVersion); start it (Win32_Process.Create, outside any job, with this helper's environment — what the
@@ -90,13 +90,13 @@ while (Test-Alive $AppPid) {
 Write-Log 'the app has quit'
 if (Test-Withdrawn) { exit 0 }
 
-# The main processes of apps running from this installation (not MCP servers, which run the bundle as Node, and not
+# The main processes of apps running from this installation (not MCP servers or the nai command line, which run their bundle as Node, and not
 # Chromium's helper processes).
 function Get-OtherApps {
   $prefix = $InstallDir.TrimEnd('\') + '\'
   return @(Get-CimInstance -ClassName Win32_Process -ErrorAction SilentlyContinue | Where-Object {
     $_.ExecutablePath -and $_.ExecutablePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -and $_.CommandLine -and
-    ($_.CommandLine -notmatch '--type=') -and ($_.CommandLine -notmatch 'novelai-mcp\.mjs') -and $_.ProcessId -ne $PID
+    ($_.CommandLine -notmatch '--type=') -and ($_.CommandLine -notmatch 'novelai-(mcp|cli)\.mjs') -and $_.ProcessId -ne $PID
   })
 }
 # Its renderer and GPU processes end right after it; an app reopened meanwhile quits by itself (it sees the update).

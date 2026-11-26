@@ -10,7 +10,7 @@
 //      scripts/fetch-libvips-licenses.mjs (so nothing here depends on which platform package is installed), and the
 //      Rust crates and Rust standard library compiled into librsvg, vendored there by
 //      scripts/fetch-rsvg-crate-licenses.mjs;
-//   4. the packages esbuild puts into the MCP server bundle (scripts/bundles.mjs, read from its metafile);
+//   4. the packages esbuild puts into the MCP server and command-line bundles (scripts/bundles.mjs, read from their metafiles);
 //   5. the small runtime helpers the build tools emit into the bundles;
 //   6. data compiled into the app, with its source as far as it is known.
 // License texts come from each installed package (its LICENSE/COPYING/NOTICE file, or the License section of
@@ -163,7 +163,10 @@ export async function rendererPackageDirectories() {
   return [...directories].sort();
 }
 
-/** Packages esbuild puts into the MCP server and tag-module bundles, read from their metafiles. */
+/** Whether two package lists name the same packages and versions. */
+const sameSet = (a, b) => a.length === b.length && a.every((item, index) => item.name === b[index].name && item.version === b[index].version);
+
+/** Packages esbuild puts into the MCP server, command-line and tag-module bundles, read from their metafiles. */
 async function bundledPackages() {
   const result = {};
   for (const [key, options] of Object.entries(bundleDefinitions(client))) {
@@ -360,7 +363,7 @@ own license files at the end of this file (§7); identical texts are printed onc
 1. Electron (application runtime)
 2. Client runtime dependencies (\`app.asar/node_modules\` and the renderer bundle \`dist/assets\`)
 3. Image processing binaries (sharp and libvips, platform-specific)
-4. MCP server bundle (\`resources/mcp/novelai-mcp.mjs\`)
+4. MCP server bundle (\`resources/mcp/novelai-mcp.mjs\`, also the command line \`resources/mcp/novelai-cli.mjs\`)
 5. Build tool runtime code
 6. Data
 7. License texts`);
@@ -569,7 +572,11 @@ texts of its own, so this section is its notice. ${bundles.mcp.length} packages:
 ${packageTable(bundles.mcp, registry)}
 
 The tag-module bundle \`dist-electron/vendor/tag-details.cjs\` (built from \`novelai/src/tag-details.mjs\`) contains
-${bundles.tagDetails.length ? `these packages:\n\n${packageTable(bundles.tagDetails, registry)}` : 'only this project\'s own code.'}`);
+${bundles.tagDetails.length ? `these packages:\n\n${packageTable(bundles.tagDetails, registry)}` : 'only this project\'s own code.'}
+
+The command-line bundle \`resources/mcp/novelai-cli.mjs\` (built from \`novelai/src/cli.mjs\`; the launchers
+\`resources/bin/nai\` and \`resources/bin/nai.cmd\` are this project's own scripts) contains
+${sameSet(bundles.cli, bundles.mcp) ? 'the same packages as the MCP server bundle.' : `these packages:\n\n${packageTable(bundles.cli, registry)}`}`);
 
   out.push(`## 5. Build tool runtime code
 

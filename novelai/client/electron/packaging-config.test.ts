@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -77,5 +77,12 @@ describe("packaging configuration", () => {
   it("ships the MCP bundle next to app.asar, where ELECTRON_RUN_AS_NODE=1 <app executable> can run it", () => {
     expect(build.extraResources).toEqual(expect.arrayContaining([{ from: "dist-mcp", to: "mcp", filter: ["novelai-mcp.mjs"] }]));
     expect(build.files).toEqual(expect.arrayContaining(["dist/**", "dist-electron/**", "package.json"]));
+  });
+
+  it("ships the nai command line beside the MCP bundle (where the app recognizes it as its own) and its launchers in resources/bin", () => {
+    expect(build.extraResources).toEqual(expect.arrayContaining([{ from: "dist-mcp", to: "mcp", filter: ["novelai-cli.mjs"] }, { from: "bin", to: "bin", filter: ["nai", "nai.cmd"] }]));
+    // The POSIX launcher keeps its execute bit (electron-builder copies the mode); the Windows one keeps CRLF.
+    if (process.platform !== "win32") expect(statSync("bin/nai").mode & 0o111).not.toBe(0);
+    expect(readFileSync("bin/nai.cmd", "latin1")).toMatch(/^@echo off\r\n/);
   });
 });

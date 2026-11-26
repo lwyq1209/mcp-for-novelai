@@ -199,6 +199,11 @@ NOVELAI_DATA_DIR = "<data folder>"
 文件里已有 `mcpServers`（或其它 `[mcp_servers.…]`）时，只加 `novelai` 这一项。「设置 › MCP 接入 › 高级」还给出了
 用你自己的 Node 从源码运行 MCP 服务的命令，以及 Agent 收件箱文件夹的位置。
 
+**在终端里用**：能跑命令的 Agent 也可以通过随应用分发的命令行 `nai` 使用同样的工具（macOS：
+`ln -s "/Applications/MCP for NovelAI.app/Contents/Resources/bin/nai" ~/.local/bin/nai`）。配方放在 Agent 可以直接编辑
+的文件里，结果是 stdout 上的 JSON，图片写成文件；`nai skill` 输出给 Agent 的使用指南。详见
+[nai 命令行](docs/cli.md)（英文）。
+
 ## 数据与隐私
 
 | 内容 | 位置 |
@@ -253,6 +258,7 @@ NOVELAI_DATA_DIR = "<data folder>"
 ## 文档
 
 - [MCP 工具参考](docs/mcp-tools.md)：每个工具、requestKey、队列、保留期、项目
+- [nai 命令行](docs/cli.md)：在终端里使用同样的工具、配方文件、图片落盘
 - [更新](docs/updates.md)：应用内更新、验证发布、威胁模型
 - [排障](docs/troubleshooting.md)：错误码与处理办法
 - [构建与开发](docs/building.md)：从源码运行、测试、开发工具

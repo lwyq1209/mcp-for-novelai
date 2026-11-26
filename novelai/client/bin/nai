@@ -1,0 +1,67 @@
+#!/bin/sh
+# nai: the command line of MCP for NovelAI (novelai/src/cli.mjs; `nai --help`, `nai skill`).
+#
+# Shipped as <resources>/bin/nai of the app (macOS: MCP for NovelAI.app/Contents/Resources/bin/nai) and kept as
+# novelai/client/bin/nai in a source checkout. It may be linked from a folder on PATH: it follows the links to its own
+# file, then runs the command-line bundle that belongs to it with the executable that belongs to it as Node:
+#   app:    <resources>/mcp/novelai-cli.mjs with the app's executable
+#           (macOS Contents/MacOS/<CFBundleExecutable>; Windows, from Git Bash or MSYS, <install folder>/MCP for NovelAI.exe,
+#           the productName of novelai/client/package.json; Linux <install folder>/mcp-for-novelai, its package name)
+#   source: <client>/dist-mcp/novelai-cli.mjs (npm run build) with the client's development Electron
+#           (node_modules/electron/dist/<path.txt>)
+# ELECTRON_RUN_AS_NODE=1 is set for that one process only (nai removes it from its own environment at once).
+fail() {
+  printf '{"ok":false,"error":{"code":"%s","message":"%s"}}\n' "$1" "$2"
+  exit 4
+}
+
+self=$0
+case $self in
+  */*) ;;
+  *)
+    # `sh nai` in its own folder names the file without a folder; otherwise it was found on PATH.
+    if [ -f "$self" ]; then self=./$self
+    else self=$(command -v -- "$self") || fail nai_not_found 'nai cannot find its own file.'
+    fi ;;
+esac
+# Follow every link to the launcher file itself (relative links are relative to the folder of the link).
+while [ -L "$self" ]; do
+  target=$(readlink "$self") || fail nai_not_found 'nai cannot read the link it was started through.'
+  case $target in
+    /*) self=$target ;;
+    *) self=$(dirname "$self")/$target ;;
+  esac
+done
+# CDPATH must not redirect the cd (it would also print the folder).
+bin=$(CDPATH= cd -P -- "$(dirname -- "$self")" && pwd -P) || fail nai_not_found 'nai cannot find its own folder.'
+base=$(dirname "$bin")
+
+if [ -f "$base/mcp/novelai-cli.mjs" ]; then
+  script=$base/mcp/novelai-cli.mjs
+  case $base in
+    */Contents/Resources)
+      contents=$(dirname "$base")
+      name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$contents/Info.plist" 2>/dev/null) || name=
+      [ -n "$name" ] || name='MCP for NovelAI'
+      exe=$contents/MacOS/$name
+      ;;
+    *)
+      install=$(dirname "$base")
+      if [ -f "$install/MCP for NovelAI.exe" ]; then exe="$install/MCP for NovelAI.exe"
+      else exe=$install/mcp-for-novelai
+      fi
+      ;;
+  esac
+elif [ -f "$base/dist-mcp/novelai-cli.mjs" ]; then
+  script=$base/dist-mcp/novelai-cli.mjs
+  electron=$(cat "$base/node_modules/electron/path.txt" 2>/dev/null) || electron=
+  [ -n "$electron" ] || fail nai_runtime_missing 'The client has no Electron installed: run npm ci and node node_modules/electron/install.js in novelai/client.'
+  exe=$base/node_modules/electron/dist/$electron
+elif [ -f "$base/package.json" ] && [ -d "$base/electron" ]; then
+  fail nai_not_built 'This source checkout has no built command line: run npm --prefix novelai/client run build.'
+else
+  fail nai_not_found 'nai does not stand in an app or a client checkout (expected ../mcp/novelai-cli.mjs or ../dist-mcp/novelai-cli.mjs next to its bin folder).'
+fi
+[ -x "$exe" ] || fail nai_runtime_missing 'The executable that runs nai is missing.'
+
+ELECTRON_RUN_AS_NODE=1 exec "$exe" "$script" "$@"

@@ -103,6 +103,21 @@
         ]
       },
       {
+        "from": "dist-mcp",
+        "to": "mcp",
+        "filter": [
+          "novelai-cli.mjs"
+        ]
+      },
+      {
+        "from": "bin",
+        "to": "bin",
+        "filter": [
+          "nai",
+          "nai.cmd"
+        ]
+      },
+      {
         "from": "../../LICENSE",
         "to": "LICENSE"
       },

@@ -11,7 +11,7 @@ own license files at the end of this file (§7); identical texts are printed onc
 1. Electron (application runtime)
 2. Client runtime dependencies (`app.asar/node_modules` and the renderer bundle `dist/assets`)
 3. Image processing binaries (sharp and libvips, platform-specific)
-4. MCP server bundle (`resources/mcp/novelai-mcp.mjs`)
+4. MCP server bundle (`resources/mcp/novelai-mcp.mjs`, also the command line `resources/mcp/novelai-cli.mjs`)
 5. Build tool runtime code
 6. Data
 7. License texts
@@ -12651,6 +12651,10 @@ texts of its own, so this section is its notice. 8 packages:
 
 The tag-module bundle `dist-electron/vendor/tag-details.cjs` (built from `novelai/src/tag-details.mjs`) contains
 only this project's own code.
+
+The command-line bundle `resources/mcp/novelai-cli.mjs` (built from `novelai/src/cli.mjs`; the launchers
+`resources/bin/nai` and `resources/bin/nai.cmd` are this project's own scripts) contains
+the same packages as the MCP server bundle.
 
 ## 5. Build tool runtime code
 

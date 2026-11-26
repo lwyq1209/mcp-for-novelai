@@ -62,6 +62,11 @@ the checkout's Electron as Node and names the data folder as `NOVELAI_DATA_DIR`.
 same path, so the configuration keeps working. Settings › MCP access › Advanced also shows a command that runs the
 server from source with your own Node (`node novelai/src/mcp.mjs`).
 
+The build also makes the command line `nai` (`novelai/client/dist-mcp/novelai-cli.mjs`, from `novelai/src/cli.mjs`).
+`novelai/client/bin/nai` (`nai.cmd` on Windows) runs it with the checkout's Electron as Node, also through a link from
+a folder on `PATH`; add `--data-dir <folder>` (or set `NOVELAI_DATA_DIR`) to use a test data folder. `node
+novelai/src/cli.mjs` runs it from source with your own Node. See [The nai command line](cli.md).
+
 ## Optional Chinese tag dictionary
 
 Searching tags with a Chinese word (the library's tag search and `material_library` `search_tags`) uses an optional
@@ -86,6 +91,9 @@ data folder (`NOVELAI_DATA_DIR` applies). Restart the app afterwards.
 | `novelai/client/dev-tools/` | Tools for isolated test clients, a fake NovelAI service and sample libraries |
 | `novelai/client/scripts/` | Build, icon and third-party-notice scripts |
 | `novelai/src/` | The MCP server (`mcp.mjs`: 11 core tools in `mcp-core-tools.mjs`, 7 canvas tools in `mcp-canvas-tools.mjs`) |
+| `novelai/src/cli*.mjs` | The command line `nai` (`cli.mjs`; it runs the server of `mcp.mjs` as an in-process MCP client) |
+| `novelai/client/bin/` | The `nai` launchers (`nai`, `nai.cmd`), shipped as `resources/bin/` |
+| `novelai/skills/novelai-cli/` | A short agent skill that points agents at `nai skill` |
 | `novelai/contracts/` | TypeBox sources of the library contracts and the JSON schemas generated from them |
 | `novelai/tests/` | Tests of the MCP server (`node --test`) |
 | `novelai/scripts/` | The source launcher (`start-client.mjs`), contract build, tag dictionary installer |
@@ -106,6 +114,11 @@ data folder (`NOVELAI_DATA_DIR` applies). Restart the app afterwards.
   `open -n -g -a …/Electron.app`). A server run with your own Node (`node novelai/src/mcp.mjs`) never starts anything.
   Test processes never start the app (`NODE_TEST_CONTEXT`, `VITEST`, `tests/run-tests.mjs`), and every test, the
   dev-tools MCP caller and the release check set `NOVELAI_MCP_AUTOSTART=0` for the servers they run.
+- The command line (`novelai/src/cli.mjs`, bundled into `dist-mcp/novelai-cli.mjs` and shipped as
+  `resources/mcp/novelai-cli.mjs` beside the server) decides the data folder and project root first, then creates the
+  same server in its own process and calls it over an in-memory MCP connection: the same checks, host methods,
+  answers and automatic start (the launcher `resources/bin/nai` runs it with the app's executable as Node, so the app
+  recognizes it as its own). It writes images to files instead of printing them.
 - The NovelAI token stays in the main process; it never crosses the bridge or appears in tool results.
 - The library's public schemas are written once in `novelai/contracts/src/library-contracts.mts`;
   `npm --prefix novelai run build:contracts` generates `novelai/contracts/generated/` and
@@ -143,7 +156,8 @@ npm --prefix novelai/client run dist:linux    # Linux tar.gz
 ```
 
 Each script builds the client, runs `notices:check` and then electron-builder, which never publishes anything
-(`--publish never`). The files go to `novelai/client/release/`: `MCP-for-NovelAI-<version>-mac-<arch>.{dmg,zip}`,
+(`--publish never`). Every package carries the MCP server and the command line in `resources/mcp/` and the `nai`
+launchers in `resources/bin/`. The files go to `novelai/client/release/`: `MCP-for-NovelAI-<version>-mac-<arch>.{dmg,zip}`,
 `MCP-for-NovelAI-<version>-win-x64-setup.exe`, `MCP-for-NovelAI-<version>-linux-x64.tar.gz`. sharp's native
 packages are those npm installed for the machine that builds, so build each platform and architecture on its own
 system. macOS apps are signed by electron-builder's afterPack hook (`novelai/client/scripts/mac-sign.mjs`): ad-hoc by

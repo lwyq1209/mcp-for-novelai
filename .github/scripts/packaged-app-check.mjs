@@ -23,8 +23,9 @@
 // Checks:
 //  1. artifacts: exactly the expected installer files for this platform and architecture, named with the
 //     version, the OS and the architecture (artifactsFor below; the release workflow uploads this list);
-//  2. resources: app.asar, mcp/novelai-mcp.mjs, LICENSE, THIRD_PARTY_NOTICES.md, Chromium's LICENSES.chromium.html
-//     and no app-update.yml (the build has no publish target);
+//  2. resources: app.asar, mcp/novelai-mcp.mjs, mcp/novelai-cli.mjs, the nai launchers bin/nai (executable) and
+//     bin/nai.cmd, LICENSE, THIRD_PARTY_NOTICES.md, Chromium's LICENSES.chromium.html and no app-update.yml (the build
+//     has no publish target);
 //  3. sharp's native addon and libvips are unpacked from app.asar (app.asar.unpacked/node_modules/@img/…), and
 //     sharp, required from inside app.asar by the packaged Electron, encodes and decodes a PNG;
 //     The libvips versions.json in the package lists the same library versions as the vendored license manifest the
@@ -32,6 +33,9 @@
 //  4. the packaged MCP bundle answers over stdio with the same tools as the source server (novelai/src/mcp.mjs,
 //     started with the Node running this script), reports the client as unavailable, and writes nothing to its
 //     data folder;
+//  4b. the packaged command line (mcp/novelai-cli.mjs, run as Node by the packaged executable) knows the app it belongs
+//     to and the data folder it was given, writes nothing there, and on macOS and Linux the launcher bin/nai, started
+//     through a symbolic link, runs it (--version);
 //  5. macOS: the app is signed with the release certificate: codesign --verify --deep --strict passes, the SHA-256 of
 //     its leaf certificate is MAC_RELEASE_CERTIFICATE_SHA256 and its designated requirement is identifier "<app id>"
 //     and certificate leaf = H"<SHA-1 of that certificate>" (stable across versions, so the Keychain keeps "Always
@@ -42,7 +46,7 @@
 // Exit status 0 only when every check passes; the JSON report goes to stdout (and --json <file>).
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -165,12 +169,14 @@ async function main() {
     report.app = source;
 
     // 2. resources
-    const required = { 'app.asar': path.join(resources, 'app.asar'), 'mcp/novelai-mcp.mjs': path.join(resources, 'mcp', 'novelai-mcp.mjs'), LICENSE: path.join(resources, 'LICENSE'), 'THIRD_PARTY_NOTICES.md': path.join(resources, 'THIRD_PARTY_NOTICES.md'), 'LICENSES.chromium.html': chromiumNotices, executable };
+    const required = { 'app.asar': path.join(resources, 'app.asar'), 'mcp/novelai-mcp.mjs': path.join(resources, 'mcp', 'novelai-mcp.mjs'), 'mcp/novelai-cli.mjs': path.join(resources, 'mcp', 'novelai-cli.mjs'),
+      'bin/nai': path.join(resources, 'bin', 'nai'), 'bin/nai.cmd': path.join(resources, 'bin', 'nai.cmd'), LICENSE: path.join(resources, 'LICENSE'), 'THIRD_PARTY_NOTICES.md': path.join(resources, 'THIRD_PARTY_NOTICES.md'), 'LICENSES.chromium.html': chromiumNotices, executable };
     const missing = Object.entries(required).filter(([, file]) => !existsSync(file)).map(([name]) => name);
     const updateFile = existsSync(path.join(resources, 'app-update.yml'));
     // The executable keeps its execute permission through the archive (Windows has no such bit).
     const runnable = platform === 'win32' || (existsSync(executable) && (statSync(executable).mode & 0o111) !== 0);
-    report.checks.resources = { ok: missing.length === 0 && !updateFile && runnable, missing, appUpdateYml: updateFile, executableRunnable: runnable, asarBytes: existsSync(required['app.asar']) ? statSync(required['app.asar']).size : null };
+    const launcherRunnable = platform === 'win32' || (existsSync(required['bin/nai']) && (statSync(required['bin/nai']).mode & 0o111) !== 0);
+    report.checks.resources = { ok: missing.length === 0 && !updateFile && runnable && launcherRunnable, missing, appUpdateYml: updateFile, executableRunnable: runnable, launcherRunnable, asarBytes: existsSync(required['app.asar']) ? statSync(required['app.asar']).size : null };
 
     // 3. sharp
     const img = path.join(resources, 'app.asar.unpacked', 'node_modules', '@img');
@@ -204,6 +210,26 @@ async function main() {
         toolCount: packaged.tools.length, sameToolsAsSource: JSON.stringify(packaged.tools) === JSON.stringify(reference.tools), tools: packaged.tools, server: packaged.server, handshakeMs: packaged.handshakeMs, listWorkspaces: packaged.listWorkspaces, invalidEnqueue: packaged.invalidEnqueue, dataDirAfter: dataAfter, stderr: packaged.stderr };
     } catch (error) {
       fail('mcp', error instanceof Error ? error.stack : String(error));
+    }
+
+    // 4b. the command line: the packaged executable runs it as Node; it recognizes its app and the data folder it was given
+    try {
+      const cliData = path.join(scratch, 'cli-data');
+      const env = run(executable, [required['mcp/novelai-cli.mjs'], '--data-dir', cliData, '--project', project, 'env'], { env: nodeModeEnv(data, project), timeout: 60_000 });
+      let facts = null;
+      try { facts = JSON.parse(env.stdout); } catch { /* reported below */ }
+      let launcher = null;
+      if (platform !== 'win32') {
+        const linkDir = path.join(scratch, 'path-bin');
+        mkdirSync(linkDir);
+        symlinkSync(required['bin/nai'], path.join(linkDir, 'nai'));
+        const launched = run(path.join(linkDir, 'nai'), ['--version'], { env: nodeModeEnv(data, project), timeout: 60_000 });
+        launcher = { status: launched.status, stdout: (launched.stdout ?? '').trim(), stderr: (launched.stderr ?? '').slice(-2000) };
+      }
+      report.checks.cli = { ok: env.status === 0 && facts?.runtime === 'electron-as-node' && facts?.app?.startable === true && facts?.app?.kind === 'packaged' && facts?.dataRoot === cliData && facts?.version === version
+        && !existsSync(cliData) && (launcher === null || (launcher.status === 0 && launcher.stdout === version)), env: facts ?? { status: env.status, stderr: (env.stderr ?? '').slice(-2000) }, launcher };
+    } catch (error) {
+      fail('cli', error instanceof Error ? error.stack : String(error));
     }
 
     // 5. macOS signature: the release certificate, its designated requirement, the same in the zip and the dmg

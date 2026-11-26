@@ -217,6 +217,11 @@ If a file already has `mcpServers` (or other `[mcp_servers.…]` tables), add on
 access › Advanced also shows how to run the server from a source checkout with your own Node, and where the agent's
 inbox folders are.
 
+**From a terminal**: agents that work in a shell can use the same tools through `nai`, the command line that ships
+with the app (macOS: `ln -s "/Applications/MCP for NovelAI.app/Contents/Resources/bin/nai" ~/.local/bin/nai`). Recipes
+stay in files the agent edits, answers are JSON on stdout and images are written to files; `nai skill` prints the
+agent guide. See [The nai command line](docs/cli.md).
+
 ## Data and privacy
 
 | What | Where |
@@ -284,6 +289,7 @@ How it works, how to verify a release yourself, App Management on macOS and the 
 ## Documentation
 
 - [MCP tools reference](docs/mcp-tools.md) — every tool, request keys, the queue, retention, projects
+- [The nai command line](docs/cli.md) — the same tools from a terminal, recipe files, images as files
 - [Updates](docs/updates.md) — the in-app update, verifying a release, the threat model
 - [Troubleshooting](docs/troubleshooting.md) — error codes and what to do
 - [Building and development](docs/building.md) — from source, tests, dev tools
