@@ -141,9 +141,9 @@ async function listTools(command, args, env) {
   try {
     const handshakeMs = Date.now() - started;
     const { tools } = await mcp.listTools();
-    const workspaces = await mcp.callTool({ name: 'list_workspaces', arguments: {} });
+    const queue = await mcp.callTool({ name: 'list_queue', arguments: {} });
     const invalid = await mcp.callTool({ name: 'enqueue_recipes', arguments: { requestKey: 'k', items: [] } });
-    return { handshakeMs, server: mcp.getServerVersion(), tools: tools.map(tool => tool.name), listWorkspaces: workspaces.structuredContent?.error?.code ?? null, invalidEnqueue: invalid.structuredContent?.error?.code ?? null, stderr: stderr.trim() };
+    return { handshakeMs, server: mcp.getServerVersion(), tools: tools.map(tool => tool.name), listQueue: queue.structuredContent?.error?.code ?? null, invalidEnqueue: invalid.structuredContent?.error?.code ?? null, stderr: stderr.trim() };
   } finally {
     await mcp.close();
   }
@@ -206,8 +206,8 @@ async function main() {
       const packaged = await listTools(executable, [required['mcp/novelai-mcp.mjs']], nodeModeEnv(data, project));
       const reference = await listTools(process.execPath, [path.join(repo, 'novelai', 'src', 'mcp.mjs')], nodeModeEnv(data, project));
       const dataAfter = readdirSync(data);
-      report.checks.mcp = { ok: packaged.tools.length > 0 && JSON.stringify(packaged.tools) === JSON.stringify(reference.tools) && packaged.listWorkspaces === 'unavailable' && packaged.invalidEnqueue === 'invalid_arguments' && dataAfter.length === 0,
-        toolCount: packaged.tools.length, sameToolsAsSource: JSON.stringify(packaged.tools) === JSON.stringify(reference.tools), tools: packaged.tools, server: packaged.server, handshakeMs: packaged.handshakeMs, listWorkspaces: packaged.listWorkspaces, invalidEnqueue: packaged.invalidEnqueue, dataDirAfter: dataAfter, stderr: packaged.stderr };
+      report.checks.mcp = { ok: packaged.tools.length > 0 && JSON.stringify(packaged.tools) === JSON.stringify(reference.tools) && packaged.listQueue === 'unavailable' && packaged.invalidEnqueue === 'invalid_arguments' && dataAfter.length === 0,
+        toolCount: packaged.tools.length, sameToolsAsSource: JSON.stringify(packaged.tools) === JSON.stringify(reference.tools), tools: packaged.tools, server: packaged.server, handshakeMs: packaged.handshakeMs, listQueue: packaged.listQueue, invalidEnqueue: packaged.invalidEnqueue, dataDirAfter: dataAfter, stderr: packaged.stderr };
     } catch (error) {
       fail('mcp', error instanceof Error ? error.stack : String(error));
     }
