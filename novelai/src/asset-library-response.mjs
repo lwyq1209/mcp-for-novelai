@@ -66,7 +66,7 @@ function summarize(item) {
   return { result, truncated, tags };
 }
 const note = 'Metadata/excerpts only; not full text, image inspection or a restorable recipe.';
-const budgetError = () => fail('asset_summary_too_large', 'One material identity/preview or the response envelope exceeds the summary budget. No item was consumed; narrow the query or explicitly read detail:full.');
+const budgetError = () => fail('asset_summary_too_large', 'One material identity/preview or the response envelope exceeds the summary budget. No item was consumed; narrow the query.');
 function bounded(value, budget) {
   const json = JSON.stringify(value);
   if (Buffer.byteLength(json, 'utf8') > budget) budgetError();

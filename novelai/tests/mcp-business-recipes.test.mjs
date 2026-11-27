@@ -138,7 +138,7 @@ const retamper = (reply, mutate) => {
 };
 
 /**
- * A settle clock for one server (0.1.4: enqueue_recipes settles an unknown outcome itself): sleeping advances the
+ * A settle clock for one server (0.2.0: enqueue_recipes settles an unknown outcome itself): sleeping advances the
  * injected monotonic time instead of waiting, so a settle runs at once and its budget is spent in fake seconds.
  */
 const settleClock = (clock = { t: 0 }) => ({ monotonicNow: () => clock.t, sleep: async ms => { clock.t += ms; }, clock });
@@ -351,7 +351,7 @@ test('transparentBackground: V5 recipes send the real builder flags and read bac
   assert.deepEqual(doubled.effective.automaticQuality, { preset: 'standard', appendedText: 'very aesthetic, masterpiece, no text', derivedFromBuilderOutput: true });
   assert.deepEqual(doubled.warnings, []);
 
-  // Non-V5 models (0.1.4): the option is dropped, as the host would turn it off (client/src/types.ts), and said so.
+  // Non-V5 models (0.2.0): the option is dropped, as the host would turn it off (client/src/types.ts), and said so.
   for (const model of ['nai-diffusion-4-5-full', 'nai-diffusion-4-5-curated', 'nai-diffusion-4-full', 'nai-diffusion-3']) {
     const dropped = ok(await call('prepare_recipe', t2i({ model, noiseSchedule: 'native', characters: [], transparentBackground: true })));
     const warning = dropped.warnings.find(item => item.code === 'value_dropped');
@@ -428,7 +428,7 @@ test('prepare_recipe corrects every value the host would otherwise normalize sil
   h.calls.length = 0;
   const { call, readRecipe } = await connect(t, h.bridge);
   const seven = Array.from({ length: 7 }, (_, index) => ({ prompt: `c${index}`, useCoords: false }));
-  // 0.1.4: each of these is corrected to what runs, saved with that value, and reported (code, field, from, to).
+  // 0.2.0: each of these is corrected to what runs, saved with that value, and reported (code, field, from, to).
   const corrections = [
     ['steps99', t2i({ steps: 99 }), 'value_clamped', 'steps', 99, 50, v => v.effective.steps === 50],
     ['steps0', t2i({ steps: 0 }), 'value_clamped', 'steps', 0, 1, v => v.effective.steps === 1],
@@ -628,7 +628,7 @@ const persistently = (h, method, fault) => {
 };
 const timeout = () => { throw new BridgeError('timeout', 'The client request was interrupted or timed out. Its outcome is unknown.'); };
 
-test('0.1.4 an unknown enqueue outcome is settled in the same call: a lookup, and the same plan under the same key again when the host holds nothing; one batch, never another key', async t => {
+test('0.2.0 an unknown enqueue outcome is settled in the same call: a lookup, and the same plan under the same key again when the host holds nothing; one batch, never another key', async t => {
   const h = await realHost(t);
   const { call } = await connect(t, h.bridge);
   const prepared = ok(await call('prepare_recipe', t2i()));
@@ -687,7 +687,7 @@ test('0.1.4 an unknown enqueue outcome is settled in the same call: a lookup, an
   assert.equal(h.jobs.length, 5);
 });
 
-test('0.1.4 an enqueue that never gets an answer and whose lookups say nothing arrived is resent at most SETTLE_RESENDS times', async t => {
+test('0.2.0 an enqueue that never gets an answer and whose lookups say nothing arrived is resent at most SETTLE_RESENDS times', async t => {
   const h = await realHost(t);
   const { call } = await connect(t, h.bridge);
   const prepared = ok(await call('prepare_recipe', t2i()));
@@ -811,7 +811,7 @@ test('exact identity: a revision or inputHash mismatch, a blocked recipe or mixe
   assert.equal(ok(await call('enqueue_recipes', { requestKey: 'exact', items: [{ ...ref(prepared), count: 2, seeds: [7, 7] }] })).status, 'enqueued', 'a deliberate repeated seed is allowed when explicit');
 });
 
-test('0.1.4 a fixed-seed recipe used for several images without seeds counts its seed up (wrapping after 2147483646), listed in the receipt with a warning; explicit seeds are kept', async t => {
+test('0.2.0 a fixed-seed recipe used for several images without seeds counts its seed up (wrapping after 2147483646), listed in the receipt with a warning; explicit seeds are kept', async t => {
   const h = await realHost(t);
   const { call } = await connect(t, h.bridge);
   const prepared = ok(await call('prepare_recipe', t2i()));
@@ -851,13 +851,23 @@ test('invalid enqueue, lookup and read arguments are rejected before the host', 
     count0: { requestKey: 'k', items: [{ ...good, count: 0 }] }, count201: { requestKey: 'k', items: [{ ...good, count: 201 }] }, seedsMismatch: { requestKey: 'k', items: [{ ...good, count: 2, seeds: [1] }] },
     seedTooBig: { requestKey: 'k', items: [{ ...good, seeds: [2147483647] }] }, seedFloat: { requestKey: 'k', items: [{ ...good, seeds: [1.5] }] }, noHash: { requestKey: 'k', items: [{ recipeId: good.recipeId, recipeRevision: 1 }] },
     badHash: { requestKey: 'k', items: [{ ...good, inputHash: 'D'.repeat(64) }] }, badId: { requestKey: 'k', items: [{ ...good, recipeId: 'x' }] }, revision0: { requestKey: 'k', items: [{ ...good, recipeRevision: 0 }] },
-    reviewId: { requestKey: 'k', items: [{ ...good, reviewId: randomUUID() }] }, interval61: { requestKey: 'k', intervalSeconds: 61, items: [good] }, intervalNegative: { requestKey: 'k', intervalSeconds: -1, items: [good] },
+    reviewId: { requestKey: 'k', items: [{ ...good, reviewId: randomUUID() }] }, intervalText: { requestKey: 'k', intervalSeconds: '5', items: [good] },
     twoHashes: { requestKey: 'k', items: [{ ...good, seeds: [1] }, { ...good, inputHash: 'e'.repeat(64), seeds: [2] }] }, nSamples: { requestKey: 'k', n_samples: 2, items: [good] },
   };
   for (const [name, args] of Object.entries(enqueueCases)) assert.equal(errorOf(await call('enqueue_recipes', args)).code, 'invalid_arguments', name);
   for (const args of [{}, { requestKey: '' }, { requestKey: 'k', batchId: randomUUID() }]) assert.equal(errorOf(await call('lookup_enqueue', args)).code, 'invalid_arguments');
   for (const args of [{}, { recipeId: 'x', recipeRevision: 1 }, { recipeId: good.recipeId }, { ...good, inputHash: 'x' }, { ...good, workspaceId: 'w' }]) assert.equal(errorOf(await readRecipe(args)).code, 'invalid_arguments');
   assert.deepEqual(h.calls, []);
+  // An interval outside 0–60 is corrected to the nearest bound with a warning, as prepare_recipe corrects its values;
+  // the input schema lets it through to the module.
+  const intervalSchema = (await import('../src/recipe-tool-schemas.mjs')).RECIPE_TOOL_SPECS.enqueue_recipes.inputSchema.properties.intervalSeconds;
+  assert.ok(intervalSchema.type === 'number' && !('maximum' in intervalSchema) && !('minimum' in intervalSchema));
+  for (const [given, used] of [[61, 60], [-1, 0], [1e9, 60]]) {
+    const plan = recipeQueue.normalizeEnqueue({ requestKey: 'k', intervalSeconds: given, items: [{ ...good, seeds: [1] }] });
+    assert.equal(plan.intervalSeconds, used);
+    assert.deepEqual(plan.warnings.map(({ code, field, from, to }) => ({ code, field, from, to })), [{ code: 'value_clamped', field: 'intervalSeconds', from: given, to: used }]);
+  }
+  assert.deepEqual(recipeQueue.normalizeEnqueue({ requestKey: 'k', intervalSeconds: 60, items: [{ ...good, seeds: [1] }] }).warnings, []);
   // The module enforces the expansion rules without the schema in front of it.
   for (const name of ['expandedTooMany', 'seedsMismatch', 'twoHashes', 'reviewId', 'blankKey'])
     assert.throws(() => recipeQueue.normalizeEnqueue(enqueueCases[name]), error => error instanceof BridgeError && error.code === 'invalid_arguments', name);
@@ -917,7 +927,7 @@ test('F1: a request held on the way is settled by sending the same plan again; t
   assert.equal(h.jobs.length, 2);
 });
 
-test('0.1.4 lookup_enqueue answers at once: in flight -> settling a few seconds; nothing recorded -> clear; a restartable receipt -> clear (same plan, same key); stale only for a receipt the host can neither confirm nor restart; an older host is never advised a new key', async t => {
+test('0.2.0 lookup_enqueue answers at once: in flight -> settling a few seconds; nothing recorded -> clear; a restartable receipt -> clear (same plan, same key); stale only for a receipt the host can neither confirm nor restart; an older host is never advised a new key', async t => {
   const h = await realHost(t);
   const { call } = await connect(t, h.bridge);
   const prepared = ok(await call('prepare_recipe', t2i()));

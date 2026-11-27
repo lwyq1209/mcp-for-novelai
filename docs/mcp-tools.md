@@ -263,7 +263,7 @@ parameters and seed) and from the queue (`read_queue` gives each image's status,
 
 - Six modes: `t2i`, `i2i`, `enhance`, `inpaint`, `upscale`, `director`. A field that does not belong to the mode is
   refused rather than ignored.
-- **Corrections instead of refusals** (0.1.4): a value the app would clamp, snap, resize, convert or drop is corrected
+- **Corrections instead of refusals** (0.2.0): a value the app would clamp, snap, resize, convert or drop is corrected
   to what will run *before* the recipe is saved (so the stored recipe holds exactly that value), and each correction is
   a readback warning `{code, field, from, to, message}` — see [Corrections](#corrections-prepare_recipe). Only what
   cannot run is refused: a missing field, an unknown model, sampler, noise schedule or preset name, a value of the
@@ -314,7 +314,7 @@ value used (`to`):
 
 | Warning | When | What is used |
 | --- | --- | --- |
-| `value_clamped` | A number outside its range: `steps` 1–50, `cfgScale` 0–10, `cfgRescale` 0–1, `ucPreset` 0–3, `strength` 0–1, `magnitude` 1–10, `defry` and `emotionLevel` 0–5, character `x`/`y` 0–1; `enqueue_recipes` `intervalSeconds` 0–60 | The nearest bound (whole-number fields also rounded) |
+| `value_clamped` | A number outside its range: `steps` 1–50, `cfgScale` 0–10, `cfgRescale` 0–1, `ucPreset` 0–3, `strength` 0–1, `magnitude` 1–10, `defry` and `emotionLevel` 0–5, character `x`/`y` 0–1; `enqueue_recipes` `intervalSeconds` 0–60 (in the enqueue answer's `warnings`) | The nearest bound (whole-number fields also rounded) |
 | `size_adjusted` | t2i/i2i `width`/`height` not multiples of 64, or more than 3,145,728 pixels | Each side snapped to 64, then shrunk into the limit keeping the ratio, as the app's own size rule does (1000×1500 → 1024×1472) |
 | `i2i_size_adjusted` | An i2i size more than 3 % off the source's aspect | The 64-aligned size within 3 % of the source's aspect closest to the requested area |
 | `i2i_size_from_source` | i2i without `width`/`height` (or with only one) | The source's aspect at about 832×1216 pixels, at most 1024×1024 pixels (or at the area the one side implies) |
@@ -446,7 +446,7 @@ Medium request sends was read from NovelAI's own web client (build of 2026-11-06
   warning `effort_medium_fixed`, for example `effort medium fixes steps to 14; your 28 was replaced.` The stored recipe
   holds the values that run.
 - Medium on any other model (V5 Curated has no Medium) or in enhance, upscale or director runs on High, with the
-  warning `effort_not_applied` (before 0.1.4 this was refused). `effort: "high"` is accepted everywhere and changes
+  warning `effort_not_applied` (before 0.2.0 this was refused). `effort: "high"` is accepted everywhere and changes
   nothing.
 - The readback lists the model id sent (`effective.model`), the fixed values that differ from the call and the fixed
   UC text (`effective.ucPreset.text`).
@@ -489,7 +489,7 @@ spend Anlas, with no further confirmation.**
 - A wrong revision or `inputHash`, mixed modes, a blocked recipe or a source that is gone are refused before anything is
   sent; the key stays unused.
 - The receipt lists warnings, for example characters that a model does not take or a preset that adds no text.
-- **A lost answer is settled in the same call** (0.1.4): see [Request keys](#request-keys-and-paid-requests). The
+- **A lost answer is settled in the same call** (0.2.0): see [Request keys](#request-keys-and-paid-requests). The
   receipt then says `reconciled: true`.
 - The receipt is `status` (`enqueued`, or `already_enqueued` when this key already holds this plan: nothing is sent),
   `batchId` and `count`, plus `seeds` where the server chose them and `warnings`. When the answer is not the routine
@@ -643,7 +643,7 @@ one image at a time. When an image fails, is refused before it is sent or has an
 marked (`failed` or `unknown`, with its error code) — it is **never resent** — and its batch goes on with its next
 image after its interval; no batch pauses another. A batch that ran to its end with such images ends **`partial`**
 (never `succeeded`), with `itemCounts` saying how many failed or are unknown. `blocked` appears only on batches an
-app version before 0.1.4 stopped at their first unsuccessful image.
+app version before 0.2.0 stopped at their first unsuccessful image.
 
 - **HTTP 429** (NovelAI answered "too many requests", for example "Concurrent generation is locked" while another
   generation runs on the account; nothing was generated): the same image is sent again with the same frozen recipe
@@ -670,7 +670,7 @@ Item error codes the queue sets itself (explained in `read_queue` as `itemReason
 `read_queue` and `list_queue` report a batch's `stopReason` as `{code, message}`. The codes the queue
 sets on a batch now are `update_pending`, `queue_storage_error`, `cancel_unconfirmed`, `scheduler_closed` (the app was
 closing; the batch continues after the next start) and `scheduler_stopped` (an internal error ended only this batch
-early; its remaining images were skipped). Batches stored by an app version before 0.1.4 may still carry
+early; its remaining images were skipped). Batches stored by an app version before 0.2.0 may still carry
 `queue_halted`, `child_stopped`, `child_rejected`, `submission_unconfirmed`, `restart_unconfirmed`,
 `restart_blocked`, `recovered_paused`, `child_lookup_failed` or `child_status_unavailable`; the message says what that
 version did.

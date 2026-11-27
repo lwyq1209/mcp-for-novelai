@@ -13,7 +13,7 @@
  *   original. Inpaint masks are built locally (src/recipe-masks.mjs) and
  *   stored inline with their spec as provenance. Every read asks the host to omit
  *   image bytes (assetData:"omit"); a host too old to know that answers host_outdated;
- * - visible corrections (0.1.4). put_queue_recipe accepts out-of-range values and
+ * - visible corrections (0.2.0). put_queue_recipe accepts out-of-range values and
  *   then normalizes them silently (steps 99 -> 50, unaligned sizes snapped, V4
  *   "light" quality -> "standard", characters beyond the model limit dropped,
  *   sources stretched, snapped or downscaled); here every such value is corrected
@@ -32,7 +32,7 @@
  * - idempotent enqueue: a server-namespaced stable host key, lookup before every
  *   dispatch, exact recipe pre-reads, the plan as it runs (a fixed seed used for
  *   several images counts up; an upscale/Director recipe is sent once), one
- *   dispatch. An unknown outcome is settled in the same call (0.1.4): lookups, and
+ *   dispatch. An unknown outcome is settled in the same call (0.2.0): lookups, and
  *   resends of the same plan under the same key while the host holds nothing it
  *   works on, until the answer is definite or the settle budget is spent; never
  *   another key. After an explicit host refusal one confirming lookup (a read,
@@ -174,7 +174,7 @@ const putStorageRefusal = error => storeFullRefusal(error)
 /** Explicit answer when the host does not know a request this server needs (assetData, preview_queue_recipe). */
 export const HOST_OUTDATED_MESSAGE = 'The NovelAI client is older than this MCP server and does not accept this request. Fully rebuild and restart the client, then try again. Nothing was saved or enqueued, and no requestKey was used.';
 /**
- * Settling an unknown enqueue in the same call (0.1.4, replacing the 130-second settle window the caller had to wait
+ * Settling an unknown enqueue in the same call (0.2.0, replacing the 130-second settle window the caller had to wait
  * out with a lookup): after a dispatch whose outcome is unknown, enqueue_recipes looks the key up (the host says
  * whether an enqueue of it is still in flight) and sends the same plan under the same key again when the host holds
  * nothing it is working on, for at most SETTLE_BUDGET_MS, polling every SETTLE_POLL_MS (growing to 5 s), with at most
@@ -206,7 +206,7 @@ const GENERATION_FIELDS = ['model', 'steps', 'cfgScale', 'sampler', 'noiseSchedu
 const STYLE_PRESET_FIELDS = Object.freeze(['stylePresetId', 'allowText']);
 /**
  * Per mode: required and optional prepare_recipe fields. A field of another mode is refused, never ignored. i2i may
- * leave out width/height (sized from the source, 0.1.4); upscale's only scale is 2, so it may be left out.
+ * leave out width/height (sized from the source, 0.2.0); upscale's only scale is 2, so it may be left out.
  */
 export const MODE_FIELDS = Object.freeze({
   t2i: { required: [...GENERATION_FIELDS, 'width', 'height'], optional: ['cfgRescale', 'characters', 'transparentBackground', 'effort', 'references', ...STYLE_PRESET_FIELDS] },
@@ -261,7 +261,7 @@ const ENQUEUE_REJECTED = new Set(['enqueue_limit_exceeded', 'history_group_unava
  * queue cannot be read (it failed to load, or failed later): the batch may already be on disk. Nothing is sent, and
  * this is never counted toward the settle window, so it never turns into advice to switch keys.
  */
-export const FROZEN_UNREADABLE_MESSAGE = 'This requestKey already has a receipt, but the host\'s frozen queue cannot be read right now, so its batch may already be on disk. Do not resend and do not switch to a new requestKey. Check the NovelAI client first; whether to restart it is the user\'s decision. Afterwards, look up this same requestKey again.';
+export const FROZEN_UNREADABLE_MESSAGE = 'This requestKey already has a receipt, but the host\'s frozen queue cannot be read right now, so its batch may already be on disk. Do not resend and do not switch to a new requestKey. Check the NovelAI client first; whether to restart it is the user\'s decision. Afterwards, call enqueue_recipes again with this same requestKey and plan: it looks the key up first and never queues twice.';
 /** What a queue_storage_error refusal tells the caller (the key status follows from the confirming lookup). */
 export const FROZEN_STORE_FAILED_MESSAGE = 'The host\'s frozen queue storage has failed and the host has stopped accepting new batches; its frozen-queue files are kept as they are. Check the NovelAI client first; whether to restart it is the user\'s decision. Do not retry automatically.';
 // Inputs a stored recipe can carry that prepare_recipe never sets (reported as unexposed_inputs).
@@ -309,7 +309,7 @@ const requestKeyOf = value => {
 const boolean = (value, label) => { if (typeof value !== 'boolean') invalid(`${label} must be true or false.`); return value; };
 const shown = value => typeof value === 'string' ? JSON.stringify(value) : String(value);
 /**
- * Corrections (0.1.4): a value the host would clamp, snap, resize, convert or drop is corrected here to what runs and
+ * Corrections (0.2.0): a value the host would clamp, snap, resize, convert or drop is corrected here to what runs and
  * reported as one readback warning {code, field, from, to, message}; only a value that cannot mean anything (wrong
  * type, unknown name) is refused.
  */
@@ -354,7 +354,7 @@ function sizeFields(args, warnings) {
 
 /**
  * The effort of a recipe: "medium" only for V5 Full t2i, i2i and inpaint; Medium anywhere else runs on High instead
- * (effort_not_applied, 0.1.4: no longer refused). "high" (or none) everywhere is the model as it always ran.
+ * (effort_not_applied, 0.2.0: no longer refused). "high" (or none) everywhere is the model as it always ran.
  */
 function effortOf(args, mode, warnings) {
   if (args.effort === undefined) return 'high';
@@ -547,7 +547,7 @@ export function recipePlan(given, { stylePreset = null } = {}) {
     plan.mask = prepareMaskSpec(args.mask);
   }
   if (mode === 'upscale' || mode === 'director') {
-    // 0.1.4: a source over 1,048,576 pixels is downscaled by default (source_downscaled); only an explicit false refuses it.
+    // 0.2.0: a source over 1,048,576 pixels is downscaled by default (source_downscaled); only an explicit false refuses it.
     if (args.acceptDownscale !== undefined) boolean(args.acceptDownscale, 'acceptDownscale');
     plan.acceptDownscale = args.acceptDownscale !== false;
   }
@@ -593,7 +593,7 @@ export function canvasPlan(args) {
 }
 
 const aspectDeviation = (width, height, sourceWidth, sourceHeight) => Math.abs(width * sourceHeight - sourceWidth * height) / (sourceWidth * height);
-/** i2i without width/height (0.1.4): about the area of 832×1216, within the Opus free size (at most 1024×1024 pixels). */
+/** i2i without width/height (0.2.0): about the area of 832×1216, within the Opus free size (at most 1024×1024 pixels). */
 export const I2I_DEFAULT_AREA = 832 * 1216, I2I_FREE_AREA = 1024 * 1024;
 /**
  * The 64-aligned i2i size for a source: within the host's 3% stretch tolerance of its aspect (else as close to it as
@@ -1318,7 +1318,7 @@ const fixedSeedOf = recipe => {
   return Number.isInteger(seed) ? seed : Number.isInteger(authored?.seed) ? authored.seed : 0;
 };
 /**
- * The plan as it is sent, once the recipes are read (0.1.4, instead of two refusals; deterministic, so the same call
+ * The plan as it is sent, once the recipes are read (0.2.0, instead of two refusals; deterministic, so the same call
  * is always the same plan and its requestKey keeps deduplicating it):
  * - a fixed-seed recipe used for several images without explicit seeds gets seed, seed+1, seed+2… for them (after
  *   2147483646 back to 0), so they differ: fixed_seed_incremented lists the seeds;
@@ -1431,7 +1431,7 @@ export function createRecipeQueue({ bridge, monotonicNow = () => performance.now
     return validateRecipeResult(reply, ref);
   };
   /**
-   * The host's answer for a key. inFlight (a host of 0.1.4 or later): an enqueue of this key has arrived and is not
+   * The host's answer for a key. inFlight (a host of 0.2.0 or later): an enqueue of this key has arrived and is not
    * answered yet; undefined from an older host, which does not say. restartable: an unknown receipt the same plan
    * under the same key starts over.
    */
@@ -1864,7 +1864,7 @@ export function createRecipeQueue({ bridge, monotonicNow = () => performance.now
     }
     const transition = receiptTransition(error);
     // An older host: a lookup landed after it published this key's receipt but before it recorded the plan, and it
-    // abandoned this dispatch. (A host of 0.1.4 or later never lets a lookup rewrite a running enqueue's receipt.)
+    // abandoned this dispatch. (A host of 0.2.0 or later never lets a lookup rewrite a running enqueue's receipt.)
     if (transition && after?.status === 'unknown') throw new BridgeError(hostCode, `The host abandoned this dispatch (${error.message}): a lookup of this requestKey landed before the host recorded the plan, so nothing was queued and this key's receipt is unknown. Call enqueue_recipes again with the same requestKey and plan: it looks the key up first, sends the plan only if the host can take it under this key, and says so if a new requestKey is needed.`, { ...details, status: 'unknown', keyStatus: 'unknown', abandoned: true });
     const storage = hostCode === 'queue_storage_failed' && !transition && storeFullRefusal(error) ? ` ${STORE_FULL} and needs explicit archiving.` : '';
     if (hostCode === 'queue_storage_error') {

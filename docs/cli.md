@@ -139,7 +139,7 @@ nai queue result <batchId>                        # the batch's thumbnails as fi
 - `nai enqueue` takes several `-f` files (each a receipt, an array of receipts or `{items: […]}`) and
   `--recipe <id>:<revision>:<inputHash>`, with `--count`, `--seeds`, `--group`, `--prefix` and `--interval` (a count or
   seeds given both in a file and on the command line must agree, else exit 2). `--wait-seconds` (1–1200) is checked
-  before the enqueue is sent; values the tool itself refuses (`--count 0`, `--interval 99` …) answer
+  before the enqueue is sent; values the tool itself refuses (`--count 0`, `--count 201` …) answer
   `invalid_arguments` (exit 1) and nothing is queued. The rules of
   [Request keys and paid requests](mcp-tools.md#request-keys-and-paid-requests) apply unchanged: run an uncertain or
   interrupted enqueue again with the identical command and the same `--key`. With `--wait done|next` (and

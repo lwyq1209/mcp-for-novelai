@@ -141,7 +141,7 @@ and charged, so look there before making it again under a new request key.
 
 An agent follows a batch with `read_queue {batchId, wait: {until: "done"}}` instead of polling; `ahead` and
 `etaSeconds` say what is queued before it and roughly how long it takes.
-[MCP tools](mcp-tools.md#queue-limits-and-failures) lists every code. Batches an app version before 0.1.4 stored may
+[MCP tools](mcp-tools.md#queue-limits-and-failures) lists every code. Batches an app version before 0.2.0 stored may
 show **blocked** (stopped at their first unsuccessful image) or stop reasons such as `queue_halted`; they are kept
 for reading.
 
@@ -174,8 +174,8 @@ To recover, in this order:
   (see [Logs](#logs)) names the cause. After the problem is fixed and the app restarted, the paused batches continue
   by themselves.
 - `queue_acceptance_unknown` — the request key has a receipt, but the frozen queue cannot be read right now, so its
-  batch may already exist. Do not resend and do not switch keys; fix the app first (restarting it is your decision),
-  then look up the same key again.
+  batch may already exist. Do not switch keys; fix the app first (restarting it is your decision), then call
+  `enqueue_recipes` again with the same key and plan: it looks the key up first and never queues twice.
 - `queue_storage_failed` for other reasons (for example a full recipe store) — read the message; nothing was saved.
 
 ## NovelAI refuses a request

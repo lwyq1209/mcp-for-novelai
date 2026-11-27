@@ -47,7 +47,7 @@ const PREPARE_RECIPE_SCHEMA = schema({
   cfgScale: { type: 'number' },
   cfgRescale: { type: 'number', description: 'Optional, default 0.' },
   sampler: { type: 'string', enum: [...T2I_SAMPLERS] },
-  noiseSchedule: { type: 'string', enum: [...NOISE_SCHEDULES], description: 'V5 models require karras.' },
+  noiseSchedule: { type: 'string', enum: [...NOISE_SCHEDULES], description: 'V5 models always run karras; another value is replaced with a warning.' },
   ucPreset: { type: 'integer', description: 'UC preset index; its text depends on the model (commonly 0 Heavy, 1 Light, 2 Human Focus, 3 None). On some models a preset adds nothing (for example 2 on V4 Full/Curated, every preset on Furry V3); the readback shows the actual text and warns when it is empty.' },
   qualityPreset: { type: 'string', enum: [...QUALITY_PRESETS], description: 'Automatic quality tags; light is V5-only, none disables them. Some models add no quality text (Furry V3); the readback shows the actual text and warns when it is empty.' },
   stylePresetId: { ...identity, description: 'Style preset id (asset_library kinds:["style_preset"]); see the tool description.' },
@@ -61,7 +61,7 @@ const PREPARE_RECIPE_SCHEMA = schema({
     x: { type: 'number', description: '0–1; used when useCoords is true (default 0.5).' }, y: { type: 'number', description: '0–1; used when useCoords is true (default 0.5).' } } } },
   references: { type: 'array', maxItems: MAX_REFERENCES, description: 't2i/i2i/enhance on V4.5/V5: Precise Reference images; see the tool description.',
     items: { type: 'object', additionalProperties: false, required: ['image', 'type'], properties: { image: libraryImage, type: { enum: [...REFERENCE_TYPES] }, sameOutfit: { type: 'boolean' }, strength: { type: 'number' }, fidelity: { type: 'number' } } } },
-  transparentBackground: { type: 'boolean', description: 'Optional, default false. t2i on V5 models only: requests a transparent background (the builder appends "transparent background" to the prompt and sets tag_hint_transparent_background and straight_alpha); judge the actual result from the image. Do not also write that text in the prompt. A revision rewrites every field, so pass true again to keep it. Rejected on other models, where the host would turn it off silently.' },
+  transparentBackground: { type: 'boolean', description: 'Optional, default false. t2i on V5 models only: requests a transparent background (the builder appends "transparent background" to the prompt and sets tag_hint_transparent_background and straight_alpha); judge the actual result from the image. Do not also write that text in the prompt. A revision rewrites every field, so pass true again to keep it. On other models it is dropped with a warning (value_dropped).' },
   strength: { type: 'number', description: 'i2i: how much to change the source; inpaint: repaint strength (1 = full).' },
   extraNoiseSeed: { type: ['integer', 'null'], description: 'i2i/enhance, optional: fixed extra noise seed; omit, 0 or null for a random one per image.' },
   magnitude: { ...whole, description: 'enhance: 1–10 (strength is derived from it).' },
@@ -75,7 +75,7 @@ const PREPARE_RECIPE_SCHEMA = schema({
 }, ['mode']);
 const ENQUEUE_RECIPES_SCHEMA = schema({
   requestKey,
-  intervalSeconds: { type: 'number', minimum: 0, maximum: 60, description: 'Pause between images, default 0.' },
+  intervalSeconds: { type: 'number', description: 'Pause between images in seconds, 0–60, default 0. A value outside is set to the nearest bound (warning value_clamped).' },
   historyGroup: { type: 'string', minLength: 1, maxLength: QUEUE_HISTORY_GROUP_MAX, pattern: '^\\S(?:.*\\S)?$', description: 'Optional history group (your project name): images save under outputDir/<date>/<group>/ and join that group. Created on first use, reused by case-insensitive name.' },
   fileNamePrefix: { type: 'string', minLength: 1, maxLength: QUEUE_FILE_PREFIX_MAX, pattern: QUEUE_FILE_PREFIX_PATTERN, description: 'Optional file-name prefix for every image (all modes): "proj" → proj_<date>_01_<model>.png.' },
   items: { type: 'array', minItems: 1, maxItems: MAX_QUEUE_ITEMS, items: { type: 'object', additionalProperties: false, required: ['recipeId', 'recipeRevision', 'inputHash'], properties: {
