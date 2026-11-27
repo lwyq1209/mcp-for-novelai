@@ -25,7 +25,7 @@ import { MATERIAL_EXPORTS, MATERIAL_INBOX } from './material-tools.mjs';
 import { STUDY_EXPORTS, STUDY_INBOX } from './study-tools.mjs';
 import { VERSION } from './version.mjs';
 import { CliUsageError, EXIT } from './cli-spec.mjs';
-import { CliFileError, jsonFileText, readJsonArgument, readJsonFile, sameFile, saveImages, stageIntoInbox, writeOutputFile } from './cli-files.mjs';
+import { CliFileError, jsonFileText, readJsonArgument, readJsonFile, sameFile, saveImages, shown, stageIntoInbox, writeOutputFile } from './cli-files.mjs';
 import { REFERENCES_NOTE, RecipeExtractionError, RecipeReferenceError, enqueueItemFromArgument, enqueueItemsFromFile, historyToRecipe, madeWith, parseSetValue, preparedReceipt, recipeSummary } from './cli-recipe.mjs';
 
 export const CLI_CLIENT_ENV = 'NOVELAI_CLI_CLIENT';
@@ -400,7 +400,7 @@ const HANDLERS = {
     checkWait(o);
     const items = [];
     try {
-      for (const file of o.file ?? []) items.push(...enqueueItemsFromFile(await readJsonFile(file, { label: 'The prepared file', cwd: ctx.cwd }), file === '-' ? 'stdin' : JSON.stringify(file)));
+      for (const file of o.file ?? []) items.push(...enqueueItemsFromFile(await readJsonFile(file, { label: 'The prepared file', cwd: ctx.cwd }), file === '-' ? 'stdin' : shown(file)));
       for (const text of o.recipe ?? []) items.push(enqueueItemFromArgument(text));
     } catch (error) { if (error instanceof RecipeReferenceError) usage(error.message); throw error; }
     if (!items.length) usage('nai enqueue needs -f <prepared.json> or --recipe <id>:<revision>:<inputHash>.');

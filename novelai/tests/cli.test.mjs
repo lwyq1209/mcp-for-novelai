@@ -252,8 +252,14 @@ test('inputs: stdin with -, @file, size limit and invalid JSON are refused befor
   await writeFile(join(base, 'secret.json'), 'sk-THE-SECRET-VALUE');
   const secret = await run(['--data-dir', data, 'call', 'list_queue', `@${join(base, 'secret.json')}`], { cwd: base });
   assert.equal(secret.json.error.code, 'invalid_json');
-  assert.ok(!secret.stdout.includes('THE-SECRET') && secret.json.error.message.includes(JSON.stringify(join(base, 'secret.json'))), secret.stdout);
+  assert.ok(!secret.stdout.includes('THE-SECRET') && secret.json.error.message.includes(`"${join(base, 'secret.json')}"`), secret.stdout);
   assert.match(secret.json.error.message, /not valid JSON( at (line \d+, column \d+|position \d+))?\. Nothing was sent\.$/);
+  // A name with a backslash (every Windows path; a legal name elsewhere) is shown as it was given, not doubled.
+  if (process.platform !== 'win32') {
+    await writeFile(join(base, 'back\\slash.json'), '{');
+    const back = await run(['--data-dir', data, 'call', 'list_queue', '@back\\slash.json'], { cwd: base });
+    assert.equal(back.json.error.code, 'invalid_json'); assert.ok(back.json.error.message.includes('"back\\slash.json"'), back.stdout);
+  }
   const empty = await run(['--data-dir', data, '--image-dir', '', 'queue', 'list'], { cwd: base });
   assert.equal(empty.code, EXIT.usage); assert.match(empty.json.error.message, /--image-dir needs a folder/);
   const directory = await run(['--data-dir', data, 'prepare', '-f', '.'], { cwd: base });

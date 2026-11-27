@@ -18,7 +18,9 @@ export class CliFileError extends Error {
   constructor(code, message, exit = 'usage') { super(message); this.name = 'CliFileError'; this.code = code; this.exit = exit; }
 }
 
-const shown = file => JSON.stringify(file);
+/** A file name in a message: in quotes, as it was given. Not JSON.stringify: that doubles the backslashes of a Windows
+ * path (and the envelope's own JSON encoding doubles them again). */
+export const shown = file => `"${file}"`;
 
 /** All bytes of a stream, at most `limit` (else input_too_large). */
 async function readStream(stream, limit, describe) {

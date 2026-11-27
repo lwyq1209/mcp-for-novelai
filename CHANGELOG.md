@@ -2,6 +2,13 @@
 
 All notable changes to MCP for NovelAI are recorded here. Versions follow [Semantic Versioning](https://semver.org).
 
+## Unreleased
+
+### Fixed
+
+- `nai` names a file in its error messages as it was given: a Windows path is no longer shown with doubled
+  backslashes.
+
 ## 0.2.0 - 2026-11-26
 
 ### Added
