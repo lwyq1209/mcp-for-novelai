@@ -775,10 +775,12 @@ export function createBatchService(deps: BatchDependencies) {
       // A restart goes on where the batch was (0.2.0): only the image that was in flight and not found saved is
       // marked unknown (never resent); the rest continues on its own. A batch the user paused stays paused; a pause
       // the queue made itself (closing app, storage failure, an older version's stop after a failure) does not.
-      // A version before 0.2.0 stored no pausedBy: there a pause with a reason (error) was the queue's, and a pause
-      // without one was the user's explicit pause, which is kept as such. (That version closing while a batch ran
-      // stored the same; it cannot be told apart, so that batch waits for a resume too.) This version marks its own
-      // pauses "app", so a pause without a reason is never mistaken.
+      // A version before 0.2.0 stored no pausedBy. Its pause with a reason (error) continues: that version put
+      // recovered_paused on every unfinished batch at each start and queue_halted on every other agent batch after a
+      // failure, also on a batch the user had paused, so these cannot be told apart and all go on (decided for
+      // 0.2.0; the CHANGELOG says so). Its pause without a reason is kept as the user's: an explicit pause since
+      // that version's last start, or that version closing while the batch ran, which stored the same. This version
+      // marks its own pauses "app", so a pause without a reason is never mistaken.
       const now = new Date().toISOString();
       for (const item of restored.items) if (['submitting', 'running'].includes(item.status)) {
         if (item.providerOutcome !== 'response_received') item.providerOutcome = 'unknown';

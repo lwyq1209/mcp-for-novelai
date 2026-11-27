@@ -162,8 +162,13 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
   never run at once.
 - **After a restart, unfinished batches continue by themselves** (also when an agent's MCP server starts the app): an
   image that was running and was not saved is unknown (`restart_unconfirmed`, never resent), the rest goes on. A batch
-  you paused stays paused, also one you paused in 0.1.3 before updating. Batches the queue had paused itself (closing
-  app, an older version's stop after a failure, `recovered_paused`) continue.
+  you paused stays paused. Batches the queue had paused itself (closing app, a storage failure) continue.
+- **Updating from 0.1.3 continues the batches 0.1.3 had paused itself**, at the first start of this version: those
+  with the reason `recovered_paused` (0.1.3 put it on every unfinished batch each time it started) or `queue_halted`
+  (on every other agent batch after a failure). 0.1.3 put these reasons on a batch you had paused yourself as well,
+  so such a batch continues too. Only a batch that is paused without a reason stays paused until you resume it on the
+  queue page: you paused it and 0.1.3 was not restarted and had no failure since, or 0.1.3 was closed while it ran.
+  Cancel in 0.1.3 what must not run before you update.
 - Unchanged: a frozen-queue storage failure still stops every agent batch; request keys, the per-enqueue and total
   limits, pause, resume, cancel and the hold before an update work as before.
 - **`prepare_recipe` corrects instead of refusing** what the app would clamp, snap, resize, convert or drop anyway

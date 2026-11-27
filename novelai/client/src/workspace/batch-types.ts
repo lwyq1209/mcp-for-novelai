@@ -88,7 +88,8 @@ export interface BatchJob {
   /** Whose pause a paused or pausing batch has. "user": an explicit pause in the window (or, before 2026-11-13, the
    * control_queue tool); it stays paused across a restart. "app": the app paused a batch that was going on itself
    * (closing, a storage failure); it continues after a restart. A version before 0.2.0 stored neither: its pause
-   * without a reason (error) is read as the user's, one with a reason as the queue's. Absent in every other state. */
+   * without a reason (error) is read as the user's, one with a reason continues (see recover in batch-service.ts).
+   * Absent in every other state. */
   pausedBy?: "user" | "app";
   items: BatchItem[];
   source?: BatchSource;
