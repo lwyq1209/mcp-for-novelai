@@ -63,32 +63,39 @@ it('retries when a lock observed through EEXIST is normally released before owne
 it.each(['win32', 'linux'])('a lock that cannot be opened while its owner removes it is read again on win32 and nowhere else (%s)', async platform => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'nai-queue-storage-')); directories.push(dir);
   const storage = createBatchStorage(dir, {}, { platform }); await storage.load();
-  const lock = path.join(dir, 'frozen-queue', '.quota.lock'), originalLink = fs.link.bind(fs), originalOpen = fs.open.bind(fs); let heldLinks = 0, pendingOpens = 0;
+  const lock = path.join(dir, 'frozen-queue', '.quota.lock'), originalLink = fs.link.bind(fs), originalOpen = fs.open.bind(fs), originalLstat = fs.lstat.bind(fs); let heldLinks = 0, pendingReads = 0;
   const refusal = (code: string) => Object.assign(new Error(`${code}: fixture`), { code });
-  // Three times the lock is still in the folder (the link finds it) and cannot be opened; then it is gone.
+  // Three times the lock is still in the folder (the link finds it) and cannot be read; then it is gone. A read of the
+  // lock is one open where the system has O_NOFOLLOW and an lstat before the open on Windows (platform-fs.ts), so
+  // both are refused, once per time the link found the lock.
+  const pendingRead = (file: unknown) => { if (String(file) !== lock || pendingReads >= heldLinks) return false; pendingReads++; return true; };
   vi.spyOn(fs, 'link').mockImplementation(async (...args: any[]) => { if (String(args[1]) === lock && heldLinks < 3) { heldLinks++; throw refusal('EEXIST'); } return (originalLink as any)(...args); });
-  vi.spyOn(fs, 'open').mockImplementation(async (...args: any[]) => { if (String(args[0]) === lock && pendingOpens < heldLinks && pendingOpens < 3) { pendingOpens++; throw refusal('EPERM'); } return (originalOpen as any)(...args); });
+  vi.spyOn(fs, 'lstat').mockImplementation(async (...args: any[]) => { if (pendingRead(args[0])) throw refusal('EPERM'); return (originalLstat as any)(...args); });
+  vi.spyOn(fs, 'open').mockImplementation(async (...args: any[]) => { if (pendingRead(args[0])) throw refusal('EPERM'); return (originalOpen as any)(...args); });
   if (platform === 'win32') {
     await expect(storage.create(input())).resolves.toBe(1);
-    expect([heldLinks, pendingOpens]).toEqual([3, 3]);
+    expect([heldLinks, pendingReads]).toEqual([3, 3]);
     vi.restoreAllMocks(); await expect(createBatchStorage(dir).load()).resolves.toHaveLength(1);
   } else {
     await expect(storage.create(input())).rejects.toMatchObject({ code: 'queue_storage_error' });
-    expect([heldLinks, pendingOpens]).toEqual([1, 1]);
+    expect([heldLinks, pendingReads]).toEqual([1, 1]);
   }
 });
 
 it('win32: a lock that stays unopenable for longer than the removal can take stops the store', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'nai-queue-storage-')); directories.push(dir);
   const storage = createBatchStorage(dir, {}, { platform: 'win32' }); await storage.load();
-  const lock = path.join(dir, 'frozen-queue', '.quota.lock'), originalLink = fs.link.bind(fs), originalOpen = fs.open.bind(fs), realNow = Date.now.bind(Date); let pendingOpens = 0, ahead = 0;
+  const lock = path.join(dir, 'frozen-queue', '.quota.lock'), originalLink = fs.link.bind(fs), originalOpen = fs.open.bind(fs), originalLstat = fs.lstat.bind(fs), realNow = Date.now.bind(Date); let pendingReads = 0, ahead = 0;
   const refusal = (code: string) => Object.assign(new Error(`${code}: fixture`), { code });
   vi.spyOn(Date, 'now').mockImplementation(() => realNow() + ahead);
   vi.spyOn(fs, 'link').mockImplementation(async (...args: any[]) => { if (String(args[1]) === lock) throw refusal('EEXIST'); return (originalLink as any)(...args); });
-  // The clock passes the limit between the second and the third refused open.
-  vi.spyOn(fs, 'open').mockImplementation(async (...args: any[]) => { if (String(args[0]) === lock) { if (++pendingOpens === 3) ahead = REMOVAL_PENDING_MS + 1; throw refusal('EPERM'); } return (originalOpen as any)(...args); });
+  // Every read of the lock is refused (the open, or on Windows the lstat before it); the clock passes the limit
+  // between the second and the third.
+  const pendingRead = (file: unknown) => { if (String(file) !== lock) return false; if (++pendingReads === 3) ahead = REMOVAL_PENDING_MS + 1; return true; };
+  vi.spyOn(fs, 'lstat').mockImplementation(async (...args: any[]) => { if (pendingRead(args[0])) throw refusal('EPERM'); return (originalLstat as any)(...args); });
+  vi.spyOn(fs, 'open').mockImplementation(async (...args: any[]) => { if (pendingRead(args[0])) throw refusal('EPERM'); return (originalOpen as any)(...args); });
   await expect(storage.create(input())).rejects.toMatchObject({ code: 'queue_storage_error' });
-  expect(pendingOpens).toBe(3);
+  expect(pendingReads).toBe(3);
 });
 
 it('does not let a lock contender publication candidate break the current holder recovery or quota scan', async () => {
