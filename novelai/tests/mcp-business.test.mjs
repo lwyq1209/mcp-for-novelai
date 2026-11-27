@@ -554,14 +554,14 @@ test('source stays a whitelist: one guarded bridge, fixed host methods per tool,
     assert.deepEqual(importsOf(source).filter(item => writeOrReview.test(item) && !['./recipe-queue.mjs', './recipe-tool-schemas.mjs'].includes(item)), []);
   }
   assert.deepEqual(importsOf(guards).filter(source => writeOrReview.test(source)), []);
-  // list, read/pause/resume/cancel, one result; the whole-batch results read the batch and each thumbnail (0.1.4).
+  // list, read/pause/resume/cancel, one result; the whole-batch results read the batch and each thumbnail (0.2.0).
   assert.equal((queue.match(/bridge\.call\(/g) ?? []).length, 5);
   assert.equal((queue.match(/bridge\.call\(QUEUE_HOST_METHODS\.[a-z]+|bridge\.call\(QUEUE_HOST_METHODS\[args\.action\]/g) ?? []).length, 5);
   assert.deepEqual(importsOf(queue).filter(source => writeOrReview.test(source)), []);
   assert.ok(!/enqueue_queue_recipes|put_queue_recipe|read_queue_recipe|derive_queue_recipe|lookup_queue_request/.test(queue));
   // Phase two: the recipe module calls exactly seven fixed host methods (the five raw recipe methods, the canvas
   // capture and list_queue for an unknown receipt), each through the frozen map, and imports nothing from the removed
-  // enqueue core. Eight call sites: since 0.1.4 the settle of an unknown enqueue resends the same plan under the same key.
+  // enqueue core. Eight call sites: since 0.2.0 the settle of an unknown enqueue resends the same plan under the same key.
   assert.deepEqual(importsOf(recipes), ['node:crypto', './bridge-client.mjs', './queue-control.mjs', './recipe-masks.mjs', './recipe-sources.mjs', './style-preset.mjs', './recipe-sources.mjs']);
   const { RECIPE_HOST_METHODS, RECIPE_SOURCE_HOST_METHODS } = await import('../src/recipe-queue.mjs');
   assert.ok(Object.isFrozen(RECIPE_HOST_METHODS));

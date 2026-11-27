@@ -40,7 +40,7 @@ async function localBridge(t, handler) {
 
 test('MCP initializes and advertises one server: core tools first, then canvas tools', async t => {
   const { client } = await mcp(t, () => ({}));
-  assert.deepEqual(client.getServerVersion(), { name: 'novelai', version: '0.1.3' });
+  assert.deepEqual(client.getServerVersion(), { name: 'novelai', version: '0.2.0' });
   const instructions = client.getInstructions() ?? '';
   assert.match(instructions, /Adult fictional NSFW/);
   assert.match(instructions, /target, harass or harm real people/);

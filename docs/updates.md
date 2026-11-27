@@ -299,8 +299,11 @@ Nothing else â€” not GitHub, not TLS, not the release page, not the API's JSON â
 - **The macOS certificate cannot be changed by an update**: the new version must have the same certificate as the
   running one. When the certificate expires (2036) or must be replaced, every user installs that version by hand once.
 - **No data-format guard on rollback**: a new version that changed the data folder's format before it failed would
-  leave the old version, put back, with data it may not read. 0.1.3 changes no format; a future version that does must
-  handle this before it confirms its start.
+  leave the old version, put back, with data it may not read. 0.2.0 writes queue records 0.1.3 does not know (a batch
+  that ended **partial**): with one of them in the data folder 0.1.3 reads its frozen queue as damaged
+  (`queue_storage_error`: agent batches stop, the library still opens), and a backup made by 0.2.0 restored in 0.1.3
+  loses the new style preset fields. Going back to 0.1.3 by hand therefore needs the data as it was, from a backup made
+  before the update.
 - **Proxy "direct" or off**: requests then use no explicit proxy, so the HTTP library falls back to `HTTP(S)_PROXY`
   variables of the app's environment (without CONNECT). The signature check still decides; at worst the update fails.
 - **Windows has no rollback of its own** (above), and the installer closes agents' MCP servers.

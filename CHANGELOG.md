@@ -2,7 +2,7 @@
 
 All notable changes to MCP for NovelAI are recorded here. Versions follow [Semantic Versioning](https://semver.org).
 
-## Unreleased
+## 0.2.0 - 2026-11-26
 
 ### Added
 
@@ -72,12 +72,12 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
 - `read_queue` `wait: {until: "done" | "next", seconds}` (1–1200, default 300): the server polls the app every 1–2
   seconds and returns as soon as the batch ended, saved a new result, was paused or cancelled, or the time ran out, with
   `wait: {until, ended, waitedSeconds}`; failed reads on the way are read through and cancelling the request stops it.
-- `read_queue` says where a batch stands: `ahead: {images, batches}` queued before it, `etaSeconds` (from the recent
-  image times and the intervals) and `imageSeconds`, plus `itemCounts`, `rateLimitRetries` per image and `itemReasons`
-  for the queue's own item codes.
+- `read_queue` says where a batch stands: `ahead: {images, batches}` queued before it and `etaSeconds` (from the
+  recent image times and the intervals) while it has not ended, plus `itemCounts`, `rateLimitRetries` per image and
+  `itemReasons` for the queue's own item codes.
 - `get_queue_result` without `itemIndex` returns the whole batch's saved results as thumbnails (at most 384 px, 20 per
   call, `offset` pages on), each with its `itemIndex`, `index`, `historyId`, `actualSeed`, `fileName` and `file`.
-- Queue items record when they started and ended (`startedAt`, `finishedAt`).
+- The app records when each queue image started and ended; the time-left estimate comes from these times.
 - **V5 Full Effort**: the canvas has a High / Medium switch beside V5 Full (and V5 Full inpainting). Medium runs
   NovelAI's distilled model (`nai-diffusion-5-full-medium`, inpaint `nai-diffusion-5-full-medium-inpainting`), about
   42 % cheaper at default settings, with 14 steps, Euler Ancestral, the Heavy UC preset and no negative prompt or CFG
@@ -89,7 +89,6 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
 - **Enhance Max✨** (V5 models): the image is sent at its own size and comes back about twice as large (at most about
   3.1 MP) through NovelAI's new upscaler. Canvas Enhance offers it beside 1× and 2×; `prepare_recipe` takes
   `scale: "max"`. Max costs Anlas on Opus too.
-- `lookup_enqueue` reports `inFlight`: whether the app has received an enqueue under the key and is still handling it.
 - `prepare_recipe` i2i may leave out `width`/`height`: the source's aspect ratio is used at about 832×1216 pixels,
   within the Opus free size (warning `i2i_size_from_source`).
 - **Agents see the queue limits you set.** The `enqueue_recipes` description now states the current Settings › Queue
@@ -137,17 +136,17 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
   - `enqueue_recipes`: `status`, `batchId`, `count` (`seeds` where the server chose them, `warnings`).
   - `tag_details`: per tag its category, post count, canonical name and aliases where they differ, and the wiki's
     definition (the whole text before its first heading; `wikiMore` when the page goes on).
-- **10 tools instead of 13.** Retired: `lookup_enqueue` (call `enqueue_recipes` again with the same key and plan: it
-  looks the key up first, answers `already_enqueued` with the batch and never queues twice), `control_queue` (pause,
-  resume and cancel a batch on the queue page of the app) and `list_workspaces` (`read_workspace` finds the one canvas
-  itself; `workspaceId` is optional). They answer `unknown_tool`.
+- **10 tools instead of 18.** Eight tools are retired and answer `unknown_tool`:
+  - `lookup_enqueue`: call `enqueue_recipes` again with the same key and plan; it looks the key up first, answers
+    `already_enqueued` with the batch and never queues twice.
+  - `control_queue`: pause, resume and cancel a batch on the queue page of the app.
+  - `list_workspaces`: `read_workspace` finds the one canvas itself; `workspaceId` is optional.
+  - The canvas self-check and draft tools: `read_prompt_review` (use `prepare_recipe {canvas, preview: true}`),
+    `get_asset` (use `read_workspace {assetIds}`), `draft_edit`, `apply_edit` and `undo_edit` (edit the canvas in the
+    app). `prepare_recipe {canvas}` still generates what the canvas holds.
 - `read_workspace` is compact by default too: image entries no longer carry their own recipe (`promptsMatchCanvas`
   says whether it matches the canvas), and the inpaint prompt and recipe appear only on the inpaint tab; `omitted`
   lists what was left out and `detail: "full"` returns everything.
-- **13 tools instead of 18.** The canvas self-check and draft tools are retired: `read_prompt_review` (use
-  `prepare_recipe {canvas, preview: true}`), `get_asset` (use `read_workspace {assetIds}`), `draft_edit`, `apply_edit`
-  and `undo_edit` (edit the canvas in the app). They answer `unknown_tool`. `list_workspaces` and `read_workspace`
-  stay, and `prepare_recipe {canvas}` still generates what the canvas holds.
 - The local Anlas estimate prices V5 models at 1.5× the formula, as NovelAI's own client does (it was lower before).
 - Imported V5 Curated images (metadata `Source` "NovelAI Diffusion V5 DB276663") are recognised as Curated, not Full.
 - **No failure stops the shared queue any more.** An image that fails, is refused before it is sent or has an unknown
@@ -163,8 +162,8 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
   never run at once.
 - **After a restart, unfinished batches continue by themselves** (also when an agent's MCP server starts the app): an
   image that was running and was not saved is unknown (`restart_unconfirmed`, never resent), the rest goes on. A batch
-  the user paused stays paused. Batches the queue had paused itself (closing app, an older version's stop after a
-  failure, `recovered_paused`) continue.
+  you paused stays paused, also one you paused in 0.1.3 before updating. Batches the queue had paused itself (closing
+  app, an older version's stop after a failure, `recovered_paused`) continue.
 - Unchanged: a frozen-queue storage failure still stops every agent batch; request keys, the per-enqueue and total
   limits, pause, resume, cancel and the hold before an update work as before.
 - **`prepare_recipe` corrects instead of refusing** what the app would clamp, snap, resize, convert or drop anyway
@@ -174,6 +173,8 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
   size more than 3 % off the source's aspect ratio is refitted to it (`i2i_size_adjusted`) instead of refused. The input
   schema no longer limits these values, so clients do not refuse them before the call. Still refused: missing fields,
   unknown names, wrong types, fields of another mode, unreadable sources, and sizes NovelAI cannot make.
+- `enqueue_recipes` `intervalSeconds` outside 0–60 is set to the nearest bound (warning `value_clamped`) instead of
+  refused.
 - Upscale and Director downscale a source over 1,048,576 pixels by default (warning `source_downscaled`);
   `acceptDownscale: false` keeps the old refusal.
 - `enqueue_recipes`: a fixed-seed recipe used for several images without `seeds` gives them seed, seed + 1, … (listed
@@ -183,8 +184,8 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
   confirm the plan, it looks the request key up and sends the same plan under the same key again while the app holds
   nothing it is working on (the app deduplicates the key; never a second batch), for up to about 150 seconds, and
   answers `enqueued` (`reconciled: true`) or the definite refusal. The 130-second settle window, the per-process hold
-  and the two-lookups-before-a-new-key rule are gone; `lookup_enqueue` answers at once and advises a new key only when
-  the app finished with the key without a batch and cannot start it again. The app no longer lets a lookup turn a
+  and the two-lookups-before-a-new-key rule are gone; the answer advises a new key only when the app finished with
+  the key without a batch and cannot start it again. The app no longer lets a lookup turn a
   running enqueue's receipt unknown (which made that enqueue give up), and it starts a receipt whose enqueue ended
   without a batch again when the same plan comes under the same key.
 

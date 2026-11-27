@@ -279,9 +279,9 @@ build from source does not check on its own.
 - **Download** opens the release page, as before. It is the only choice where the app cannot replace itself: macOS run
   from Downloads or the disk image, a folder you cannot write to, Windows installed for all users, a Linux folder whose
   `chrome-sandbox` root set up.
-- **Updating to 0.1.3 is done by hand** (earlier versions cannot update themselves yet). On macOS the Keychain then
-  asks once more for the app's Safe Storage key: from 0.1.3 the app is signed with a fixed certificate, so **Always
-  Allow** stays valid across later updates.
+- **A version that has no Update and restart yet is updated by hand, once**: download the new version from the
+  release page and install it. On macOS the Keychain then asks once more for the app's Safe Storage key: the app is
+  now signed with a fixed certificate, so **Always Allow** stays valid across later updates.
 
 How it works, how to verify a release yourself, App Management on macOS and the threat model:
 [docs/updates.md](docs/updates.md).

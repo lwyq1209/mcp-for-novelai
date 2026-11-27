@@ -153,7 +153,7 @@ describe('enqueue output at the host boundary (issue #1)', () => {
     const same = await host.ok('enqueue_recipes', { requestKey: 'proj-c', items: [ref(recipe)], historyGroup: 'MY PROJ' });
     expect(same.batch.output).toMatchObject({ historyGroup: 'MY PROJ', historyGroupId: first.batch.output.historyGroupId, historyGroupName: 'my proj' });
     expect(fixture.groups.map(group => group.name)).toEqual(['my proj']);
-    // The refusal frees the key for a changed plan at once: clear, no window (round 3 observation; 0.1.4 says so).
+    // The refusal frees the key for a changed plan at once: clear, no window (round 3 observation; 0.2.0 says so).
     const looked = await host.ok('lookup_enqueue', { requestKey: 'proj-b' });
     expect(looked.status).toBe('not_found'); expect(looked.settlement).toEqual({ state: 'clear', newKeyAdvised: false });
     const renamed = await host.ok('enqueue_recipes', { requestKey: 'proj-b', items: [ref(recipe)], historyGroup: 'other proj' });
@@ -250,7 +250,7 @@ describe('enqueue output at the host boundary (issue #1)', () => {
     expect(plain.batch).not.toHaveProperty('output');
   });
 
-  it('a lost enqueue is settled in the same call by the same plan under the same key; the original arriving late is answered from its receipt (0.1.4, replacing the settle window of round 4 S1)', async () => {
+  it('a lost enqueue is settled in the same call by the same plan under the same key; the original arriving late is answered from its receipt (0.2.0, replacing the settle window of round 4 S1)', async () => {
     fixture.groups.push({ id: 'g0', name: 'my proj', createdAt: '2026-10-14T00:00:00Z' });
     const host = await startHost();
     const recipe = await host.ok('prepare_recipe', t2i);
@@ -267,7 +267,7 @@ describe('enqueue output at the host boundary (issue #1)', () => {
     expect(fixture.post).toHaveBeenCalledTimes(1);
   });
 
-  it('host_outdated from a client without the output fields leaves the key unused, and a lookup says so at once (0.1.4)', async () => {
+  it('host_outdated from a client without the output fields leaves the key unused, and a lookup says so at once (0.2.0)', async () => {
     const host = await startHost({ olderClient: true });
     const recipe = await host.ok('prepare_recipe', t2i);
     expect((await host.call('enqueue_recipes', { requestKey: 'k-s1c', items: [ref(recipe)], fileNamePrefix: 'p' })).value.error.code).toBe('host_outdated');

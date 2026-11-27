@@ -230,7 +230,7 @@ async function realHost(t, { realBatch = false, frozenLimits = null, wrapStorage
 }
 
 async function connect(t, bridgeClient, { create = options => merged.createNovelAiMcpServer(options), compact = false } = {}) {
-  // 0.1.4: an unknown enqueue outcome is settled in the call; its sleeps advance a fake clock here instead of waiting.
+  // 0.2.0: an unknown enqueue outcome is settled in the call; its sleeps advance a fake clock here instead of waiting.
   const clock = { t: 0 };
   const server = create({ bridgeClient, wholeResults: !compact, recipeQueue: { monotonicNow: () => clock.t, sleep: async ms => { clock.t += ms; } } });
   const client = new Client({ name: 'recipes-modes-test', version: '1.0.0' });
@@ -325,7 +325,7 @@ test('P1 i2i, enhance, upscale and director: one source metadata read, one put b
       assert.deepEqual(v.effective.input, { width: 1024, height: 1024, resized: true }); assert.deepEqual(v.effective.output, { width: 2048, height: 2048 });
       assert.deepEqual(v.warnings.map(warning => warning.code), ['source_downscaled']);
     }],
-    // 0.1.4: without acceptDownscale a large source is downscaled the same way (the host's own resize), with the warning.
+    // 0.2.0: without acceptDownscale a large source is downscaled the same way (the host's own resize), with the warning.
     ['upscale of a large source without acceptDownscale', recipes(bigSource).upscale(), bigSource, big, v => {
       assert.deepEqual(v.effective.input, { width: 1024, height: 1024, resized: true }); assert.deepEqual(v.effective.output, { width: 2048, height: 2048 });
       assert.deepEqual(v.warnings.map(warning => warning.code), ['source_downscaled']); assert.match(v.warnings[0].message, /downscales the source to 1024×1024/);
@@ -495,7 +495,7 @@ test('P2 every invalid image-mode argument is refused before any host call, mask
   assert.deepEqual(h.calls, [], 'no invalid preparation reached the host');
 });
 
-test('P2b (0.1.4) image-mode values the host would clamp, snap, resize or convert are corrected with a warning each, saved as they run', async t => {
+test('P2b (0.2.0) image-mode values the host would clamp, snap, resize or convert are corrected with a warning each, saved as they run', async t => {
   const h = await realHost(t);
   const { call, readRecipe } = await connect(t, h.bridge);
   const add = (id, width, height) => h.addHistory(id, gradient(width, height), { width, height });
@@ -680,7 +680,7 @@ test('P5 enqueue: mixed modes are refused before dispatch (key unused); post-pro
   // The same key works once the plan is right: nothing was recorded under it.
   const mixedFixed = ok(await call('enqueue_recipes', { requestKey: 'mixed', items: [{ ...ref(i2i), seeds: [1, 2] }] }));
   assert.equal(mixedFixed.status, 'enqueued'); assert.deepEqual(mixedFixed.items.map(item => item.seed), [1, 2]);
-  // 0.1.4: a post-processing recipe with a seed, a count or listed twice is sent once (each image would be the same
+  // 0.2.0: a post-processing recipe with a seed, a count or listed twice is sent once (each image would be the same
   // paid request); a fixed-seed i2i recipe for two images gets seed and seed + 1.
   const otherBytes = gradient(768, 1152), other = ok(await call('prepare_recipe', recipes(h.addHistory('history-p5-other', otherBytes, { width: 768, height: 1152 })).upscale()));
   const up = ok(await call('enqueue_recipes', { requestKey: 'up-seed', items: [{ ...ref(upscale), seeds: [5] }, ref(other), ref(upscale)] }));
@@ -1042,7 +1042,7 @@ test('W2d the host refuses upscale/director seeds and repeats before writing a r
     assert.equal(await exists(receiptFile(h, requestKey)), false, label);
     assert.equal(ok(await call('lookup_enqueue', { requestKey })).status, 'not_found', `${label}: the key is unused`);
   }
-  // Through this server (0.1.4): the seed is dropped and the recipe sent once, with a warning; the host accepts that.
+  // Through this server (0.2.0): the seed is dropped and the recipe sent once, with a warning; the host accepts that.
   const accepted = ok(await call('enqueue_recipes', { requestKey: 'host-seed', items: [{ ...ref(upscale), seeds: [5] }] }));
   assert.equal(accepted.status, 'enqueued'); assert.deepEqual(accepted.items.map(item => item.seed), [null]);
   assert.deepEqual(accepted.warnings.map(warning => warning.code), ['postprocess_single_image']);
@@ -1280,7 +1280,7 @@ test('refused(): details.status is rejected only when the confirming lookup find
     assert.equal(refused.code, code, label); assert.equal(refused.details.keyStatus, keyStatus, label);
     assert.equal(refused.details.status, 'unknown', `${label}: not a confirmed rejection`); assert.equal(refused.details.enqueueSent, true);
     assert.match(refused.message, /call enqueue_recipes (again )?with the same requestKey and plan/i, label);
-    // No hold (0.1.4): the lookup says nothing was recorded, and the same call again is safe and enqueues it.
+    // No hold (0.2.0): the lookup says nothing was recorded, and the same call again is safe and enqueues it.
     assert.equal(ok(await call('lookup_enqueue', { requestKey })).status, 'not_found', `${label}: the host never recorded it`);
     assert.equal(ok(await call('enqueue_recipes', plan)).status, 'enqueued', `${label}: the same key works`);
   }
@@ -1597,7 +1597,7 @@ test('Enhance Max✨: V5 only; the size is worked out (never refused), and the r
   const adjusted = ok(await call('prepare_recipe', recipes(odd).enhance({ ...V5_GEN, scale: 'max' })));
   assert.deepEqual([adjusted.effective.width, adjusted.effective.height], [832, 1216]);
   assert.deepEqual(adjusted.warnings.map(warning => warning.code), ['enhance_max_source_adjusted', 'enhance_max_paid']);
-  // 0.1.4: Max✨ on another model runs the largest scale that fits (here 1: 2× of 832×1216 is over the pixel limit).
+  // 0.2.0: Max✨ on another model runs the largest scale that fits (here 1: 2× of 832×1216 is over the pixel limit).
   const elsewhere = ok(await call('prepare_recipe', recipes(source).enhance({ scale: 'max' })));
   const replaced = elsewhere.warnings.find(warning => warning.code === 'value_replaced');
   assert.deepEqual([replaced.field, replaced.from, replaced.to], ['scale', 'max', 1]); assert.match(replaced.message, /Max✨ exists only for the V5 models/);

@@ -396,7 +396,7 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
   const storeFull = (message: string): never => { throw withReason(new WorkspaceError('queue_storage_failed', message, { reason: 'store_full' }), 'recipe.store_full'); };
   const exclusive = <T>(run: () => Promise<T>): Promise<T> => { const next = sequence.then(run); sequence = next.catch(() => undefined); return next; };
   /**
-   * Request keys of the enqueues this process has received and not yet answered (0.1.4), counted from the moment the
+   * Request keys of the enqueues this process has received and not yet answered (0.2.0), counted from the moment the
    * bridge hands one over (before it waits for the store's sequence) until its answer. lookup_queue_request reports it
    * (inFlight), so a caller whose answer was lost can tell "still being handled" from "nothing arrived" at once,
    * without the 130-second settle window the MCP server used to wait; and a lookup never rewrites the receipt of an
@@ -694,7 +694,7 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
   const replaceReceipt = async (prior: Receipt, next: Receipt) => withQuota(async nonce => {
     const file = receiptPath(prior.requestKey), current = await receipt(prior.requestKey);
     if (!current || current.revision !== prior.revision || current.recordHash !== prior.recordHash) fail('queue_storage_failed', 'Queue receipt changed during its state transition.');
-    // unknown:preparing is the restart of a receipt whose enqueue ended without a batch (enqueueRecipes, 0.1.4).
+    // unknown:preparing is the restart of a receipt whose enqueue ended without a batch (enqueueRecipes, 0.2.0).
     const transitions = new Set(['preparing:preparing', 'preparing:accepted', 'preparing:rejected', 'preparing:unknown', 'unknown:accepted', 'unknown:preparing']);
     if (!transitions.has(`${prior.status}:${next.status}`) || next.revision !== prior.revision + 1 || next.previousRecordHash !== prior.recordHash || next.requestHash !== prior.requestHash || next.recipePlanHash !== prior.recipePlanHash) fail('queue_storage_failed', 'Invalid queue receipt transition.');
     const currentInfo = await fs.lstat(file);
@@ -1130,7 +1130,7 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
         }
         // preparing or unknown, and no batch under this key: the enqueue that wrote it has ended (enqueues run one at a
         // time, in this sequence) without one, because it stopped before the batch service or the batch service failed
-        // it with its queue still readable. The same plan under the same key starts over under this receipt (0.1.4,
+        // it with its queue still readable. The same plan under the same key starts over under this receipt (0.2.0,
         // instead of staying unknown for good). That never makes a second batch: the batch service answers a
         // requestKey it already holds with that batch (batch-service enqueue → lookup), and an unreadable frozen queue
         // never gets here.
@@ -1326,7 +1326,7 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
     /** Registered as received (lookup inFlight) the moment it is called, before it waits for the store's sequence. */
     enqueue_queue_recipes(raw: unknown, context?: { source?: BatchSource }) { const done = receiving(raw); return enqueueRecipes(raw, context).finally(done); },
     /**
-     * What a requestKey holds, with inFlight (0.1.4): true while an enqueue of this key has been received and not yet
+     * What a requestKey holds, with inFlight (0.2.0): true while an enqueue of this key has been received and not yet
      * answered. The receipt of such an enqueue is never rewritten here (it records its own outcome); only a receipt that
      * nobody works on any more is reconciled with a batch found under it. unknown without a batch and not in flight
      * says restartable: the same plan under the same key starts over (enqueueRecipes).
@@ -1361,7 +1361,7 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
         return { batch: await decorate(job), status: persisted ? 'accepted' : 'unknown', inFlight: inFlight() };
       }
       if (saved.status === 'accepted') fail('queue_storage_failed', 'An accepted queue receipt has no matching durable batch.');
-      // preparing or unknown without a batch. Before 0.1.4 a lookup turned a preparing receipt into unknown, which made
+      // preparing or unknown without a batch. Before 0.2.0 a lookup turned a preparing receipt into unknown, which made
       // an enqueue still running abandon its dispatch; now the receipt is left alone. Not running: the same plan under the
       // same key restarts it (enqueueRecipes; with a frozen queue that failed, once it works again).
       const running = inFlight();
@@ -1419,7 +1419,7 @@ export function createQueueRecipeService(options: { runtimeDir: string; batch: Q
       // (never historyItem); the MCP server turns the path into a project-relative one.
       const named = <T extends { historyItem?: HistoryItem; historyId?: string }>(value: T) => value?.historyItem && value.historyItem.id === value.historyId && typeof value.historyItem.filePath === 'string' && value.historyItem.filePath
         ? { ...value, fileName: path.basename(value.historyItem.filePath), filePath: value.historyItem.filePath } : value;
-      // variant thumbnail (0.1.4, whole-batch views): the same saved original, shrunk to at most 384 px (WebP); the
+      // variant thumbnail (0.2.0, whole-batch views): the same saved original, shrunk to at most 384 px (WebP); the
       // reply keeps the original's identity and names its size as sourceWidth/sourceHeight.
       const withFile = async <T extends { historyItem?: HistoryItem; historyId?: string; data?: unknown; width?: unknown; height?: unknown }>(value: T) => {
         const result = named(value);

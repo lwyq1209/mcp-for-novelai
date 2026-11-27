@@ -375,7 +375,7 @@ test('nai call: inline JSON, @file and stdin-less defaults reach every tool thro
   assert.equal(h.methods().length, sent, 'tools/list reaches no host');
   // NOVELAI_CLI_CLIENT names the caller (cleaned like an MCP client name); an unusable name falls back to nai-cli.
   await h.nai(['queue', 'list'], { env: { NOVELAI_CLI_CLIENT: 'claude-code' } });
-  assert.deepEqual(h.calls.at(-1).caller.client, { name: 'claude-code', version: 'nai-cli 0.1.3' });
+  assert.deepEqual(h.calls.at(-1).caller.client, { name: 'claude-code', version: 'nai-cli 0.2.0' });
   await h.nai(['queue', 'list'], { env: { NOVELAI_CLI_CLIENT: 'bad\u0007name' } });
   assert.equal(h.calls.at(-1).caller.client.name, 'nai-cli');
 });

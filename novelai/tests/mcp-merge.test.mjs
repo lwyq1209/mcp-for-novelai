@@ -170,7 +170,7 @@ test('N4 size budget: tools/list totals stay under the agreed ceilings', async t
   // read_queue wait and the whole-batch get_queue_result (thumbnails) raised core to 42k (approved by the main session
   // 2026-11-05). V5 Full Effort (prepare_recipe effort) and Enhance Max✨ (scale "max") add their rules, which must be
   // visible before a call (Medium's fixed values, Max's size and its Anlas cost on Opus; approved by the main session
-  // 2026-11-05): together they raise core to 42.5k (about 42.1k used). 0.1.4 (approved by the main session 2026-11-05):
+  // 2026-11-05): together they raise core to 42.5k (about 42.1k used). 0.2.0 (approved by the main session 2026-11-05):
   // prepare_recipe corrects instead of refusing and enqueue_recipes settles an unknown outcome itself, so the rules of
   // multipleOf/bounds, acceptDownscale, explicit seeds and the 130-second settle window are gone and the new behaviour
   // is described instead; core came out about 42.1k again, so the ceiling goes down to 42.4k (a few hundred spare).

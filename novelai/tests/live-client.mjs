@@ -121,7 +121,7 @@ try {
   await screenshot('01-manual-workspace.png');
 
   phase = 'MCP read and native image';
-  mcp = new Client({ name: 'novelai-live-acceptance', version: '0.1.3' });
+  mcp = new Client({ name: 'novelai-live-acceptance', version: '0.2.0' });
   await mcp.connect(new StdioClientTransport({ command: process.execPath, args: [resolve(root, 'src/mcp.mjs')], cwd: root, env: { NOVELAI_DATA_DIR: dataDir, NOVELAI_MCP_AUTOSTART: '0' }, stderr: 'pipe' }));
   // The canvas draft and asset tools left the MCP surface on 2026-11-12; the host keeps their methods for its own
   // window, so this script reaches them through the bridge and wraps the reply in the shape of a tool result.
