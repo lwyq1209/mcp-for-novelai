@@ -4,6 +4,14 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
 
 ## Unreleased
 
+### Changed
+
+- The READMEs present the two ways an agent drives the app side by side — the MCP server and the `nai` command line —
+  each with a worked example, and list the `nai` command beside every tool. The features are shown with new screenshots
+  (queue, library, style presets, canvas, inpaint, censor and export, tags, imported images, Settings › MCP access, which
+  still showed 18 tools), and the per-client configurations, the privacy details and the update details are folded. The
+  package description names `nai` as well.
+
 ### Fixed
 
 - `nai` names a file in its error messages as it was given: a Windows path is no longer shown with doubled

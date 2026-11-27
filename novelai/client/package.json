@@ -2,7 +2,7 @@
   "name": "mcp-for-novelai",
   "version": "0.2.0",
   "private": true,
-  "description": "MCP for NovelAI: a desktop NovelAI image generation client that AI agents use through MCP.",
+  "description": "MCP for NovelAI: a desktop NovelAI image generation client that AI agents drive through its MCP server or its nai command line.",
   "author": "lwyq1209",
   "license": "MIT",
   "repository": {
