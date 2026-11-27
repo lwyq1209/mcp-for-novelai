@@ -324,10 +324,13 @@ export function createBatchService(deps: BatchDependencies) {
     if (entry.public.error?.code !== 'scheduler_stopped') entry.public.error = null;
     finish(entry, entry.public.items.every(item => item.status === 'succeeded') ? 'succeeded' : 'partial');
   };
+  /** The app pauses a batch itself (closing, a storage failure): marked "app" when the batch was going on, so the
+   * next start continues it and never takes it for a pause of the user. A batch the user paused stays the user's. */
+  const pauseByApp = (entry: Entry) => { if (!entry.pauseRequested) entry.public.pausedBy = 'app'; entry.pauseRequested = true; };
   const pauseFor = (entry: Entry, code: string, message: string) => {
     if (isBatchTerminal(entry.public.status)) return;
     if (entry.public.cancelRequested) { pendingItems(entry, 'cancelled'); finish(entry, 'cancelled'); return; }
-    entry.pauseRequested = true; entry.public.status = 'paused'; entry.public.activeIndex = null; entry.public.activeJobId = null; entry.public.error = { code, message }; emit(entry);
+    pauseByApp(entry); entry.public.status = 'paused'; entry.public.activeIndex = null; entry.public.activeJobId = null; entry.public.error = { code, message }; emit(entry);
   };
   const lookup = (raw: unknown, limits?: typeof MANUAL_BATCH_LIMITS) => {
     if (storageError) throw storageError;
@@ -438,7 +441,7 @@ export function createBatchService(deps: BatchDependencies) {
     // The window names the entry in its language (src/host-errors queue.stray_entry).
     if (stray) { withReason(storageError, 'queue.stray_entry', { entry: stray.entry! }); log(`[frozen-queue] ${stray.message}`); }
     // Manual batches are never stored: they run on (P2-4); only the durable agent batches stop.
-    for (const entry of entries.values()) if (!entry.manual && entry.public.execution === 'queued' && !isBatchTerminal(entry.public.status)) { entry.pauseRequested = true; entry.public.error = { code: storageError.code, message: storageError.message, ...(stray ? { reason: 'queue.stray_entry', params: { entry: stray.entry! } } : {}) }; entry.public.status = entry.public.activeIndex === null ? 'paused' : 'pausing'; emit(entry); }
+    for (const entry of entries.values()) if (!entry.manual && entry.public.execution === 'queued' && !isBatchTerminal(entry.public.status)) { pauseByApp(entry); entry.public.error = { code: storageError.code, message: storageError.message, ...(stray ? { reason: 'queue.stray_entry', params: { entry: stray.entry! } } : {}) }; entry.public.status = entry.public.activeIndex === null ? 'paused' : 'pausing'; emit(entry); }
     throw storageError;
   }
   const stateKeyOf = (job: BatchJob) => JSON.stringify({ ...job, updatedAt: undefined });
@@ -726,7 +729,7 @@ export function createBatchService(deps: BatchDependencies) {
     // source (step 4a) is absent on batches stored before it; it never changes after the enqueue.
     const immutable = ['batchId','execution','originWorkspaceId','expectedRevision','submittedRevision','requestKey','mode','count','intervalSeconds','seedMode','scenePlanHash','draftId','createdAt','source'];
     for (const key of immutable) if (JSON.stringify((job as any)[key]) !== JSON.stringify((input.initial as any)[key])) return storageFailed();
-    if (job.count !== args.count || job.originWorkspaceId !== args.workspaceId || job.requestKey !== args.requestKey || job.mode !== args.mode || job.expectedRevision !== args.expectedRevision || job.submittedRevision !== args.expectedRevision || !['queued','running','pausing','paused','cancelling','succeeded','partial','cancelled','blocked'].includes(job.status) || (job.pausedBy !== undefined && job.pausedBy !== 'user') || typeof job.cancelRequested !== 'boolean' || !Number.isFinite(Date.parse(job.updatedAt)) || !Array.isArray(job.items) || job.items.length !== args.count || !Array.isArray(input.initial.items) || input.initial.items.length !== args.count) return storageFailed();
+    if (job.count !== args.count || job.originWorkspaceId !== args.workspaceId || job.requestKey !== args.requestKey || job.mode !== args.mode || job.expectedRevision !== args.expectedRevision || job.submittedRevision !== args.expectedRevision || !['queued','running','pausing','paused','cancelling','succeeded','partial','cancelled','blocked'].includes(job.status) || (job.pausedBy !== undefined && job.pausedBy !== 'user' && job.pausedBy !== 'app') || typeof job.cancelRequested !== 'boolean' || !Number.isFinite(Date.parse(job.updatedAt)) || !Array.isArray(job.items) || job.items.length !== args.count || !Array.isArray(input.initial.items) || input.initial.items.length !== args.count) return storageFailed();
     if ((job.activeIndex !== null && (!Number.isSafeInteger(job.activeIndex) || job.activeIndex < 0 || job.activeIndex >= job.count)) || (job.activeJobId !== null && (typeof job.activeJobId !== 'string' || !job.activeJobId)) || (job.error !== null && (!record(job.error) || typeof job.error.code !== 'string' || typeof job.error.message !== 'string'))) return storageFailed();
     for (const [index, item] of job.items.entries()) {
       const original = input.initial.items[index];
@@ -735,7 +738,7 @@ export function createBatchService(deps: BatchDependencies) {
       // An item with child evidence cannot be restored as unsent, even when the
       // JSON remains valid after a damaged status field. Never replay it.
       if (['pending', 'submitting'].includes(item.status) && (item.jobId !== null || item.actualSeed !== null || item.results.length)) return storageFailed();
-      // Fields added in 0.1.4 (absent on older records): image times and the resends after HTTP 429.
+      // Fields added in 0.2.0 (absent on older records): image times and the resends after HTTP 429.
       const time = (value: unknown) => value === undefined || value === null || (typeof value === 'string' && Number.isFinite(Date.parse(value)));
       if (!time(item.startedAt) || !time(item.finishedAt) || (item.rateLimitRetries !== undefined && (!Number.isSafeInteger(item.rateLimitRetries) || item.rateLimitRetries < 1 || item.rateLimitRetries > 16))) return storageFailed();
       for (const result of item.results) if (!record(result) || typeof result.id !== 'string' || !result.id || !Number.isSafeInteger(result.index) || result.index < 0 || !Number.isFinite(result.width) || result.width <= 0 || !Number.isFinite(result.height) || result.height <= 0 || typeof result.model !== 'string') return storageFailed();
@@ -769,9 +772,13 @@ export function createBatchService(deps: BatchDependencies) {
       }
     }
     if (!isBatchTerminal(restored.status)) {
-      // A restart goes on where the batch was (0.1.4): only the image that was in flight and not found saved is
+      // A restart goes on where the batch was (0.2.0): only the image that was in flight and not found saved is
       // marked unknown (never resent); the rest continues on its own. A batch the user paused stays paused; a pause
       // the queue made itself (closing app, storage failure, an older version's stop after a failure) does not.
+      // A version before 0.2.0 stored no pausedBy: there a pause with a reason (error) was the queue's, and a pause
+      // without one was the user's explicit pause, which is kept as such. (That version closing while a batch ran
+      // stored the same; it cannot be told apart, so that batch waits for a resume too.) This version marks its own
+      // pauses "app", so a pause without a reason is never mistaken.
       const now = new Date().toISOString();
       for (const item of restored.items) if (['submitting', 'running'].includes(item.status)) {
         if (item.providerOutcome !== 'response_received') item.providerOutcome = 'unknown';
@@ -784,8 +791,8 @@ export function createBatchService(deps: BatchDependencies) {
       } else if (!restored.items.some(item => item.status === 'pending')) {
         // Every image had its turn while the app was closing.
         restored.status = restored.items.every(item => item.status === 'succeeded') ? 'succeeded' : 'partial'; restored.error = null; restored.finishedAt = now; delete restored.pausedBy;
-      } else if (restored.pausedBy === 'user' && ['paused', 'pausing'].includes(restored.status)) {
-        restored.status = 'paused'; restored.error = null;
+      } else if ((restored.pausedBy === 'user' || (restored.pausedBy === undefined && restored.error === null)) && ['paused', 'pausing'].includes(restored.status)) {
+        restored.status = 'paused'; restored.pausedBy = 'user'; restored.error = null;
       } else { restored.status = 'queued'; restored.error = null; delete restored.pausedBy; }
     }
     for (const item of restored.items) if (item.status === 'unknown' && item.providerOutcome !== 'response_received') item.providerOutcome = 'unknown';
@@ -813,7 +820,7 @@ export function createBatchService(deps: BatchDependencies) {
     const timed = restored.flatMap(entry => entry.public.items).filter(item => item.status === 'succeeded' && item.startedAt && item.finishedAt).sort((a, b) => Date.parse(a.finishedAt!) - Date.parse(b.finishedAt!));
     for (const item of timed.slice(-IMAGE_TIME_SAMPLES)) sampleDuration(item);
     scheduleCompaction();
-    // Unfinished batches go on after a start, also one by an agent's MCP server (0.1.4).
+    // Unfinished batches go on after a start, also one by an agent's MCP server (0.2.0).
     queueMicrotask(kick);
   }).catch(error => storageFailed(error)) : Promise.resolve();
   void ready.catch(() => {}); // Callers await ready; no unhandled rejection before IPC is attached.
@@ -1043,7 +1050,7 @@ export function createBatchService(deps: BatchDependencies) {
       if (compactionTimer) { clearTimeout(compactionTimer); compactionTimer = null; }
       // Deferred progress is written now with the closing state (or, for an ended batch, was already superseded).
       for (const entry of entries.values()) { if (entry.flushTimer && isBatchTerminal(entry.public.status) && !storageError) saves.push(durable(entry)); cancelFlush(entry); }
-      for (const entry of entries.values()) if (!isBatchTerminal(entry.public.status)) { entry.pauseRequested = true; entry.public.status = entry.public.activeIndex === null ? 'paused' : 'pausing'; emit(entry); if (!storageError) saves.push(durable(entry)); }
+      for (const entry of entries.values()) if (!isBatchTerminal(entry.public.status)) { pauseByApp(entry); entry.public.status = entry.public.activeIndex === null ? 'paused' : 'pausing'; emit(entry); if (!storageError) saves.push(durable(entry)); }
       return Promise.allSettled([...saves, ...(drainTask ? [drainTask] : [])]).then(() => undefined);
     },
   };

@@ -7,7 +7,7 @@ export type BatchMode = "t2i" | "i2i" | "inpaint" | "enhance" | "upscale" | "dir
 export type BatchSeedMode = "increment" | "random" | "fixed";
 /**
  * partial: the batch ran to its end but not every image succeeded (some failed or have an unknown outcome; none of
- * them is resent). blocked: an end of batches stored by versions before 0.1.4, which stopped a batch at its first
+ * them is resent). blocked: an end of batches stored by versions before 0.2.0, which stopped a batch at its first
  * unsuccessful image; it is still read, never set for a new run.
  */
 export type BatchStatus = "queued" | "running" | "pausing" | "paused" | "cancelling" | "succeeded" | "partial" | "cancelled" | "blocked";
@@ -37,7 +37,7 @@ export interface BatchItem {
   status: "pending" | "submitting" | "running" | "succeeded" | "failed" | "unknown" | "cancelled" | "skipped";
   /** Direct child-executor evidence. Missing on old records means unknown. */
   providerOutcome?: GenerationJob["providerOutcome"];
-  /** When this image's (latest) request was prepared and when it ended (ISO); absent on records from before 0.1.4. */
+  /** When this image's (latest) request was prepared and when it ended (ISO); absent on records from before 0.2.0. */
   startedAt?: string | null;
   finishedAt?: string | null;
   /**
@@ -85,9 +85,11 @@ export interface BatchJob {
   /** reason/params (step 4a): only on a frozen-queue storage stop naming an entry, for the window's own text. */
   error: { code: string; message: string; reason?: string; params?: Record<string, string | number> } | null;
   cancelRequested: boolean;
-  /** "user": paused by an explicit pause in the window (or, before 2026-11-13, the control_queue tool); such a batch stays paused across a restart.
-   * Absent for every other state, including a pause the queue made itself (it continues after a restart). */
-  pausedBy?: "user";
+  /** Whose pause a paused or pausing batch has. "user": an explicit pause in the window (or, before 2026-11-13, the
+   * control_queue tool); it stays paused across a restart. "app": the app paused a batch that was going on itself
+   * (closing, a storage failure); it continues after a restart. A version before 0.2.0 stored neither: its pause
+   * without a reason (error) is read as the user's, one with a reason as the queue's. Absent in every other state. */
+  pausedBy?: "user" | "app";
   items: BatchItem[];
   source?: BatchSource;
 }

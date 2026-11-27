@@ -324,8 +324,8 @@ describe('durable frozen recipe FIFO', () => {
     const paused = await h.service.enqueue(queued()), other = await h.service.enqueue(queued({ requestKey: 'not-paused' }));
     await h.service.pause(h.args(paused)); expect(h.read(paused)).toMatchObject({ status: 'paused', pausedBy: 'user' });
     await h.service.dispose();
-    // The closing app paused the other one itself: that pause is not the user's.
-    expect(h.read(other)).toMatchObject({ status: 'paused' }); expect(h.read(other).pausedBy).toBeUndefined();
+    // The closing app paused the other one itself: that pause is the app's, not the user's.
+    expect(h.read(other)).toMatchObject({ status: 'paused', pausedBy: 'app' });
     const restored = setup({ runtimeDir: h.runtimeDir }); await restored.service.ready;
     await expectCount(restored, 1); expect(restored.accepted[0].request.requestKey).toBe(`batch-${other.batchId}-0`);
     expect(restored.read(paused)).toMatchObject({ status: 'paused', pausedBy: 'user', error: null });
@@ -333,6 +333,46 @@ describe('durable frozen recipe FIFO', () => {
     await restored.service.resume({ workspaceId: 'recipe-queue', expectedRevision: 0, batchId: paused.batchId });
     expect(restored.read(paused).pausedBy).toBeUndefined();
     await expectCount(restored, 2); restored.settle(1); await expectStatus(restored, paused, 'succeeded'); await restored.service.dispose();
+  });
+
+  it('PAYMENT SAFETY: a batch the user paused in an older version (no pausedBy, no reason) stays paused after the update; that version\'s own pauses continue', async () => {
+    const h = await queueSetup({ isBusy: () => true });
+    const plain = await h.service.enqueue(queued({ requestKey: 'old-plain' })), halted = await h.service.enqueue(queued({ requestKey: 'old-halted' }));
+    const recovered = await h.service.enqueue(queued({ requestKey: 'old-recovered' })), own = await h.service.enqueue(queued({ requestKey: 'own-closing' }));
+    await h.service.dispose();
+    // As 0.1.3 stored them: paused, without pausedBy. A pause by the user or by that version closing has no error;
+    // its stop after a failure and its pause after a restart carry their code.
+    // The state file and its copy in the revision history carry the hash of their content (batch-storage.ts).
+    const sorted = (value: any): any => Array.isArray(value) ? value.map(sorted) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().filter(key => value[key] !== undefined).map(key => [key, sorted(value[key])])) : value;
+    const rewrite = async (batch: BatchJob, error: BatchJob['error']) => {
+      const file = path.join(h.runtimeDir, 'frozen-queue', `${batch.batchId}.state.json`), { stateHash: _old, ...body } = JSON.parse(await fs.readFile(file, 'utf8'));
+      expect(body.job).toMatchObject({ status: 'paused', pausedBy: 'app' }); delete body.job.pausedBy; body.job.error = error;
+      const text = JSON.stringify({ ...body, stateHash: createHash('sha256').update(JSON.stringify(sorted(body)), 'utf8').digest('hex') });
+      await fs.writeFile(file, text); await fs.writeFile(path.join(h.runtimeDir, 'frozen-queue', `${batch.batchId}.states`, `${String(body.revision).padStart(12, '0')}.json`), text);
+    };
+    const haltedError = { code: 'queue_halted', message: 'An earlier batch failed or has an unknown result; the agent batches after it are paused until resumed.' };
+    const recoveredError = { code: 'recovered_paused', message: 'The frozen recipes were recovered; the images not yet submitted wait for an explicit resume and do not start on launch.' };
+    await rewrite(plain, null); await rewrite(halted, haltedError); await rewrite(recovered, recoveredError);
+    const restored = setup({ runtimeDir: h.runtimeDir }); await restored.service.ready;
+    // The FIFO passes the user's pause (the oldest batch) and goes on with the three the queue had paused, in order.
+    expect(restored.read(plain)).toMatchObject({ status: 'paused', pausedBy: 'user', error: null });
+    const order = [halted, recovered, own];
+    for (const [index, batch] of order.entries()) {
+      await expectCount(restored, index + 1); expect(restored.accepted[index].request.requestKey).toBe(`batch-${batch.batchId}-0`);
+      expect(restored.read(batch).error).toBeNull(); restored.settle(index); await expectStatus(restored, batch, 'succeeded');
+    }
+    expect(restored.accepted).toHaveLength(3); expect(restored.read(plain).status).toBe('paused');
+    // It is the user's pause from now on: closing and starting again leaves it paused, and nothing of it is sent.
+    await restored.service.dispose();
+    expect((JSON.parse(await fs.readFile(path.join(h.runtimeDir, 'frozen-queue', `${plain.batchId}.state.json`), 'utf8')).job as BatchJob)).toMatchObject({ status: 'paused', pausedBy: 'user' });
+    const again = setup({ runtimeDir: h.runtimeDir }); await again.service.ready; cleanups.push(again.service.dispose);
+    await new Promise(resolve => setTimeout(resolve, 150));
+    expect(again.accepted).toHaveLength(0); expect(again.generation.submit).not.toHaveBeenCalled();
+    expect(again.read(plain)).toMatchObject({ status: 'paused', pausedBy: 'user' });
+    // The explicit resume runs it, once.
+    await again.service.resume({ workspaceId: 'recipe-queue', expectedRevision: 0, batchId: plain.batchId });
+    await expectCount(again, 1); expect(again.accepted[0].request.requestKey).toBe(`batch-${plain.batchId}-0`);
+    again.settle(0); await expectStatus(again, plain, 'succeeded'); expect(again.accepted).toHaveLength(1);
   });
 
   it('recovers an in-flight item as unknown with no provider replay and goes on with the rest by itself', async () => {
@@ -1325,8 +1365,8 @@ describe('frozen-queue state writes (queue retention rework: what is written at 
     const h = await queueSetup({ isBusy: () => true });
     const batch = await h.service.enqueue(queued({ count: 2 })); await h.service.dispose();
     expect(h.generation.submit).not.toHaveBeenCalled();
-    // The closing app paused it itself; that is no user pause.
-    expect((await stateOnDisk(h.runtimeDir, batch.batchId)).pausedBy).toBeUndefined();
+    // The closing app paused it itself: its own pause, which the next start does not keep.
+    expect((await stateOnDisk(h.runtimeDir, batch.batchId)).pausedBy).toBe('app');
     const restored = setup({ runtimeDir: h.runtimeDir, isBusy: () => false }); await restored.service.ready; cleanups.push(restored.service.dispose);
     expect(restored.read(batch).error).toBeNull();
     await expectCount(restored, 1); restored.settle(0); await expectCount(restored, 2); restored.settle(1); await expectStatus(restored, batch, 'succeeded');
@@ -1406,7 +1446,7 @@ describe('restart recovery is written and matched with the library (review rewor
   });
 });
 
-describe('the queue never stops on a failure (0.1.4)', () => {
+describe('the queue never stops on a failure (0.2.0)', () => {
   /** Child `index` (in submit order) ends as NovelAI's received HTTP 429 (nothing generated) or another status code. */
   const refuse = (h: ReturnType<typeof setup>, index: number, statusCode = 429) => {
     const job = h.jobs.get(`child-${index + 1}`)!;
