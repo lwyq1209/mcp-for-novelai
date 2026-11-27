@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { COMPACTION_UNLINK_DELAYS_MS, createCompactionUnlink, createBatchStorage, FROZEN_COMPACTION_POLICY, FROZEN_QUEUE_LIMITS, BatchInputError, BatchQuotaError, type FrozenBatchInput } from './batch-storage';
+import { COMPACTION_UNLINK_DELAYS_MS, createCompactionUnlink, createBatchStorage, FROZEN_COMPACTION_POLICY, FROZEN_QUEUE_LIMITS, REMOVAL_PENDING_MS, BatchInputError, BatchQuotaError, type FrozenBatchInput } from './batch-storage';
 import { runCleanups } from '../src/test-support/temp-dirs';
 
 const directories: string[] = [];
@@ -55,6 +55,40 @@ it('retries when a lock observed through EEXIST is normally released before owne
   });
   const pending = contender.create(input()); await aboutToRead.promise; await fs.unlink(lock); resumeRead.resolve();
   await expect(pending).resolves.toBe(1);
+});
+
+// On Windows the lock contender test below failed about once in 200 runs: the contender found the lock (EEXIST), went
+// to read it while the holder was removing it, and the open failed with EPERM (removal pending) instead of ENOENT,
+// which stopped the whole store. The same happens to a single app when a scanner holds the lock it has just removed.
+it.each(['win32', 'linux'])('a lock that cannot be opened while its owner removes it is read again on win32 and nowhere else (%s)', async platform => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'nai-queue-storage-')); directories.push(dir);
+  const storage = createBatchStorage(dir, {}, { platform }); await storage.load();
+  const lock = path.join(dir, 'frozen-queue', '.quota.lock'), originalLink = fs.link.bind(fs), originalOpen = fs.open.bind(fs); let heldLinks = 0, pendingOpens = 0;
+  const refusal = (code: string) => Object.assign(new Error(`${code}: fixture`), { code });
+  // Three times the lock is still in the folder (the link finds it) and cannot be opened; then it is gone.
+  vi.spyOn(fs, 'link').mockImplementation(async (...args: any[]) => { if (String(args[1]) === lock && heldLinks < 3) { heldLinks++; throw refusal('EEXIST'); } return (originalLink as any)(...args); });
+  vi.spyOn(fs, 'open').mockImplementation(async (...args: any[]) => { if (String(args[0]) === lock && pendingOpens < heldLinks && pendingOpens < 3) { pendingOpens++; throw refusal('EPERM'); } return (originalOpen as any)(...args); });
+  if (platform === 'win32') {
+    await expect(storage.create(input())).resolves.toBe(1);
+    expect([heldLinks, pendingOpens]).toEqual([3, 3]);
+    vi.restoreAllMocks(); await expect(createBatchStorage(dir).load()).resolves.toHaveLength(1);
+  } else {
+    await expect(storage.create(input())).rejects.toMatchObject({ code: 'queue_storage_error' });
+    expect([heldLinks, pendingOpens]).toEqual([1, 1]);
+  }
+});
+
+it('win32: a lock that stays unopenable for longer than the removal can take stops the store', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'nai-queue-storage-')); directories.push(dir);
+  const storage = createBatchStorage(dir, {}, { platform: 'win32' }); await storage.load();
+  const lock = path.join(dir, 'frozen-queue', '.quota.lock'), originalLink = fs.link.bind(fs), originalOpen = fs.open.bind(fs), realNow = Date.now.bind(Date); let pendingOpens = 0, ahead = 0;
+  const refusal = (code: string) => Object.assign(new Error(`${code}: fixture`), { code });
+  vi.spyOn(Date, 'now').mockImplementation(() => realNow() + ahead);
+  vi.spyOn(fs, 'link').mockImplementation(async (...args: any[]) => { if (String(args[1]) === lock) throw refusal('EEXIST'); return (originalLink as any)(...args); });
+  // The clock passes the limit between the second and the third refused open.
+  vi.spyOn(fs, 'open').mockImplementation(async (...args: any[]) => { if (String(args[0]) === lock) { if (++pendingOpens === 3) ahead = REMOVAL_PENDING_MS + 1; throw refusal('EPERM'); } return (originalOpen as any)(...args); });
+  await expect(storage.create(input())).rejects.toMatchObject({ code: 'queue_storage_error' });
+  expect(pendingOpens).toBe(3);
 });
 
 it('does not let a lock contender publication candidate break the current holder recovery or quota scan', async () => {

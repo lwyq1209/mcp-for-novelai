@@ -8,6 +8,10 @@ All notable changes to MCP for NovelAI are recorded here. Versions follow [Seman
 
 - `nai` names a file in its error messages as it was given: a Windows path is no longer shown with doubled
   backslashes.
+- Windows: the frozen queue no longer stops (`queue_storage_error`, agent batches paused until a restart) when its
+  lock file cannot be opened for a moment while it is being removed. A removed file that another program still has
+  open (an antivirus scan, the search indexer) stays in the folder until that program lets go, and opening it then
+  fails; the lock is now read again for up to 4 seconds instead of being taken for damage.
 
 ## 0.2.0 - 2026-11-26
 

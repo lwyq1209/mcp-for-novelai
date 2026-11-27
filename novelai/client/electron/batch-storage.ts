@@ -94,6 +94,13 @@ export class BatchCompactionDeferredError extends Error {
 /** Codes a file briefly held open by another process (indexer, antivirus, backup) reports on unlink. */
 const BUSY_UNLINK_CODES = new Set(['EBUSY', 'EPERM', 'EACCES']);
 const deferrableCleanup = (error: unknown) => BUSY_UNLINK_CODES.has((error as any)?.code);
+/**
+ * win32: how long a lock or recovery claim that cannot be opened is read again before it counts as damage. A file its
+ * owner removed stays in the folder until the last handle to it is closed (the owner's own, an antivirus scan, the
+ * search indexer); opening it meanwhile fails with EPERM (EACCES, EBUSY) instead of ENOENT. As long as the rename
+ * retries of platform-fs.ts, for the same kind of scan.
+ */
+export const REMOVAL_PENDING_MS = 4000;
 /** Backoff before each retry of a busy compaction unlink on win32 (sum 200 ms). Shorter than renameReplace's: a
  * cleanup that stays busy is deferred and rolled forward later, it never stops the queue. */
 export const COMPACTION_UNLINK_DELAYS_MS: readonly number[] = Object.freeze([10, 20, 40, 60, 70]);
@@ -182,7 +189,7 @@ const sameFiles = (left: Map<string, string>, right: Map<string, string>) => lef
 
 /** Immutable frozen input + hash-chained immutable state history. All quota
  * scans and publications share one cross-process owner lock. */
-export function createBatchStorage(runtimeDir: string, limitOverrides: Partial<typeof FROZEN_QUEUE_LIMITS> = {}): BatchStorage {
+export function createBatchStorage(runtimeDir: string, limitOverrides: Partial<typeof FROZEN_QUEUE_LIMITS> = {}, { platform = process.platform as string }: { platform?: string } = {}): BatchStorage {
   runtimeDir = path.resolve(runtimeDir);
   const limits = { ...FROZEN_QUEUE_LIMITS, ...limitOverrides };
   // Scaled test/bench stores keep the production 1/16 proportion unless set explicitly.
@@ -261,12 +268,22 @@ export function createBatchStorage(runtimeDir: string, limitOverrides: Partial<t
   async function acquireLock() {
     await init(); const file = path.join(directory, '.quota.lock'), nonce = randomUUID(), startTimes = memoStartTimes();
     const held = (owner: any) => lockStillHeld(owner, Date.now(), startTimes);
-    const retryDelay = () => new Promise(resolve => setTimeout(resolve, 5)), incompleteReads = new Map<string, number>();
+    const retryDelay = () => new Promise(resolve => setTimeout(resolve, 5)), incompleteReads = new Map<string, number>(), removalPendingSince = new Map<string, number>();
     const sameOwner = (a: any, b: any) => validLockOwner(a) && validLockOwner(b) && a.pid === b.pid && a.nonce === b.nonce && a.createdAt === b.createdAt && a.leaseUntil === b.leaseUntil;
     const publishedJson = async (publishedFile: string): Promise<{ status: 'value'; value: any } | { status: 'missing' | 'incomplete' }> => {
       let text: string;
       try { text = await read(publishedFile, 4096); }
-      catch (error: any) { if (error.code === 'ENOENT') { incompleteReads.delete(publishedFile); return { status: 'missing' }; } throw error; }
+      catch (error: any) {
+        if (error.code === 'ENOENT') { incompleteReads.delete(publishedFile); removalPendingSince.delete(publishedFile); return { status: 'missing' }; }
+        // win32: the owner is removing this file and a handle to it is still open (REMOVAL_PENDING_MS). It is a
+        // publication on its way out, not damage: the caller reads it again, as it does an incomplete one.
+        if (platform === 'win32' && BUSY_UNLINK_CODES.has(error?.code)) {
+          const since = removalPendingSince.get(publishedFile) ?? Date.now(); removalPendingSince.set(publishedFile, since);
+          if (Date.now() - since < REMOVAL_PENDING_MS) return { status: 'incomplete' };
+        }
+        throw error;
+      }
+      removalPendingSince.delete(publishedFile);
       try { const value = JSON.parse(text); incompleteReads.delete(publishedFile); return { status: 'value', value }; }
       catch {
         const failures = (incompleteReads.get(publishedFile) ?? 0) + 1; incompleteReads.set(publishedFile, failures);
