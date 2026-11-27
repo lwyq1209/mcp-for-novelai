@@ -16,17 +16,36 @@ prepares recipes, queues images and organises your library through MCP, while yo
 
 ## Features
 
+**In the app**
+
 - **Library** (the home page): history images by day, imported images, and prompt materials — tags, combos, notes,
   presets, artist picks — with search, filters (mode, model, date, source, archived), collections, projects, a detail
   drawer, version history and multi-select. Deleted items go to **Recently deleted** for 30 days.
-- **Canvas**: a manual workbench for Txt2Img, Img2Img, Inpaint (with mask painting) and Post (Enhance, Upscale,
-  Director tools). Agents read the canvas and can generate what it holds; they do not edit it.
+- **Style presets**: a style is more than a prompt. A preset keeps its artists (each with a weight and an on/off
+  switch), the negative text that belongs to the style, recommended sampling settings, notes and up to six labelled
+  sample images. Choosing one on the canvas applies it, and an imported image that carries settings can be saved as a
+  preset.
+- **Canvas**: a manual workbench for Txt2Img, Img2Img, Inpaint (with mask painting) and Post: Enhance (1×, 2×, and
+  Max✨ on V5), Upscale and the Director tools (remove background, line art, sketch, colorize, emotion, declutter).
+  NovelAI Diffusion V3 to V5, with the High / Medium effort switch of V5 Full. Precise references (character, style,
+  character & style; outfit on V5) on V4.5 and V5, and Vibe references on the models that have them. Agents read the
+  canvas and can generate what it holds; they do not edit it.
+- **Censor and export**: paint over part of an image to cover it with a mosaic, a blur, black or white, and save JPGs
+  that carry no metadata at all: no prompt, no settings, no EXIF, none of NovelAI's hidden data. One image or up to
+  100 at a time; the originals in the library are only read.
+- **Imported images**: PNG, JPEG and WebP files come in with the generation settings they carry, and can be the source
+  of an Img2Img, Inpaint or Post image.
+- **Danbooru tags**: a tag's canonical name, aliases, post count, wiki and the tags it appears with; tag search from an
+  English prefix (or a Chinese word, with the optional dictionary). Tags you keep become materials with a cover image.
 - **Shared queue**: every image, from an agent or from the canvas, goes through one queue in order. Pause, resume and
   cancel per batch. A failed or unknown image never holds anyone up: only that image is marked (never resent) and the
   queue goes on; a "too many requests" answer is retried for about a minute, and after a restart unfinished batches
   continue by themselves.
 - **Agent connection**: Settings › MCP access writes the exact configuration for Claude Code, Cursor, Codex, Pi or any
-  `mcpServers` client, with this computer's paths, and shows which agents connected recently.
+  `mcpServers` client, with this computer's paths, and shows which agents connected recently. When the app is closed,
+  an agent's first call starts it in the background.
+- **Updates**: the app finds new releases and, when you choose **Update and restart**, checks the release's signature
+  and replaces itself in place (see [Updates](#updates)).
 - **Backups**: automatic backups and portable `.naisbackup` exports; your API token is never in an automatic backup.
 - English and Chinese interface, dark theme.
 
@@ -34,13 +53,38 @@ prepares recipes, queues images and organises your library through MCP, while yo
 | --- | --- | --- |
 | ![The canvas](docs/images/canvas.png) | ![The queue page](docs/images/queue.png) | ![Settings › MCP access](docs/images/settings-mcp.png) |
 
+**For an agent**
+
+- **Start from what the library holds**: read back the settings a history image was made with, use an imported image
+  as a source, and apply a style preset by its id instead of copying its text.
+- **Prepare before anything is paid**: `prepare_recipe` freezes a recipe in one of six modes (Txt2Img, Img2Img,
+  Inpaint, Enhance, Upscale, Director), written out in the call or captured from the live canvas, and reads back what
+  will actually be sent. A value NovelAI would not take as written (a size off the
+  64-pixel grid, too many steps) is corrected with a warning instead of refused.
+- **Generate and follow the batch**: `enqueue_recipes` queues frozen recipes under a `requestKey`, so a retried call
+  never queues twice. `read_queue` can wait inside the call until the batch is done, and `get_queue_result` shows one
+  image or the whole batch as thumbnails.
+- **What the canvas has, in a queued image**: V5 Full at High or Medium effort, Enhance Max✨, and precise references
+  (character, style, outfit) taken from library images.
+- **Tidy up afterwards**: save a run into its own project, file images into collections, keep tags, combos and notes
+  as materials, write style presets with their sample images, and censor an image into a metadata-free JPG.
+- **From a terminal as well**: `nai`, the command line that ships with the app, runs the same tools with recipes kept
+  in files and images written to files (see [The nai command line](docs/cli.md)).
+
 ### 10 MCP tools
 
-| Group | Tools |
-| --- | --- |
-| Library | `asset_library`, `material_library`, `material_studies`, `tag_details` |
-| Recipes & queue | `prepare_recipe`, `enqueue_recipes`, `list_queue`, `read_queue`, `get_queue_result` |
-| Canvas | `read_workspace` |
+| Group | Tool | What it does |
+| --- | --- | --- |
+| Library | `asset_library` | Search, read, view, organise, delete and restore everything in the library; censor an image |
+| Library | `material_library` | Prompt materials: tags, combos and notes; tag search; tag covers |
+| Library | `material_studies` | Import images with their generation metadata and read them |
+| Library | `tag_details` | Danbooru facts about tags: canonical name, aliases, post count, wiki, co-occurring tags |
+| Recipes & queue | `prepare_recipe` | Freeze one recipe (six modes) and read back the exact effective input |
+| Recipes & queue | `enqueue_recipes` | **Generate:** put frozen recipes into the queue (paid, no further confirmation) |
+| Recipes & queue | `list_queue` | The queue: counts by status and the first 8 batches, agent and manual ones |
+| Recipes & queue | `read_queue` | One batch: status, progress, saved images; can wait until it is done |
+| Recipes & queue | `get_queue_result` | View one saved image, or a batch's results as thumbnails |
+| Canvas | `read_workspace` | The canvas's state and its images |
 
 Only `enqueue_recipes` starts generation. `read_workspace` only reads the canvas; batches are paused, resumed and
 cancelled on the queue page of the app. Details: [MCP tools reference](docs/mcp-tools.md).
